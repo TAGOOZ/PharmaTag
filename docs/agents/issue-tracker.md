@@ -9,7 +9,7 @@ Issues and PRDs for this project live as GitHub issues on **TAGOOZ/PharmaTag**, 
 - **List issues**: `gh issue list --repo TAGOOZ/PharmaTag --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --repo TAGOOZ/PharmaTag --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --repo TAGOOZ/PharmaTag --add-label "..."` / `--remove-label "..."`
-- **Close**: `gh issue close <number> --repo TAGOOZ/PharmaTag --comment "..."`
+- **Close**: `gh issue close <number> --repo TAGOOZ/PharmaTag --comment "..."` — close the ticket when its acceptance criteria are implemented AND verified (both twins green where relevant), with a comment summarizing what was done and referencing the commit. Also remove the `ready-for-agent` label so it isn't re-grabbed. Don't close on "written but not verified".
 
 ## When a skill says "publish to the issue tracker"
 

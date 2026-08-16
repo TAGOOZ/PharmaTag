@@ -11,6 +11,9 @@ Default vocabulary: needs-triage, needs-info, ready-for-agent, ready-for-human, 
 ### Domain docs
 Multi-context: CONTEXT-MAP.md at root points to per-context CONTEXT.md files. See `docs/agents/domain.md`.
 
+### TDD
+Test-driven development via the `tdd` skill. Use it for every slice that has logic to verify (money, stock, events, ETA, reports). See `docs/agents/tdd.md`.
+
 ## Getting started for agents
 
 Before touching any code or filing anything, read in this order:
@@ -28,6 +31,12 @@ Each ticket on the tracker (TAGOOZ/PharmaTag) is self-contained (what + acceptan
 - Money is exact-decimal; VAT-inclusive net = total ÷ 1.14 with per-line `tax_type` (exempt/5%/14%).
 - Offline-first: writes enqueue `sync_log` outbox rows atomically; conflicts are LWW + recorded, never lost.
 - Legacy `permission_level` 1–9 plus granular permission rows; day-close reopen requires perm ≥7 with reversal + audit.
+
+**Testing discipline (tdd skill):**
+- Every slice with logic to verify is built test-first: RED→GREEN→refactor, one test → one implementation, repeated vertically (tracer bullets). No horizontal "write all tests then all code."
+- Tests verify behavior through public interfaces — integration-style, reads like a spec; they must survive internal refactors. No mocking collaborators just to isolate internals; no testing private methods.
+- Money/stock/ETA slices carry invariant tests (e.g. SUM debit = SUM credit, journal balanced, audit + outbox rows written atomically).
+- Never refactor while RED. Confirm with the user which behaviors matter most before writing tests.
 
 **Where code lives:** this workspace (project root `testTLS/`) IS the repo — its clone is `TAGOOZ/PharmaTag` (push/pull there; `TITAN.W1B.exe` is gitignored). Legacy corpus: `titan_extract/`, `titan_decompile/`, `legacy_import/`. Schema drafts: `schema/`. Build details per ticket references. The monorepo scaffold is built by tickets T01/T04 on top of this initial commit.
 

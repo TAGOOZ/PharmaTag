@@ -2,6 +2,8 @@ TITAN.W1B.exe
 *.exe
 __pycache__/
 *.py[cod]
+.venv/
+venv/
 .env
 node_modules/
 dist/

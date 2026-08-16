@@ -164,3 +164,4 @@ external input (data samples / vendor specs).
 ## Process decisions (append-only log)
 
 - **2026-08-16 — Repo home:** `TAGOOZ/PharmaTag` doubles as the code repo. The `testTLS/` workspace (plans, AGENTS.md, docs, schema drafts, legacy corpus) is its initial commit; `TITAN.W1B.exe` is gitignored (source of truth is `titan_decompile/`). Tickets T01/T04 scaffold the monorepo on top.
+- **2026-08-16 — DB deployment portability:** deployment target is PostgreSQL (self-hosted server OR Supabase — decision deferred). Convex ruled out. Consequence: core schema/migrations stay **portable plain Postgres** — no Supabase-only features (no `auth.uid()` coupling, no RLS-as-the-only guard); branch-scoping + audit enforcement stays in the app layer (plan/01 §5.4). If Supabase is chosen later, RLS/auth become optional add-ons, not prerequisites.

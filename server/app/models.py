@@ -13,6 +13,7 @@ from typing import Optional
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
@@ -43,6 +44,15 @@ batch_type_enum = ENUM(
 )
 sync_status_enum = ENUM(
     "pending", "applied", "failed", "skipped", name="sync_status", create_type=False,
+)
+invoice_kind_enum = ENUM(
+    "sale", "purchase", "sale_return", "purchase_return", "transfer",
+    name="invoice_kind", create_type=False,
+)
+invoice_status_enum = ENUM(
+    "saved", "unsaved", "unsave", "copy", "transfer_to_sale_return",
+    "transfer_to_purchase", "closed", "archived", "void", name="invoice_status",
+    create_type=False,
 )
 
 user_roles_table = Table(
@@ -224,5 +234,150 @@ class SyncLog(Base):
     status: Mapped[str] = mapped_column(sync_status_enum, nullable=False, server_default="pending")
     source_device_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("branches.id"))
     created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class Party(Base):
+    """`parties` (wzcustomers + companies) — mirrored so Invoice FKs resolve."""
+
+    __tablename__ = "parties"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(
+        ENUM("customer", "supplier", "both", name="party_kind", create_type=False),
+        nullable=False,
+        server_default="customer",
+    )
+    typee: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    namee: Mapped[str] = mapped_column(String(100), nullable=False, server_default="")
+    name_ar: Mapped[Optional[str]] = mapped_column(String(100), server_default="")
+    mobile: Mapped[Optional[str]] = mapped_column(String(15), server_default="")
+    adress: Mapped[Optional[str]] = mapped_column(String(200), server_default="")
+    governorate: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    district: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    credit_limit: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    receivable_account_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("accounts.id"))
+    payable_account_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("accounts.id"))
+    writer: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    randomid: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    datee: Mapped[Optional[date]] = mapped_column(Date)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class Invoice(Base):
+    """`invoices` header (C-4). Columns mirror rev 001 EXACTLY — the sale slice
+    (S1.3) owns the money/journal/stock logic; `save_sale` is the bus seam."""
+
+    __tablename__ = "invoices"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "invoice_no", name="uq_invoices_branch_no"),
+        CheckConstraint("payed + agel = totalvalue", name="ck_invoice_payment"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(invoice_kind_enum, nullable=False, server_default="sale")
+    invoice_no: Mapped[str] = mapped_column(String(30), nullable=False)
+    datee: Mapped[date] = mapped_column(Date, nullable=False)
+    datetimee: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+    silsilaid: Mapped[Optional[str]] = mapped_column(String(15), server_default="")
+    party_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("parties.id"))
+    subtotal: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    discount: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    vat: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    totalvalue: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    payed: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    agel: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    status: Mapped[str] = mapped_column(invoice_status_enum, nullable=False, server_default="saved")
+    writer: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    created_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    last_edited_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+
+
+class AppPlugin(Base):
+    """`app_plugins` — installed plugin registry rows (core rev 001, C-13)."""
+
+    __tablename__ = "app_plugins"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    slug: Mapped[str] = mapped_column(String(60), nullable=False, unique=True)
+    name_ar: Mapped[str] = mapped_column(String(120), nullable=False)
+    name_en: Mapped[str] = mapped_column(String(120), nullable=False)
+    version: Mapped[str] = mapped_column(String(20), nullable=False)
+    core_requires: Mapped[str] = mapped_column(String(60), nullable=False)
+    sdk_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="installed")
+    license_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="unlicensed")
+    license_expires_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+    installed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class PluginDependencyRow(Base):
+    """`plugin_dependencies` — one row per declared dependency (C-13)."""
+
+    __tablename__ = "plugin_dependencies"
+
+    plugin_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("app_plugins.id"), primary_key=True
+    )
+    depends_on: Mapped[str] = mapped_column(String(60), primary_key=True)
+    min_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    max_version: Mapped[Optional[str]] = mapped_column(String(20))
+
+
+class PluginBranchGrant(Base):
+    """`plugin_branch_grants` — per-branch enablement (C-13, plan/08 §4.3)."""
+
+    __tablename__ = "plugin_branch_grants"
+
+    plugin_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("app_plugins.id"), primary_key=True
+    )
+    branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+
+
+class PluginSettings(Base):
+    """`plugin_settings` — per (branch, plugin, key) JSON settings (C-13)."""
+
+    __tablename__ = "plugin_settings"
+
+    branch_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("branches.id"), primary_key=True
+    )
+    plugin_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("app_plugins.id"), primary_key=True)
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[Optional[dict]] = mapped_column(JSONB)
+    encrypted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class AppConfig(Base):
+    """`app_config` — key/value application config (incl. `plugins_enabled`)."""
+
+    __tablename__ = "app_config"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[str] = mapped_column(String(50), server_default="")
+    value_numeric: Mapped[Optional[object]] = mapped_column(Numeric(18, 4))
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )

@@ -3,6 +3,8 @@
 Every value overridable via PHARMATAG_* env vars (or a .env file in the CWD).
 Defaults mirror the provisioned test database; production overrides via env.
 """
+from pathlib import Path
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -17,6 +19,13 @@ class Settings(BaseSettings):
             "postgresql+psycopg://pharmatag_test:pharmatag_test@localhost:5432/pharmatag_test"
         ),
         validation_alias="PHARMATAG_DB_URL",
+    )
+
+    # Bundle-all + runtime gate (A12): plugin code ships with the repo under
+    # <repo-root>/plugins/<slug>/; the registry loads it at runtime, DB rows gate it.
+    plugins_dir: Path = Field(
+        default=Path(__file__).resolve().parents[3] / "plugins",
+        validation_alias="PHARMATAG_PLUGINS_DIR",
     )
 
     jwt_secret: str = "dev-only-change-me-0123456789abcdef012345"

@@ -10,10 +10,14 @@ from sqlalchemy import text
 from app.auth.router import router as auth_router
 from app.core.config import settings
 from app.core.db import SessionLocal, engine
+from app.plugins.registry import registry
+from app.plugins.router import router as plugins_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    async with SessionLocal() as session:
+        await registry.load(session)
     yield
     await engine.dispose()
 
@@ -22,6 +26,9 @@ def create_app() -> FastAPI:
     application = FastAPI(title=settings.app_name, lifespan=lifespan)
 
     application.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+    application.include_router(
+        plugins_router, prefix="/api/v1/system/plugins", tags=["plugins"]
+    )
 
     @application.get("/healthz", tags=["ops"])
     async def healthz():

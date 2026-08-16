@@ -1,0 +1,34 @@
+"""Env-driven configuration (ticket #2 AC1).
+
+Every value overridable via PHARMATAG_* env vars (or a .env file in the CWD).
+Defaults mirror the provisioned test database; production overrides via env.
+"""
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    app_name: str = "pharmatag"
+    environment: str = "development"
+
+    # Same PHARMATAG_DB_URL var that alembic env.py reads (consistent tooling).
+    database_url: str = Field(
+        default=(
+            "postgresql+psycopg://pharmatag_test:pharmatag_test@localhost:5432/pharmatag_test"
+        ),
+        validation_alias="PHARMATAG_DB_URL",
+    )
+
+    jwt_secret: str = "dev-only-change-me-0123456789abcdef012345"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 30
+
+    model_config = SettingsConfigDict(
+        env_prefix="PHARMATAG_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+
+settings = Settings()

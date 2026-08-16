@@ -1,0 +1,13 @@
+TITAN.W1B.exe
+*.exe
+__pycache__/
+*.py[cod]
+.env
+node_modules/
+dist/
+.next/
+target/
+*.db
+*.sqlite
+*.sqlite3
+.DS_Store

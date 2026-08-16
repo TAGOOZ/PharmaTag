@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TITAN.W1 — Master Connections Overview</title>
+<script src="mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'neutral',
+    securityLevel: 'loose',
+    flowchart: { htmlLabels: true, curve: 'basis', nodeSpacing: 30, rankSpacing: 40 },
+    er: { useMaxWidth: true, fontSize: 13 },
+    themeVariables: {
+      primaryColor: '#e8f0fe', primaryBorderColor: '#4a76c4', primaryTextColor: '#1a2b4a',
+      lineColor: '#6b7fa8', actorBkg: '#e8f0fe', actorBorder: '#4a76c4',
+      clusterBkg: '#f7f9fc', clusterBorder: '#b8c4da', noteBkg: '#fff8dc', noteBorder: '#e0c25a'
+    }
+  });
+</script>
+<style>
+  :root {
+    --bg: #f4f6fa; --card: #ffffff; --border: #dde3ec; --ink: #1a2333; --muted: #5b6b85;
+    --accent: #2f5fb3; --accent2: #7a5bb0; --good: #2e7d4f; --warn: #b36a2f; --bad: #b03a3a;
+    --code-bg: #0f1b2d; --code-ink: #d7e2f5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI", "Noto Sans", "Noto Sans Arabic", system-ui, Tahoma, Arial, sans-serif;
+    line-height: 1.65; font-size: 15px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 80px; }
+  header.hero {
+    background: linear-gradient(135deg, #1c2f54 0%, #2f5fb3 60%, #4a76c4 100%);
+    color: #fff; border-radius: 14px; padding: 30px 32px; margin-bottom: 22px;
+    box-shadow: 0 8px 24px rgba(28,47,84,.25);
+  }
+  header.hero h1 { margin: 0 0 6px; font-size: 27px; letter-spacing: .2px; }
+  header.hero p { margin: 4px 0; opacity: .92; font-size: 14.5px; }
+  header.hero .badges span {
+    display: inline-block; background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.35);
+    border-radius: 20px; padding: 2px 12px; margin: 8px 6px 0 0; font-size: 12.5px;
+  }
+  nav.toc {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px 22px; margin-bottom: 26px; box-shadow: 0 2px 8px rgba(28,47,84,.06);
+  }
+  nav.toc h2 { margin: 0 0 10px; font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+  nav.toc ol { margin: 0; padding-left: 22px; columns: 2; column-gap: 34px; }
+  nav.toc a { color: var(--accent); text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+  section.card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 26px 30px; margin-bottom: 22px; box-shadow: 0 2px 8px rgba(28,47,84,.06);
+  }
+  section.card h2 {
+    margin: 0 0 4px; font-size: 21px; color: var(--accent);
+    border-bottom: 2px solid var(--accent); padding-bottom: 8px;
+  }
+  section.card h3 { margin: 24px 0 8px; font-size: 17px; color: var(--accent2); }
+  section.card h4 { margin: 18px 0 6px; font-size: 15px; color: var(--ink); }
+  p { margin: 8px 0; }
+  a { color: var(--accent); }
+  .mermaid { margin: 18px 0; text-align: center; }
+  .mermaid svg { max-width: 100%; height: auto; }
+  .mz { margin: 18px 0; border: 1px solid var(--border); border-radius: 10px; background: #fff; overflow: hidden; }
+  .mz-toolbar {
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+    background: #eef3fb; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted);
+  }
+  .mz-toolbar button {
+    border: 1px solid var(--border); background: #fff; border-radius: 5px; padding: 2px 9px;
+    cursor: pointer; font-size: 12.5px; color: var(--ink); line-height: 1.4;
+  }
+  .mz-toolbar button:hover { border-color: var(--accent); color: var(--accent); }
+  .mz-toolbar .mz-lbl { font-weight: 600; color: var(--accent); margin-right: 2px; }
+  .mz-toolbar .mz-pct { min-width: 42px; text-align: right; font-weight: 600; color: var(--accent); }
+  .mz-toolbar .mz-hint { margin-left: auto; opacity: .75; }
+  .mz-viewport { overflow: auto; max-height: 72vh; cursor: grab; }
+  .mz-viewport.panning { cursor: grabbing; }
+  .mz-viewport svg { display: block; max-width: none !important; height: auto; }
+  .diagram-cap { font-size: 12.5px; color: var(--muted); text-align: center; margin: -8px 0 18px; }
+  table {
+    border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13.5px;
+    background: #fbfcfe;
+  }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #eef3fb; color: #27405f; font-weight: 600; }
+  tr:nth-child(even) td { background: #f6f8fc; }
+  code, pre {
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+  code.inline { background: #eef1f7; border: 1px solid #dde3ec; border-radius: 4px; padding: 1px 6px; font-size: 13px; }
+  pre {
+    background: var(--code-bg); color: var(--code-ink); padding: 16px 18px; border-radius: 8px;
+    overflow-x: auto; font-size: 13px; line-height: 1.55;
+  }
+  pre code { color: inherit; }
+  .ar { direction: rtl; display: inline-block; unicode-bidi: isolate; }
+  blockquote {
+    margin: 10px 0; padding: 8px 16px; border-left: 4px solid var(--accent);
+    background: #f0f5ff; border-radius: 0 8px 8px 0; color: #2a3c5e;
+  }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 900px) { nav.toc ol { columns: 1; } .grid2 { grid-template-columns: 1fr; } }
+  .tag { display:inline-block; border-radius:4px; padding:0 7px; font-size:12px; font-weight:600; }
+  .tag.sql { background:#e3ecfb; color:#2f5fb3; }
+  .tag.phy { background:#f5e9fd; color:#7a5bb0; }
+  .tag.feed { background:#e5f6ec; color:#2e7d4f; }
+  .tag.risk { background:#fdeaea; color:#b03a3a; }
+  .tag.warn { background:#fff6e0; color:#9a6b00; }
+  .legend-line { font-size: 13px; color: var(--muted); }
+  .kpi-row { display:flex; gap:14px; flex-wrap:wrap; margin:14px 0; }
+  .kpi {
+    flex:1 1 150px; background:#f0f5ff; border:1px solid var(--border); border-radius:10px;
+    padding:12px 16px; text-align:center;
+  }
+  .kpi .n { font-size:22px; font-weight:700; color:var(--accent); }
+  .kpi .l { font-size:12.5px; color:var(--muted); }
+  .foot { text-align:center; color:var(--muted); font-size:12.5px; margin-top:30px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>TITAN.W1 (Phye.exe) — Master Connections Overview</h1>
+  <p>Consolidated cross-feature / cross-table / cross-file connectivity map</p>
+  <p>Saudi/Egyptian multi-branch pharmacy management system · VB6 · ~6,192 procedures · 237 forms · SQL Server (ADODB) + file-backed `.phy` ledger</p>
+  <div class="badges">
+    <span>23 feature docs connected</span>
+    <span>28 SQL tables</span>
+    <span>.phy file ledger</span>
+    <span>FastAPI + PostgreSQL target</span>
+    <span>Tauri + React + SQLite</span>
+    <span>Next.js web</span>
+    <span>Updated 2026-08-15</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#s1">Master data-model diagram (28 tables + file ledger)</a></li>
+    <li><a href="#s2">Money / ledger resolution — where money lives</a></li>
+    <li><a href="#s3">Shared side-effect chains (sale / purchase / return / count / close)</a></li>
+    <li><a href="#s4">Per-feature "connects to" matrix (23 features)</a></li>
+    <li><a href="#s5">Cross-feature flow narrative (end-to-end)</a></li>
+    <li><a href="#s6">Integration &amp; external connections</a></li>
+    <li><a href="#s7">Gaps &amp; open questions</a></li>
+  </ol>
+</nav>
+
+<!-- ============ SECTION 1 ============ -->
+<section class="card" id="s1">
+  <h2>§1 · Master data-model diagram <span style="font-size:14px;color:var(--muted)">(28 SQL tables + file ledger)</span></h2>
+
+  <div class="kpi-row">
+    <div class="kpi"><div class="n">28</div><div class="l">SQL tables</div></div>
+    <div class="kpi"><div class="n">1</div><div class="l">proven SQL JOIN<br>(wzdrugs2 ↔ wzgard)</div></div>
+    <div class="kpi"><div class="n">12+</div><div class="l">`.phy` ledger files</div></div>
+    <div class="kpi"><div class="n">85%</div><div class="l">procs documented<br>(5,285 / 6,192)</div></div>
+    <div class="kpi"><div class="n">23</div><div class="l">feature docs connected</div></div>
+  </div>
+
+  <blockquote><b>Verification status (2026-08-15):</b> schema contradictions resolved (<code class="inline">SCHEMA_RESOLVED.md</code>), Daily*.phy layouts mapped (<code class="inline">RECORD_LAYOUTS_daily_phy.md</code>), orphan objects verified (<code class="inline">ORPHAN_OBJECTS_VERIFIED.md</code>), Egypt ETA path decompiled — submission URLs are <b>dead code</b> (<code class="inline">EGYPT_ETA_DECOMPILED.md</code>). Gap audit: <code class="inline">GAPS_REPORT.md</code>. 3 new feature docs added: accounting ledger, operational utilities, receivables (MRD).</blockquote>
+
+  <p class="legend-line">
+    <span class="tag sql">══</span> explicit/documented FK &nbsp;
+    <span class="tag phy">----</span> inferred relationship (naming convention) &nbsp;
+    <span class="tag phy">.phy</span> file-backed (not SQL) &nbsp;
+    ◆ = keyed to pharmacy via <code class="inline">phar</code> / <code class="inline">pharmacyid</code> / <code class="inline">mobile</code>
+  </p>
+
+  <div class="mermaid">
+erDiagram
+    %% ---- PHARMACY / BRANCH HUB ----
+    WZPHAR ||--o{ WZGARD : "phar"
+    WZPHAR ||--o{ WZCUSTOMERS : "phar"
+    WZPHAR ||--o{ TITANSTOCK : "pharmacyid"
+    WZPHAR ||--o{ TITANKSASTOCK : "pharmacyid"
+    WZPHAR ||--o{ TITANKSA_SALES : "pharmacyid"
+    WZPHAR ||--o{ INVOICEDATA : "pharmacyid"
+    WZPHAR ||--o{ ORDERS : "pharmacyid"
+    WZPHAR ||--o{ TITANNIN : "source/target"
+    WZPHAR ||--o{ TITANNEED : "sender/target"
+    WZPHAR ||--o{ FARYSALES : "mobile/phar"
+    WZPHAR ||--o{ TITANPHARMA_LIST : "mobile 1:1"
+    WZPHAR ||--o{ REMOTECONTROL : "mobile"
+    WZPHAR ||--o{ DRGSERVER : "mobile"
+    WZPHAR ||--o{ WZACC_FREE_TREE : "mobile"
+
+    %% ---- DRUG MASTER HUB ----
+    WZDRUGS ||--|| WZDRUGS2 : "drugname (JOIN)"
+    WZDRUGS ||--o{ WZGARD : "drugname"
+    WZDRUGS ||--o{ TITANKSASTOCK : "drugname"
+    WZDRUGS ||--o{ TITANSTOCK : "drugname"
+    WZDRUGS ||--o{ TITANNEED : "drugname"
+    WZDRUGS ||--o{ DRGSERVER : "drugname"
+    WZDRUGS ||--o{ STOREDISCOUNT : "drugname"
+    WZDRUGS ||--o{ USER_SOURCE_UPDATE : "drugname"
+    WZDRUGS ||--o{ TITAN_USER_ACTION : "drugname"
+    WZDRUGS ||--o{ TARONLINEEG : "drugname"
+    WZDRUGS ||--o{ INVOICEDATA : "DrugName"
+    WZDRUGS ||--o{ DRUGEYE_DASH2 : "drugname"
+    WZDRUGS ||--o{ NILSEN2 : "drugname"
+
+    %% ---- PARTIES ----
+    WZCUSTOMERS {
+      int randomid PK
+      string phar FK
+      int typee "customer|supplier"
+      int creditlimit
+      string namee
+    }
+    COMPANIES {
+      string mobile PK
+      string pass
+    }
+
+    %% ---- STOCK ----
+    WZGARD {
+      string drugname FK
+      string phar FK
+      int randomid
+      real quant
+      string expire
+      real price
+      real oldstock
+      real costvalue
+      real vatvalue
+      real totalwithvat
+      string typee "sale|purchase|return|count"
+    }
+    TITANSTOCK {
+      string pharmacyid FK
+      string drugname FK
+      int minimum
+    }
+    TITANKSASTOCK {
+      string pharmacyid FK
+      string drugname FK
+      int silsilaid
+      int minimum
+    }
+
+    %% ---- INVOICES ----
+    INVOICEDATA {
+      string invoiceid PK
+      string pharmacyid FK
+      string DrugName FK
+      string datee
+      int Quant
+      real SellDisc
+      real price
+    }
+    TITANKSA_SALES {
+      string invoiceid PK
+      string silsilaid
+      string pharmacyid FK
+      real payed
+      real disc
+      real agel
+      real totalvalue
+    }
+    ZATCA {
+      string invoiceid PK
+      string uuid
+      string status
+      string hash
+      string xml
+      string response
+    }
+
+    %% ---- CHAIN / TRANSFER ----
+    TITANNIN {
+      string fatid PK
+      string itemsasstring
+      string source FK
+      string target FK
+      int silsilaid
+    }
+    TITANNEED {
+      string drugname FK
+      int quant
+      string sender FK
+      string target FK
+    }
+    ORDERS {
+      string orderid PK
+      string pharmacyid FK
+      string status "NULL|saved"
+    }
+
+    %% ---- LEDGER ----
+    FARYSALES {
+      string mobile FK
+      string father
+      string son
+      string datee
+      int monthe
+      int yearo
+      real payed
+      string creditdebit "debit|credit"
+    }
+    WZACC_FREE_TREE {
+      string mobile FK
+      string master
+      string fary
+    }
+
+    %% ---- SYNC / AUDIT / EXTERNAL ----
+    USER_SOURCE_UPDATE {
+      string drugname FK
+      string mobile FK
+      string units
+    }
+    TITAN_USER_ACTION {
+      string drugname FK
+      string mobile FK
+      string datee
+      string typee
+    }
+    DRGSERVER {
+      string drugname FK
+      string mobile FK
+      string silsila
+    }
+    REMOTECONTROL {
+      string mobile FK
+      string copyid
+      string passedfunctions
+    }
+    STOREDISCOUNT {
+      string drugname FK
+      string adress
+      string storename
+      real disco
+      real price
+    }
+    NILSEN2 {
+      string drugname FK
+      string data
+    }
+    DRUGEYE_DASH2 {
+      string drugname FK
+    }
+    TARONLINEEG {
+      string drugname FK
+      string mobile FK
+    }
+    TITANPHARMA_LIST {
+      string mobile PK
+      string pharmacyname
+      string barcode
+      string apptype
+    }
+  </div>
+  <p class="diagram-cap">Master entity-relationship view. ══ = documented FKs; the rest are inferred from repeated same-name columns. Only <code class="inline">wzdrugs2 ↔ wzgard</code> is proven by extracted SQL.</p>
+
+  <h3>1.1 The one picture — grouped inventory</h3>
+  <div class="grid2">
+    <div>
+      <h4>🔵 Drug master (hub)</h4>
+      <p><code class="inline">wzdrugs</code> [PK drugname] — barcode/Barcode1..5, vat, units, Unitsmall, classy, generic, price, PriceNow, stock, titanid, disco, pricechanged, localimport, wareprice3, history, agel</p>
+      <p>Links 1:many to: <code class="inline">wzdrugs2</code>, <code class="inline">wzgard</code>, <code class="inline">titanksastock</code>, <code class="inline">titanstock</code>, <code class="inline">titanneed</code>, <code class="inline">drgserver</code>, <code class="inline">storediscount</code>, <code class="inline">usersourceupdate</code>, <code class="inline">TitanUserAction</code>, <code class="inline">taronlineeg</code>, <code class="inline">invoicedata</code>, <code class="inline">drugeyedash2</code>, <code class="inline">nilsen2</code>, <code class="inline">ChainBuy*/Rawakid</code></p>
+    </div>
+    <div>
+      <h4>🏥 Pharmacy master (branch hub)</h4>
+      <p><code class="inline">wzphar</code> [PK id] — pharmacyid, pharname, adress, mobile. Three aliases for "which pharmacy": <code class="inline">phar</code> / <code class="inline">pharmacyid</code> / <code class="inline">mobile</code>.</p>
+      <p>Links to stock, invoices, parties, ledger, chain, sync tables.</p>
+    </div>
+    <div>
+      <h4>💰 Accounting / money</h4>
+      <p><code class="inline">wzaccfreetree</code> (chart of accounts · master/fary), <code class="inline">farysales</code> (per-branch ledger · father/son/creditdebit/payed/monthe/yearo), <code class="inline">titanksasales</code> (chain sales), <code class="inline">invoicedata</code> (universal invoice store), <code class="inline">ZATCA</code> (e-invoice log)</p>
+    </div>
+    <div>
+      <h4>🔗 Chain / inter-pharmacy</h4>
+      <p><code class="inline">titaninn</code> (transfers+POs), <code class="inline">titanneed</code> (needs), <code class="inline">orders</code>, <code class="inline">titanpharmalist</code>, <code class="inline">ChainBuyStore/Users</code>, <code class="inline">RawakidTablew</code> (dead-stock exchange), <code class="inline">remotecontrol</code></p>
+    </div>
+    <div>
+      <h4>🧾 Parties</h4>
+      <p><code class="inline">wzcustomers</code> (customers AND suppliers, <code class="inline">typee</code> discriminates; creditlimit) · <code class="inline">companies</code> (supplier master, [PK mobile])</p>
+    </div>
+    <div>
+      <h4>📁 File-backed ledger (.phy)</h4>
+      <p><code class="inline">Daily.phy</code>, <code class="inline">Dailyline.phy</code>, <code class="inline">Dailymax.phy</code>, <code class="inline">MonyInfo.phy</code>, <code class="inline">usersmony.phy</code>, <code class="inline">daily-manual.phy/-2</code>, <code class="inline">fary.date.phy</code>, <code class="inline">closefary.phy</code>, <code class="inline">acctree.phy/-2</code>, <code class="inline">RasidCorrect.phy</code>, <code class="inline">workperiod/delivery/oot3/netcounter.phy</code>, <code class="inline">Accounting\moves\</code>, <code class="inline">Archive\monthy\moves + start-data</code>, <code class="inline">DDI.Phy</code>, <code class="inline">Phye.safer</code> backups, <code class="inline">C:\saturn\...\counter.txt + hash.txt</code></p>
+    </div>
+  </div>
+
+  <h3>1.2 Explicit vs inferred FKs — the honest ledger</h3>
+  <table>
+    <tr><th>Relationship</th><th>Evidence class</th><th>Where</th></tr>
+    <tr><td><code class="inline">wzdrugs2.drugname → wzdrugs</code></td><td><span class="tag sql">JOIN in SQL</span></td><td>schema_complete.md:54,72</td></tr>
+    <tr><td><code class="inline">wzgard.drugname→wzdrugs</code>, <code class="inline">wzgard.phar→wzphar</code></td><td>drawn diagram</td><td>schema_complete.md:100,86,721,734</td></tr>
+    <tr><td><code class="inline">titanksasales/titanksastock/titanstock/invoicedata/orders.pharmacyid → wzphar</code></td><td>drawn</td><td>schema_complete.md:738-740</td></tr>
+    <tr><td><code class="inline">titaninn.source/target</code>, <code class="inline">titanneed.sender/target → wzphar</code></td><td>drawn</td><td>schema_complete.md:747-753</td></tr>
+    <tr><td><code class="inline">titanpharmalist/remotecontrol/drgserver/wzaccfreetree.mobile → wzphar</code></td><td>drawn</td><td>schema_complete.md:742-745</td></tr>
+    <tr><td><code class="inline">farysales.mobile/phar</code>, <code class="inline">wzcustomers.phar → wzphar</code></td><td>naming convention only</td><td>schema_complete.md:674,116</td></tr>
+    <tr><td>all <code class="inline">*.drugname → wzdrugs</code></td><td>naming convention only</td><td>schema_complete.md:278,202,226,248,382,350,453,427</td></tr>
+    <tr><td><code class="inline">ChainBuy*/Rawakid</code> by <code class="inline">PharmacistTel → titanpharmalist.mobile</code></td><td>naming convention only</td><td>schema_complete.md:516-595</td></tr>
+  </table>
+
+  <h3>1.3 Which tables are real vs reconstructed</h3>
+  <p>Only <b>5 CREATE TABLE</b> statements recovered (<code class="inline">titaninn</code>, <code class="inline">titanksasales</code>, <code class="inline">titanksastock</code>, <code class="inline">titanneed</code>, <code class="inline">TitanUserAction</code>); <b>8 tables inferred from context</b> — <code class="inline">farysales</code>, <code class="inline">wzaccfreetree</code>, <code class="inline">nilsen2</code>, <code class="inline">drugeyedash2</code>, <code class="inline">companies</code>, <code class="inline">taronlineeg</code>, <code class="inline">titanpharmalist</code>, <code class="inline">orders</code> (schema_complete.md:763-774).</p>
+  <p>⚠️ Divergent reconstructions: <code class="inline">titanksasales</code>/<code class="inline">titaninn</code> appear as <b>full line-item tables</b> in business_logic_complete.md:102-125 but as <b>summary tables</b> in schema_complete.md:172-193; <code class="inline">invoicedata</code> is a <b>header+line hybrid</b> (schema_complete.md:263-291).</p>
+  <p><span class="tag warn">RESOLVED 2026-08-15</span> All 11 contradictions from GAPS_REPORT §2 resolved against p-code CREATE TABLE / INSERT fragments in <code class="inline">SCHEMA_RESOLVED.md</code> — adopted <code class="inline">schema_complete.sql</code> as the single source of truth; re-derived column lists for titanksasales, titanksastock, titanneed, TitanUserAction, usersourceupdate, ChainBuyUsers, invoicedata, wzphar, taronlineeg, titaninn, creditdebit (e.g. titanksasales CREATE ×3 at pcode_disasm.txt:48824,54353,359921; farysales INSERT ×3; invoicedata line-items ×3).</p>
+</section>
+
+<!-- ============ SECTION 2 ============ -->
+<section class="card" id="s2">
+  <h2>§2 · Money / ledger resolution <span style="font-size:14px;color:var(--muted)">(where does the money actually live?)</span></h2>
+  <blockquote><b>Headline:</b> there are <b>no <code class="inline">wzmony</code> / <code class="inline">wzdaily</code> / <code class="inline">wzbank</code> SQL tables</b>. The docs use those names as conceptual shorthand; the real money store is (a) the <code class="inline">farysales</code> SQL ledger and (b) the serialized <code class="inline">.phy</code> daily files.</blockquote>
+
+  <h3>2.1 The drawer (الدرج) model — cash / شبكة / أجل splits</h3>
+  <p>Every invoice splits <code class="inline">totalvalue = payed (cash + visa/شبكة) + agel (credit/أجل)</code> (feature_sales_invoices.md:153, idx 13344).</p>
+  <table>
+    <tr><th>Side</th><th>Source</th><th>Effect on drawer</th></tr>
+    <tr><td>Cash sale</td><td>sales invoice, <code class="inline">payed</code> cash</td><td><span class="tag feed">in</span> (قبض) — drawer up</td></tr>
+    <tr><td>Card / شبكة sale</td><td><code class="inline">payed</code> visa portion</td><td><b>not</b> drawer; شبكة balance</td></tr>
+    <tr><td>Credit / أجل sale</td><td><code class="inline">agel</code> portion</td><td><b>not</b> drawer; customer debt up (wzcustomers)</td></tr>
+    <tr><td>Cash return</td><td>sales return</td><td><span class="tag risk">out</span> — خروج نقدية نتيجة ارتجاع (idx 11421)</td></tr>
+    <tr><td>Cash purchase</td><td>purchase from drawer</td><td><span class="tag risk">out</span> — تخرج من الدرج</td></tr>
+    <tr><td>Supplier refund</td><td>purchase return refunded</td><td><span class="tag feed">in</span> — دخول نقدية نتيجة ارتجاع الدفع</td></tr>
+    <tr><td>Customer settlement (سند قبض)</td><td>receivable payment</td><td><span class="tag feed">in</span></td></tr>
+    <tr><td>Supplier payment (سند صرف)</td><td>payable payment</td><td><span class="tag risk">out</span></td></tr>
+    <tr><td>Expenses (مصروفات)</td><td>حركة مالية screen</td><td><span class="tag risk">out</span> — must move drawer→treasury before close</td></tr>
+  </table>
+
+  <p><b>Drawer accounting identity</b> (three equivalent statements):</p>
+  <ul>
+    <li><code class="inline">drawer = cash sales − cash returns + customer settlements</code> (sales:338, idx 12675/8956)</li>
+    <li><code class="inline">expected drawer = current drawer − drawer@start + cash that left</code> (closing:65, idx 8305)</li>
+    <li>Sales vs drawer: sell 2×500 and buy 300 of drugs → sales total 500, drawer only 200 — <b>expenses don't reduce sales totals</b> (closing:311, idx 8336/9963)</li>
+  </ul>
+
+  <h3>2.2 How transactions flow into <code class="inline">farysales</code></h3>
+  <p><code class="inline">farysales</code> = SQL <b>posting journal</b> (accounting); <code class="inline">.phy</code> = <b>cash/day register</b> the close reconciles:</p>
+  <ul>
+    <li>Sales cash/visa/أجل → day register (`.phy`) + <code class="inline">titanksasales</code>/<code class="inline">invoicedata</code>; أجل العملاء posts via <code class="inline">wzcustomers</code> (balances:132)</li>
+    <li>Purchases → <b>credit (دائن)</b> posting, father/son = <code class="inline">خصوم.موردين</code>, creditdebit='credit' (purchases:140-142)</li>
+    <li>Purchase returns → <b>debit</b> posting against the same account (purchase_returns:87,145)</li>
+    <li>Manual entries → <code class="inline">daily-manual.phy/-2</code> + FormDailyManual2 via <code class="inline">wzaccfreetree</code></li>
+    <li>Day close aggregates كاش/شبكة/مصروفات/مشتريات/ضريبة and rolls forward (closing:67,75,163)</li>
+  </ul>
+
+  <h3>2.3 Recommended replacement schema (money core)</h3>
+  <pre><code>parties(id, kind[customer|supplier], code, name, credit_limit, ...)
+accounts(id, code, parent_id, name_ar, name_en, type[asset|liability|equity|income|expense])
+  -- legacy wzaccfreetree + acctree.phy → normalized chart of accounts
+journals(id, branch_id, date, entry_no, description, status, source, ref_invoice_id)
+journal_lines(id, journal_id, account_id, debit, credit, contra_party_id)
+  -- legacy farysales rows (father/son/creditdebit/payed) + \Files\Accounting\moves\
+invoices(id, kind[sale|purchase|sale_return|purchase_return|transfer], branch_id,
+         invoice_no, party_id, date, subtotal, discount, vat, total,
+         status[open|saved|closed|archived])
+invoice_lines(id, invoice_id, drug_id, batch_id, qty, unit_price, cost, disc, vat, line_total)
+payment_splits(id, invoice_id, method[cash|card|credit], amount, received_at)
+  -- legacy payed/agel/totalvalue + كاش/شبكة/أجل split
+drawer_movements(id, branch_id, date, direction[in|out], reason, amount, method,
+                 shift_id, ref_invoice_id, user_id)
+  -- legacy Daily.phy / Dailyline.phy / حركة مالية
+daily_close(id, branch_id, date, expected_cash, counted_cash, difference,
+            net_cash, net_network, purchases, expenses, vat_sales, vat_purchases,
+            vat_expenses, status, closed_at)
+  -- legacy MonyInfo.phy snapshot + RPT-H02 columns
+monthly_close(id, year, month, start_balances_json)   -- legacy monthy\start-data\
+balances(id, account_id, date, debit, credit, balance) -- for ميزان / trial balance</code></pre>
+  <p><b>Design rules from the legacy:</b> every money row carries branch + date(+month/year) + creditdebit side + account path; day close is an <b>immutable snapshot</b> locking a date; the global date advances <b>only</b> by the close (closing:75,308 — idx 12032).</p>
+</section>
+
+<!-- ============ SECTION 3 ============ -->
+<section class="card" id="s3">
+  <h2>§3 · Shared side-effect chains</h2>
+  <p>Each arrow = "writes to / feeds". These are the cross-cutting invariants a replacement must reproduce atomically.</p>
+
+  <h3>3.1 One SALE <span class="ar">(فاتورة بيع)</span></h3>
+  <div class="mermaid">
+flowchart LR
+    S["SAVE SALES INVOICE"]
+    S --> A["wzgard · stock −<br/>oldstock=prior · typee='sale'"]
+    S --> B["wzcustomers · debt +<br/>(أجل portion only)<br/>cash cust. must pay full"]
+    S --> C["money (.phy)<br/>cash → drawer (قبض)"]
+    S --> D["titanksasales<br/>1 row / invoice (GUID loop)"]
+    S --> E["invoicedata<br/>1 row / drug<br/>IdDateTime,Quant,SellDisc…"]
+    S --> F["ZATCA · tax invoice<br/>uuid/status/hash/xml"]
+    S --> G["TitanUserAction<br/>audit row"]
+    D --> CL["day close (محسوب المبيعات,<br/>تكلفة, ربح, ضريبة)"]
+    E --> CL
+    B --> BAL["balances · أجل العملاء"]
+    A --> SH["shortages · stock &lt; minimum"]
+  </div>
+  <p class="diagram-cap">Sale chain — primary writes (sales:112-124) and downstream consumers (closing:160-161, balances:132-138, shortages, stock counting, discounts:79, tax, reports).</p>
+
+  <h3>3.2 One PURCHASE <span class="ar">(فاتورة مشتريات)</span></h3>
+  <div class="mermaid">
+flowchart LR
+    P["SAVE PURCHASE INVOICE"]
+    P --> A["wzgard · NEW batch row<br/>quant+ · costvalue/vatvalue/totalwithvat<br/>typee='purchase'"]
+    P --> B["titanstock / titanksastock<br/>stock +"]
+    P --> C["wzdrugs2 · unitcost recomputed<br/>= costvalue/quant"]
+    P --> D["farysales · CREDIT posting<br/>خصوم.موردين · creditdebit='credit'"]
+    P --> E["companies/wzcustomers<br/>supplier dues +"]
+    P --> F["money (.phy) · cash OUT<br/>خروج نقدية نتيجة الدفع للشركات"]
+    P --> G["storediscount · per-item<br/>purchase discount"]
+    P --> H["TitanUserAction · audit"]
+    C --> COGS["COGS / ربح اليوم at close"]
+    D --> PAY["supplier payables → ميزان"]
+  </div>
+  <p class="diagram-cap">Purchase chain (purchases:127-155). First invoice must be a saved purchase — <b>opening stock (الجرد الاولي) enters through purchases</b> (purchases:378,137,379).</p>
+
+  <h3>3.3 One RETURN <span class="ar">(مرتجع بيع / مرتجع مشتريات)</span></h3>
+  <div class="mermaid">
+flowchart LR
+    subgraph SR["SALES RETURN — reverse of sale"]
+      S["RETURN (sales)"] --> SA["wzgard · quant + back"]
+      S --> SB["wzcustomers · debt −<br/>(أجل reversed)"]
+      S --> SC["money (.phy) · cash OUT<br/>idx 11421, 13032"]
+      S --> SD["titanksasales · reverse row"]
+      S --> SE["invoicedata · reverse lines"]
+      S --> SF["ZATCA · فاتورة ضريبية - مرتجع"]
+    end
+    subgraph PR["PURCHASE RETURN"]
+      P["RETURN (purchase)"] --> PA["wzgard · reverse batch"]
+      P --> PB["farysales · DEBIT<br/>خصوم.موردين · creditdebit='debit'"]
+      P --> PC["cash IN on supplier refund<br/>دخول نقدية نتيجة ارتجاع الدفع"]
+    end
+  </div>
+  <p class="diagram-cap">Return chains (sales_returns:181-182,72,99; purchase_returns:87-91,145). 3 purchase invoice states: مشتريات / مرتجع مشتريات / مرتجع الاكسبير.</p>
+
+  <h3>3.4 One STOCK CORRECTION / COUNT <span class="ar">(جرد + تصحيح ارصدة)</span></h3>
+  <div class="mermaid">
+flowchart LR
+    C["STOCK COUNT / CORRECTION"]
+    C --> A["wzgard / titanstock / titanksastock<br/>adjusted بالزيادة / بالعجز"]
+    C --> B["RasidCorrect.phy · correction log"]
+    C --> D["farysales · branch valuation rows<br/>costvalue/totalwithvat"]
+    C --> E["money (.phy) · opening drawer<br/>set at setup (الرصيد الافتتاحي للخزينه)"]
+    C --> F["APPROVAL · staff request →<br/>manager accept/reject"]
+  </div>
+  <p class="diagram-cap">Stock-count chain (stock_counting:20,75,201,232-235). Feeds balances:70,334 and the "negative balances" repair command.</p>
+
+  <h3>3.5 One DAY-CLOSE <span class="ar">(تقفيل اليوم)</span></h3>
+  <div class="mermaid">
+flowchart TB
+    DC["DAY CLOSE"]
+    DC --> A["system date · +1 day<br/>≥1 PM · idempotent"]
+    DC --> B["Daily.phy / MonyInfo.phy<br/>day ledger + snapshot"]
+    DC --> C["titanksasales / invoicedata<br/>day totals: مبيعات/تكلفة/ربح/ضريبة"]
+    DC --> D["drawer count · expected =<br/>opening + sales − outflows"]
+    DC --> E["difference · عجز/زيادة recorded"]
+    DC --> F["farysales / fary.date.phy / closefary.phy<br/>branch close flag"]
+    DC --> G["Archive · old invoices archived<br/>تخزين فواتير المبيعات/المشتريات"]
+    DC --> H["Backup · Titan3-Backup\\Daily\\"]
+    DC --> I["Shift closed · drawer handover"]
+    DC --> J["Month close · monthy\\moves + start-data"]
+    B --> BAL["balances · opening balances"]
+    H --> BK["backup/archive feature"]
+  </div>
+  <p class="diagram-cap">Day-close chain (closing:156-167,59-83). Feeds balances, backup/archive, reports (RPT-A04), money-per-user.</p>
+</section>
+
+<!-- ============ SECTION 4 ============ -->
+<section class="card" id="s4">
+  <h2>§4 · Per-feature "connects to" matrix (23 features)</h2>
+  <p>Read/write direction stated where explicit; otherwise table name = connectivity. `.phy`/file columns from the same docs.</p>
+  <div style="overflow-x:auto">
+  <table>
+    <tr><th>#</th><th>Feature</th><th>SQL tables touched</th><th>.phy / files</th><th>Feeds →</th><th>Consumes</th></tr>
+    <tr><td>1</td><td><span class="ar">فواتير مبيعات</span> Sales</td><td>titanksasales, invoicedata, wzgard, wzcustomers, titaninn, farysales, ZATCA</td><td>Daily.phy, Dailyline, Dailymax, MonyInfo, usersmony</td><td>close, balances, shortages, counting, discounts, tax, reports</td><td>drug master, customer debt, drawer</td></tr>
+    <tr><td>2</td><td><span class="ar">مرتجع بيع</span> Sales returns</td><td>wzgard, titanksasales, invoicedata, wzcustomers, ZATCA, farysales, titaninn</td><td>daily money files (reversed)</td><td>cash-out reasons at close</td><td>sales invoice reversed</td></tr>
+    <tr><td>3</td><td><span class="ar">مشتريات</span> Purchases</td><td>wzgard, invoicedata, wzcustomers, companies, farysales, titanstock, titanksastock, storediscount, TitanUserAction, orders, titaninn, ChainBuy*, Rawakid</td><td>drawer/treasury money files</td><td>COGS/profit, supplier payables, storediscount, drug cost</td><td>supplier master, opening stock, DTTS</td></tr>
+    <tr><td>4</td><td><span class="ar">مرتجع مشتريات</span> Purchase returns</td><td>wzgard, invoicedata, storediscount, TitanUserAction, farysales, titanksastock, titanstock, wzdrugs2</td><td>cash-in on refund</td><td>farysales debit</td><td>purchase invoice reversed</td></tr>
+    <tr><td>5</td><td><span class="ar">تعديل فواتير</span> Invoice editing</td><td>wzgard, invoicedata, titanksasales, TitanUserAction, farysales, wzaccfreetree, wzcustomers</td><td>money/journal .phy reversed+re-applied</td><td>ZATCA/ETA re-submit after money edit</td><td>sales/purchase/return invoices</td></tr>
+    <tr><td>6</td><td><span class="ar">تقفيل حسابات</span> Account closing</td><td>farysales, invoicedata, titanksasales, wzaccfreetree, ZATCA, companies</td><td>Daily, Dailyline, Dailymax, MonyInfo, daily-manual, fary.date, closefary, acctree, RasidCorrect, Archive\monthy, Titan3-Backup\Daily</td><td>balances (opening), backup, reports</td><td>every day's invoices, money files, shifts</td></tr>
+    <tr><td>7</td><td><span class="ar">ارصدة</span> Balances</td><td>wzaccfreetree, farysales, invoicedata, titanksasales, wzcustomers, wzdrugs, titanstock, titanksastock</td><td>acctree.phy/-2, MonyInfo, RasidCorrect, Accounting\moves, monthy\start-data</td><td>ميزان / balance sheet / كشف حساب / capital</td><td>sales+purchases accruals, stock counts, day close</td></tr>
+    <tr><td>8</td><td><span class="ar">جرد ارصدة</span> Stock counting</td><td>wzgard, wzdrugs, wzdrugs2, TitanUserAction, titanstock, titanksastock, farysales, invoicedata, orders</td><td>RasidCorrect.phy; opening drawer</td><td>balances corrections, shortages</td><td>drug cards, stock batches</td></tr>
+    <tr><td>9</td><td><span class="ar">نواقص</span> Shortages</td><td>titanneed, titanksastock, titanstock, orders, wzdrugs, companies, storediscount, farysales</td><td>—</td><td>orders + transfers</td><td>sales stock decrements, minimum levels</td></tr>
+    <tr><td>10</td><td><span class="ar">خصومات شركات ومخازن</span> Discounts</td><td>storediscount, wzdrugs, titanksasales, invoicedata, wzcustomers, wzphar, titanstock, drgserver</td><td>money .phy (settled net)</td><td>purchases (buy disc), sales (SellDisc), price changes</td><td>drug cards, warehouse margin</td></tr>
+    <tr><td>11</td><td><span class="ar">عملاء وموردين</span> Customers &amp; suppliers</td><td>wzcustomers, companies, farysales, titanstock, drgserver</td><td>money files for settlements</td><td>sales debt / purchase payables</td><td>balances, day close, reports</td></tr>
+    <tr><td>12</td><td><span class="ar">دواء وأسعار</span> Drug master &amp; pricing</td><td>wzdrugs, wzdrugs2, wzgard, drgserver, titanksastock, storediscount, drugeyedash2, usersourceupdate, TitanUserAction, titanneed, titanstock, titaninn</td><td>DrugEye .phy (fromdrugeye, DRUGS.PHY)</td><td>pricing/VAT for sales+purchases, shortages, discounts</td><td>DrugEye/cloud updates, purchases (cost)</td></tr>
+    <tr><td>13</td><td><span class="ar">تحويلات ولوجستيات</span> Transfers &amp; logistics</td><td>orders, titaninn, titanneed, titanksastock, ChainBuyStore, ChainBuyUsers, RawakidTablew, titanstock, titanksasales, wzphar, titanpharmalist</td><td>delivery.phy, FarWay\FarData</td><td>sales (branch transfers), purchases (chain buy), shortages (needs), warehouse</td><td>cloud-link network, sub-devices</td></tr>
+    <tr><td>14</td><td><span class="ar">فوترة ضريبية</span> ZATCA / DTTS</td><td>ZATCA, titanksasales, invoicedata, wzgard, wzdrugs, farysales</td><td>counter.txt, hash.txt, \Files\qr\, C:\eta-qr\, netcounter.phy</td><td>government (ZATCA/ETA), VAT reports, QR</td><td>sales+purchase invoices, drug cards (VAT%)</td></tr>
+    <tr><td>15</td><td><span class="ar">مستخدمون وصلاحيات</span> Users / permissions</td><td>TitanUserAction, usersourceupdate, ChainBuyUsers, titanpharmalist, taronlineeg, invoicedata, wzcustomers, companies, drgserver, remotecontrol, farysales</td><td>users/permissions config; money-per-user</td><td>permission gates on every feature; audit</td><td>login, tech-support roles, mobile registration</td></tr>
+    <tr><td>16</td><td><span class="ar">نسخ وأرشفة واستيراد</span> Backup / archive</td><td>titaninn, remotecontrol, usersourceupdate, farysales, drgserver, TitanUserAction, wzdrugs, wzcustomers, titanksastock, titanstock, storediscount</td><td>Titan3-Backup\{Daily,Monthly,Export,xj}, Phye.safer, Files\DBI\*.bak, Archive\Input+Output, balance-history folder</td><td>restore, cloud backup, rollback</td><td>day close (backup at close), transfers (imported fats)</td></tr>
+    <tr><td>17</td><td><span class="ar">أطباء وروشتات</span> Doctors &amp; prescriptions</td><td>wzdrugs, wzgard, TitanUserAction, companies, wzcustomers, titaninn, titanneed, titanksasales, invoicedata, wzphar</td><td>Files\DB\DDI.Phy</td><td>prescriptions feed sales invoice lines</td><td>DDI checks, patient data</td></tr>
+    <tr><td>18</td><td><span class="ar">تقارير وتحليلات</span> Reports &amp; analytics</td><td>titanksasales, ZATCA, titanksastock, titanstock, TitanUserAction, storediscount, invoicedata, farysales, wzphar, titanneed, wzaccfreetree, nilsen2, titanpharmalist</td><td>.phy daily files, workperiod.phy, oot3.phy</td><td>RPT-S/P/C/SUP/H/ST/D/A/F/DEL/CH/EXP/EI/OP/SP families</td><td>every feature's data</td></tr>
+    <tr><td>19</td><td><span class="ar">تكاملات خارجية</span> External integrations</td><td>remotecontrol, usersourceupdate, drgserver, ZATCA, nilsen2, titanstock, titanksastock, titanpharmalist, titaninn, TitanUserAction</td><td>DrugEye .phy/.rar, nilsen2 staging, myftp.phy, cloud paths</td><td>ZATCA, ETA/DTTS, DrugEye, Nielsen, cloud sync, remote control</td><td>local sales/stock (upload), drug catalog (download)</td></tr>
+    <tr><td>20</td><td><span class="ar">وحدات متنوعة</span> Misc modules</td><td>titaninn, titanksasales, titanksastock, titanstock, titanneed, taronlineeg, farysales, storediscount, usersourceupdate, drgserver, remotecontrol, ZATCA, wzaccfreetree, ChainBuyUsers, RawakidTablew, wzphar</td><td>.phy per misc feature, netcounter.phy</td><td>loyalty/points, e-commerce (HungerStation), mobile, country/currency</td><td>shared Raz helpers</td></tr>
+    <tr><td>21</td><td><span class="ar">قيود وشجرة حسابات</span> Accounting ledger &amp; chart of accounts</td><td>wzaccfreetree, farysales, wzgard, titanksasales, invoicedata</td><td>acctree.phy/-2, Accounting\moves, daily-manual.phy</td><td>ميزان / trial balance, day close, money details</td><td>journal entries (قيد), money ops, balances (feature_accounting_ledger.md)</td></tr>
+    <tr><td>22</td><td><span class="ar">نماذج تشغيلية يومية</span> Operational utilities</td><td>titanneed, wzaccfreetree, invoicedata</td><td>FormExam .phy (record #1, ch 0x16)</td><td>daily notes, input totals, drug classification</td><td>sales/purchase screens, reports (feature_operational_utilities.md)</td></tr>
+    <tr><td>23</td><td><span class="ar">حسابات المدينة</span> Receivables (MRD / مديونية)</td><td>titanksasales, invoicedata (agel/payed), wzcustomers</td><td>month.start.stock</td><td>كشف حساب العملاء, sales debt</td><td>customer balances, day close (feature_receivables_mrd.md)</td></tr>
+  </table>
+  </div>
+  <p class="diagram-cap">Sources: direct <code class="inline">rg -c</code> scan of feature_*.md; per-feature "Tables" sections (e.g. sales:180-283, purchases:226-330, balances:175-208, transfers:90-320, tax:118-155).</p>
+</section>
+
+<!-- ============ SECTION 5 ============ -->
+<section class="card" id="s5">
+  <h2>§5 · Cross-feature flow narrative <span style="font-size:14px;color:var(--muted)">(end-to-end, plain language)</span></h2>
+  <div class="mermaid">
+flowchart LR
+    P1["1 Purchased"] --> P2["2 Stocked"]
+    P2 --> P3["3 Priced"]
+    P3 --> P4["4 Sold"]
+    P4 --> P5["5 Returned"]
+    P5 --> P6["6 Counted"]
+    P6 --> P7["7 Short-flagged"]
+    P7 --> P8["8 Discounted"]
+    P8 --> P9["9 Taxed"]
+    P9 --> P10["10 Posted"]
+    P10 --> P11["11 Closed"]
+    P11 --> P12["12 Balanced"]
+    P12 --> P13["13 Archived/backed up"]
+    P13 --> P14["14 Reported"]
+    P14 --> P15["15 Synced across branches"]
+    P15 --> P16["16 Exported"]
+  </div>
+  <p class="diagram-cap">Purchased → Stocked → Priced → Sold → Returned → Counted → Short-flagged → Discounted → Taxed → Posted → Closed → Balanced → Archived → Reported → Synced → Exported.</p>
+
+  <ol>
+    <li><b>Purchased.</b> A purchase invoice is the entry point of everything (first invoice must be a saved purchase, purchases:378). Opening stock (الجرد الاولي) is a special purchase. Stock batches → <code class="inline">wzgard</code> with cost+VAT; <code class="inline">wzdrugs2.unitcost</code> derived; drug-card stock in <code class="inline">titanstock/titanksastock</code> incremented; a credit posting to <code class="inline">farysales</code> under خصوم.موردين raises the supplier payable. If the supplier is another pharmacy, goods arrive via <code class="inline">titaninn</code> transfers instead.</li>
+    <li><b>Stocked.</b> Batch/expiry in <code class="inline">wzgard</code>; chain visibility in <code class="inline">titanksastock</code> (per pharmacy + silsilaid + minimum). Drugs below minimum become نواقص (three systems: manual / half-auto / sales-rate) → <code class="inline">titanneed</code> + <code class="inline">orders</code>.</li>
+    <li><b>Priced.</b> Prices/VAT% live on the drug card (<code class="inline">wzdrugs.price/PriceNow/vat/disco</code>), refreshed from last 100/400 purchases + DrugEye/cloud via <code class="inline">usersourceupdate/drgserver</code>. Discount changes log to <code class="inline">storediscount</code>. Warehouse margin (1-6) applied at store.</li>
+    <li><b>Sold.</b> A sales invoice (cash/شبكة/أجل) decrements stock, posts <code class="inline">titanksasales</code> + <code class="inline">invoicedata</code> lines, adds customer debt for أجل, records cash to drawer `.phy`, emits a tax invoice (ZATCA/ETA), audits to <code class="inline">TitanUserAction</code>, opens the cash drawer on print. Credit-limit crossing blocks save.</li>
+    <li><b>Returned.</b> Sales returns reverse stock/customer-debt/chain rows/invoice lines + cash-out of drawer; purchase returns reverse stock + post a debit to <code class="inline">farysales</code>, with cash-in on supplier refund. Both emit tax return variants.</li>
+    <li><b>Counted.</b> Counts/corrections (بالزيادة/بالعجز) adjust <code class="inline">wzgard/titanstock</code>, log to <code class="inline">RasidCorrect.phy</code>, revalue branches in <code class="inline">farysales</code>, flow through a manager approval gate. Opening balances seeded at setup.</li>
+    <li><b>Short-flagged.</b> Shortages (<code class="inline">titanneed</code>) + orders (<code class="inline">orders</code>, pending while status NULL) drive replenishment and inter-branch needs; dead stock (رواكد) exchanged via <code class="inline">RawakidTablew/ChainBuyStore</code>.</li>
+    <li><b>Discounted.</b> Invoice discounts (SellDisc / خصم الشراء / cash / wholesale / tax-item) reduce settled money, logged to <code class="inline">storediscount</code>; abnormal discounts blocked.</li>
+    <li><b>Taxed.</b> VAT (default 15%) per invoice; daily buckets split ضريبة المبيعات/المشتريات/المصروفات; ZATCA signs via Saturn/toolkit → <code class="inline">ZATCA</code> table (uuid/counter/hash); Egypt ETA/DTTS submits XML, uuid tracked against <code class="inline">titanksasales</code>.</li>
+    <li><b>Posted.</b> Chart of accounts (<code class="inline">wzaccfreetree</code> + acctree.phy) + <code class="inline">farysales</code> journal (father/son, creditdebit) = double entry; manual entries via daily-manual.phy; moves under <code class="inline">\Files\Accounting\moves\</code>.</li>
+    <li><b>Closed.</b> Day close counts the drawer, aggregates the day, reconciles عجز/زيادة, advances the system date, closes the shift, archives old invoices, backs up to Titan3-Backup\Daily, writes MonyInfo.phy. Month close rolls opening balances into start-data.</li>
+    <li><b>Balanced.</b> ميزان المراجعة / الميزانية / كشف حساب / راس المال generated from account tree + farysales + balances; chronological balance sequence validated.</li>
+    <li><b>Archived / backed up.</b> Daily/monthly archives, xj\ compressed backups, Phye.safer, restore via Restore.exe, fat import/export via titaninn.</li>
+    <li><b>Reported.</b> RPT-* families (S/P/C/SUP/H/ST/D/A/F/DEL/CH/EXP/EI/OP/SP) render from the tables above.</li>
+    <li><b>Synced across branches.</b> Cloud-link, FarWay file sync, full-link sub-devices, ModSqlLink remote SQL, FTP/HTTP: chain tables (titanstock, titanksastock, titanksasales, titaninn, titanneed, titanpharmalist, usersourceupdate, remotecontrol, orders) replicated.</li>
+    <li><b>Exported.</b> Drug master → DrugEye; 6-month aggregated sales → RAR → Nielsen; ZATCA/ETA → tax authorities.</li>
+  </ol>
+</section>
+
+<!-- ============ SECTION 6 ============ -->
+<section class="card" id="s6">
+  <h2>§6 · Integration &amp; external connections</h2>
+  <div class="mermaid">
+flowchart LR
+    subgraph EXT["EXTERNAL WORLD"]
+      Z["ZATCA · Saudi e-invoicing<br/>Saturn sign → uuid → counter/hash"]
+      ETA["ETA / DTTS · Egypt tax<br/>api.invoicing.eta.gov.eg"]
+      SFDA["SFDA RSD SOAP<br/>track & trace"]
+      DE["DrugEye · drug DB<br/>ROT-4 feed (not a rar)"]
+      NL["Nielsen · data selling<br/>nilsen2 → RAR → curl"]
+      PH["PhycodSystems cloud<br/>3 servers · 15 exes · AnyDesk"]
+      NET["Network / FTP / cloud sync<br/>ModNetwork · ModSqlLink · FarWay"]
+    end
+    subgraph LOCAL["LOCAL SYSTEM"]
+      L["Local DB (28 tables)<br/>+.phy ledger"]
+    end
+    L --> DE
+    L --> NL
+    L --> PH
+    L --> Z
+    L --> ETA
+    L --> SFDA
+    L --> NET
+    NET --> L
+    DE --> L
+  </div>
+  <p class="diagram-cap">External integrations (feature_external_integrations.md, feature_tax_invoicing.md, network_complete.md).</p>
+
+  <h3>6.1 ZATCA — Saudi e-invoicing</h3>
+  <p>JSON → UUID (toolkit.exe) → sign (saturn.exe) → POST → response → <code class="inline">Zatca-response.txt</code> → store under <code class="inline">C:\saturn\zatca\computer-1\invoices\</code> → update counter/hash → <b>one <code class="inline">ZATCA</code> row</b> (tax:118-129,154). VAT report exports via FormVat2. VAT default 15%; <code class="inline">&lt;masrofat-vat&gt;</code> tag live in expense pipeline.</p>
+  <h3>6.2 DTTS / ETA — Egypt tax + drug track &amp; trace</h3>
+  <p><code class="inline">ModEtaWrappper</code> (7 procs) + <code class="inline">ModDttsEgypt</code> (2) + <code class="inline">FormEtaInfo</code> (9) assemble the ETA invoice <b>JSON</b> (idx 228-267 — <code class="inline">"taxableItems":</code>, <code class="inline">"buyer":</code>, <code class="inline">"seller":</code>, <code class="inline">"street":</code>; live, 248 refs) keyed by the shared sales UUID (idx 7423, 3,564 refs). <span class="tag warn">VERIFIED 2026-08-15:</span> the ETA submission URLs (<code class="inline">api.invoicing.eta.gov.eg</code>, preprod, <code class="inline">id.eta.gov.eg</code>) and <code class="inline">C:\eToolKit\</code> / <code class="inline">C:\eta-qr\</code> batch strings are <b>DEAD (0 p-code refs)</b> — the network submission path is inert in this build (<code class="inline">EGYPT_ETA_DECOMPILED.md</code>). A replacement must implement Egypt ETA from scratch using the recovered JSON shapes. Saudi SFDA RSD SOAP track &amp; trace (ModDTTS, 48 procs) is a separate, Saudi-only integration.</p>
+  <h3>6.3 DrugEye — drug database</h3>
+  <p>Downloads <code class="inline">drugeye.update.titan.rar</code> → extracts .phy → <code class="inline">DRUGS.PHY</code> to root; master = <code class="inline">drugeye-for-titan.phy</code>, working copy = <code class="inline">fromdrugeye.phy</code>; chain sharing via <code class="inline">drgserver</code> + <code class="inline">usersourceupdate</code> (3000-row pull cap). <span class="tag risk">LEGAL CAVEAT:</span> proprietary freeware, no reuse license — use EDA/CC0/SFDA instead. <span class="tag warn">VERIFIED 2026-08-15:</span> the file is <b>NOT a RAR</b> — it is a <b>ROT-4-obfuscated text feed</b> (23,452 records; decode = shift letters/digits −4, keep <code class="inline">$ . , ( ) &amp; - /</code>/space literal; format <code class="inline">&lt;barcode&gt;x&lt;BRAND&gt;$&lt;product&gt;$&lt;form&gt;...x&lt;PRICE&gt;x&lt;QTY&gt;x</code>), and the download URL/filenames/all drugeye SQL are <b>dead code</b> (0 p-code refs). Live path: <code class="inline">drugeye.pharorg.com</code> web service (21 refs) + native VB6 <code class="inline">.phy</code> record I/O (<code class="inline">GetRecOwn4/PutRecOwn4</code> via ModDrgW, FFFDrugEye, Files, FormImportFromOtherDBI, ModDRGEXChange). Decoded feed: <code class="inline">/tmp/opencode/drugeye.update.titan.decoded.txt</code>.</p>
+  <h3>6.4 Nielsen — data selling</h3>
+  <p>Opt-in: collect per-drug/per-pharmacy/per-sale data → <code class="inline">nilsen2</code> → 6-month aggregation → `;`-delimited → RAR → curl upload to <code class="inline">titan-users/data-for-sale/...</code> → download <code class="inline">numbers.rar</code> report. <span class="tag risk">Monetized data-selling channel — not recommended to replicate.</span></p>
+  <h3>6.5 PhycodSystems vendor cloud</h3>
+  <p>3 hosted servers (htempurl.com); ~15 auto-downloaded executables; ModWMI hardware fingerprinting; AnyDesk silent access; HTTP-not-HTTPS, unsigned binaries, RCE via <code class="inline">remotecontrol.passedfunctions</code>. <span class="tag risk">All inadvisable to replicate.</span></p>
+  <h3>6.6 Network / cloud / FTP / remote-control</h3>
+  <ul>
+    <li><code class="inline">ModNetwork</code> (65 procs): WinInet FTP + XMLHTTP/ServerXMLHTTP; config <code class="inline">myftp.phy</code>; curl --ftp-pasv --retry 3.</li>
+    <li><code class="inline">ModSqlLink</code> (19 procs): remote SQL Server linking, bulk sync over drgserver/remotecontrol/titanpharmalist/titanksasales/titanksastock/titaninn; LAN via <code class="inline">net share Titan.master</code>.</li>
+    <li><code class="inline">ModTitanCloud</code> (16 procs): Upload allinone / zipped DBI / drug DB; cloud paths under /titan-users/. <b>Last-write-wins, no merge.</b></li>
+    <li><code class="inline">remotecontrol</code>: server pushes <code class="inline">passedfunctions</code> (serialized VB6 function code) polled via datee &gt; lastcheck, executed, deleted — vendor RCE.</li>
+  </ul>
+  <h3>6.7 API endpoint inventory</h3>
+  <p>ZATCA OAuth+submit · SFDA RSD SOAP · ETA api.invoicing.eta.gov.eg <span class="tag warn">(dead code)</span> · HungerStation (deliveryhero.io, hungerstation.token.txt) <span class="tag warn">(dead — 0 refs, REFUTED)</span> · country/currency SOAP · QR api.qrserver.com · Google Charts · DrugEye rsd-api/start.aspx · TitanNews.txt.</p>
+  <p><span class="tag warn">VERIFIED 2026-08-15:</span> HungerStation integration is <b>dead code</b> — <code class="inline">db_9ffe55_titanecommerce</code>, <code class="inline">hungerstation.*</code> token files and the deliveryhero URLs all have 0 p-code refs (<code class="inline">ORPHAN_OBJECTS_VERIFIED.md</code>). <code class="inline">Modallinone</code> is a <b>Replace/template builder</b>, NOT a ZIP flow (blob idx 14590 has no PK/zip magic). Raz module: 334 procs (objects.txt's 379 is wrong).</p>
+</section>
+
+<!-- ============ SECTION 7 ============ -->
+<section class="card" id="s7">
+  <h2>§7 · Gaps &amp; open questions</h2>
+  <p><b>Resolved 2026-08-15:</b> schema contradictions (§1.3, SCHEMA_RESOLVED.md) · Daily*.phy layout (RECORD_LAYOUTS_daily_phy.md) · orphan objects incl. HungerStation-dead + Modallinone + Raz count (ORPHAN_OBJECTS_VERIFIED.md) · Egypt ETA network path dead (EGYPT_ETA_DECOMPILED.md) · 3 new feature docs.</p>
+  <ol>
+    <li><b><code class="inline">wzmony / wzdaily / wzbank</code> — do real SQL tables exist?</b> No CREATE TABLE evidence (only 5 recovered). Docs use them as shorthand for the .phy-backed money store. <b>Open:</b> real tables (dropped/not extracted) or purely .phy + farysales? Replacement should design explicit tables regardless (§2.4).</li>
+    <li><b>Remaining .phy layouts unmapped</b>: delivery.phy, PIFary.phy, workperiod.phy, drugeye-for-titan.phy, fromdrugeye.phy — Daily*.phy done (RECORD_LAYOUTS_daily_phy.md); others are the last hard migration blocker.</li>
+    <li><b>invoicedata runtime use unproven</b> — whether it holds live invoice lines vs only wzgard/titanksasales (UNCONFIRMED_BEHAVIORS_VERIFIED.md was aborted, never written).</li>
+    <li><b>ZATCA counters/hashes in files, not DB</b> — for audit-proof replacement, move counter into DB atomically with invoice.</li>
+    <li><b>DTTS ambiguity</b>: Saudi SFDA RSD SOAP (ModDTTS, 48 procs) vs Egyptian ETA DTTS (ModDttsEgypt, 2 procs) — two integrations under one acronym; Egypt ETA network path dead.</li>
+    <li><b>Supplier identity in two tables</b> (companies + wzcustomers.typee) — merge key (mobile vs randomid) not proven.</li>
+    <li><b>Money-per-user storage</b> (FormUsersMony) partially documented (usersmony.phy? derived?).</li>
+    <li><span class="tag risk">Legal/security red flags:</span> DrugEye data reuse, Nielsen data selling + HTTP-only uploads, AnyDesk silent access + passedfunctions RCE, unsigned HTTP distribution, hardware-fingerprint privacy.</li>
+    <li><b>Country gating</b>: "Export to current country is forbidden" + per-country .phy drug files — exact country→file mapping partially extracted.</li>
+    <li><b>VAT% country default</b>: docs say 15% (Gulf default) — Egypt's rate is 14%; a replacement must make the rate country-configurable.</li>
+    <li><b>Citation off-by-3 bug</b>: ~4 feature docs cite `strings_*.txt:N` three lines early (systematic, mechanical fix pending).</li>
+  </ol>
+</section>
+
+<div class="foot">
+  Generated from <code class="inline">connections_overview.md</code> (422 lines) · source docs in <code class="inline">titan_extract/</code> · Mermaid v10 (bundled locally as <code class="inline">mermaid.min.js</code> — works offline) · updated 2026-08-15.
+</div>
+
+</div>
+<script>
+  (function () {
+    function zoomDiv(box) {
+      if (box.dataset.mzReady) return;
+      var svg = box.querySelector('svg');
+      if (!svg) return;
+      box.dataset.mzReady = '1';
+
+      var natW = svg.width.baseVal ? svg.width.baseVal.value : svg.getBoundingClientRect().width;
+      var natH = svg.height.baseVal ? svg.height.baseVal.value : svg.getBoundingClientRect().height;
+      svg.style.maxWidth = 'none';
+      svg.removeAttribute('style');
+
+      var wrap = document.createElement('div');
+      wrap.className = 'mz';
+      var tb = document.createElement('div');
+      tb.className = 'mz-toolbar';
+      tb.innerHTML =
+        '<span class="mz-lbl">zoom</span>' +
+        '<button data-mz="out" title="Zoom out">−</button>' +
+        '<button data-mz="in" title="Zoom in">+</button>' +
+        '<button data-mz="fit" title="Fit diagram to viewport width">Fit</button>' +
+        '<button data-mz="reset" title="Reset to 100%">100%</button>' +
+        '<span class="mz-pct">100%</span>' +
+        '<span class="mz-hint">drag to pan · scroll to zoom · double-click = fit</span>';
+      var vp = document.createElement('div');
+      vp.className = 'mz-viewport';
+      wrap.appendChild(tb);
+      wrap.appendChild(vp);
+      box.parentNode.insertBefore(wrap, box);
+      vp.appendChild(svg);
+      box.style.display = 'none';
+
+      var scale = 1, min = 0.1, max = 8;
+      function apply() {
+        svg.style.width = (natW * scale) + 'px';
+        svg.style.height = (natH * scale) + 'px';
+        tb.querySelector('.mz-pct').textContent = Math.round(scale * 100) + '%';
+      }
+      function fit() {
+        scale = Math.max(min, Math.min(1, vp.clientWidth / natW));
+        apply();
+        vp.scrollLeft = 0; vp.scrollTop = 0;
+      }
+      function zoomAt(cx, cy, factor) {
+        var prev = scale;
+        scale = Math.max(min, Math.min(max, scale * factor));
+        var k = scale / prev;
+        var rect = vp.getBoundingClientRect();
+        var mx = cx - rect.left, my = cy - rect.top;
+        vp.scrollLeft = (vp.scrollLeft + mx) * k - mx;
+        vp.scrollTop = (vp.scrollTop + my) * k - my;
+        apply();
+      }
+      tb.addEventListener('click', function (e) {
+        var b = e.target.closest('button');
+        if (!b) return;
+        var cx = vp.clientWidth / 2, cy = vp.clientHeight / 2;
+        if (b.dataset.mz === 'in') zoomAt(cx, cy, 1.3);
+        else if (b.dataset.mz === 'out') zoomAt(cx, cy, 1 / 1.3);
+        else if (b.dataset.mz === 'fit') fit();
+        else if (b.dataset.mz === 'reset') { scale = 1; apply(); }
+      });
+      vp.addEventListener('wheel', function (e) {
+        e.preventDefault();
+        zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.12 : 1 / 1.12);
+      }, { passive: false });
+      vp.addEventListener('dblclick', fit);
+      var down = null;
+      vp.addEventListener('mousedown', function (e) {
+        down = { x: e.clientX, y: e.clientY, sl: vp.scrollLeft, st: vp.scrollTop };
+        vp.classList.add('panning');
+      });
+      window.addEventListener('mousemove', function (e) {
+        if (!down) return;
+        vp.scrollLeft = down.sl - (e.clientX - down.x);
+        vp.scrollTop = down.st - (e.clientY - down.y);
+      });
+      window.addEventListener('mouseup', function () { down = null; vp.classList.remove('panning'); });
+      fit();
+    }
+
+    function run() {
+      var boxes = document.querySelectorAll('.mermaid');
+      var pending = 0;
+      boxes.forEach(function (b) {
+        if (b.dataset.mzReady) return;
+        var svg = b.querySelector('svg');
+        if (svg) zoomDiv(b); else pending++;
+      });
+      if (pending) setTimeout(run, 250);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
+    else run();
+    setTimeout(run, 400);
+  })();
+</script>
+</body>
+</html>

@@ -53,6 +53,10 @@ async def list_drugs(
             status.HTTP_400_BAD_REQUEST, "user has no branch assigned"
         )
     branch = await session.get(Branch, user.branch_id)
+    if branch is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "branch not found for user"
+        )
     drugs = await list_branch_drugs(session, user.branch_id)
     return {
         "branch": {

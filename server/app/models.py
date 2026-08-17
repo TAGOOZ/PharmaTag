@@ -54,6 +54,19 @@ invoice_status_enum = ENUM(
     "transfer_to_purchase", "closed", "archived", "void", name="invoice_status",
     create_type=False,
 )
+account_type_enum = ENUM(
+    "asset", "liability", "equity", "income", "expense", name="account_type",
+    create_type=False,
+)
+journal_source_enum = ENUM(
+    "sale", "purchase", "sale_return", "purchase_return", "manual",
+    "transfer", "opening", "settlement", "correction", name="journal_source",
+    create_type=False,
+)
+payment_method_enum = ENUM(
+    "cash", "card", "credit", "manual_cash", "manual_card", name="payment_method",
+    create_type=False,
+)
 
 user_roles_table = Table(
     "user_roles",
@@ -370,6 +383,154 @@ class Invoice(Base):
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
     last_edited_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+
+
+class Account(Base):
+    """`accounts` (wzaccfreetree) — chart of accounts. Seeded by rev 002;
+    used by the sale slice's journal/balances posting."""
+
+    __tablename__ = "accounts"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "code", name="uq_accounts_branch_code"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=False)
+    code: Mapped[str] = mapped_column(String(30), nullable=False)
+    parent_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("accounts.id"))
+    master: Mapped[str] = mapped_column(String(100), server_default="")
+    fary: Mapped[str] = mapped_column(String(100), server_default="")
+    name_ar: Mapped[str] = mapped_column(String(120), server_default="")
+    name_en: Mapped[str] = mapped_column(String(120), server_default="")
+    type: Mapped[str] = mapped_column(account_type_enum, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class InvoiceLine(Base):
+    """`invoice_lines` — one row per sold line. `cost` is the weighted unit
+    cost (4dp) of the batches consumed; per-batch allocations live in the
+    outbox payload for exact replay."""
+
+    __tablename__ = "invoice_lines"
+    __table_args__ = (
+        CheckConstraint("unit_price >= 0", name="ck_invoice_line_unit_price"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    invoice_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("invoices.id"), nullable=False)
+    branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=False)
+    drug_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("drugs.id"), nullable=False)
+    batch_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("stock_batches.id"))
+    qty: Mapped[object] = mapped_column(Numeric(18, 4), nullable=False, server_default="0")
+    unit: Mapped[str] = mapped_column(String(20), server_default="pack")
+    unit_price: Mapped[object] = mapped_column(Numeric(18, 4), nullable=False, server_default="0")
+    cost: Mapped[object] = mapped_column(Numeric(18, 4), nullable=False, server_default="0")
+    disc: Mapped[object] = mapped_column(Numeric(5, 2), nullable=False, server_default="0")
+    tax_type: Mapped[str] = mapped_column(tax_type_enum, nullable=False, server_default="exempt")
+    vat: Mapped[object] = mapped_column(Numeric(5, 2), nullable=False, server_default="0")
+    vat_amount: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    line_total: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    expire: Mapped[Optional[date]] = mapped_column(Date)
+    minimum: Mapped[Optional[object]] = mapped_column(Numeric(18, 4), server_default="0")
+    tips: Mapped[str] = mapped_column(String(50), server_default="")
+    iddatetime: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+
+
+class Journal(Base):
+    """`journals` (farysales) — one balanced entry per sale."""
+
+    __tablename__ = "journals"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "datee", "entry_no", name="uq_journals_entry"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=False)
+    datee: Mapped[date] = mapped_column(Date, nullable=False)
+    entry_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str] = mapped_column(String(200), nullable=False)
+    source: Mapped[str] = mapped_column(journal_source_enum, nullable=False, server_default="sale")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="posted")
+    ref_invoice_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("invoices.id"))
+    created_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class JournalLine(Base):
+    """`journal_lines` — one side per account; a journal is balanced iff
+    SUM(debit) == SUM(credit)."""
+
+    __tablename__ = "journal_lines"
+    __table_args__ = (
+        CheckConstraint(
+            "debit >= 0 AND credit >= 0 AND (debit = 0 OR credit = 0)",
+            name="ck_journal_line_single_side",
+        ),
+        CheckConstraint("month BETWEEN 1 AND 12", name="ck_journal_line_month"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    journal_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("journals.id"), nullable=False)
+    branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=False)
+    account_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("accounts.id"), nullable=False)
+    debit: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    credit: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    contra_party_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("parties.id"))
+    datee: Mapped[date] = mapped_column(Date, nullable=False)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    creditdebit: Mapped[str] = mapped_column(String(20), server_default="")
+    randomid: Mapped[str] = mapped_column(String(50), server_default="")
+    writer: Mapped[str] = mapped_column(String(50), server_default="")
+    tips: Mapped[str] = mapped_column(String(50), server_default="")
+    classy: Mapped[str] = mapped_column(String(35), server_default="")
+
+
+class Balance(Base):
+    """`balances` (farysales monthe/yearo) — per (branch, account, month, year)
+    running debit/credit totals. CHECK keeps `balance = debit - credit`."""
+
+    __tablename__ = "balances"
+    __table_args__ = (
+        CheckConstraint("month BETWEEN 1 AND 12", name="ck_balances_month"),
+        CheckConstraint("balance = debit - credit", name="ck_balances_identity"),
+    )
+
+    branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), primary_key=True)
+    account_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("accounts.id"), primary_key=True)
+    month: Mapped[int] = mapped_column(Integer, primary_key=True)
+    year: Mapped[int] = mapped_column(Integer, primary_key=True)
+    debit: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    credit: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    balance: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class PaymentSplit(Base):
+    """`payment_splits` — how a sale was paid (cash/card/credit). The invoice
+    CHECK `payed + agel = totalvalue` reconciles splits to the header."""
+
+    __tablename__ = "payment_splits"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_payment_split_amount"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    invoice_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("invoices.id"), nullable=False)
+    branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=False)
+    method: Mapped[str] = mapped_column(payment_method_enum, nullable=False, server_default="cash")
+    amount: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    received_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    user_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
 
 
 class AppPlugin(Base):

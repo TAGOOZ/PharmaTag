@@ -61,6 +61,9 @@ class SaleContext:
     user_id: Optional[int]
     sale: Any  # the saved invoice header (flushed in-txn, committed after)
     pending: list[str] = field(default_factory=list)
+    # JSON-safe primitives only (no un-hashable invoice objects): lets an
+    # after_commit handler reconstruct the sale without a live ORM row.
+    payload: Optional[dict[str, Any]] = None
 
 
 @dataclass(frozen=True)

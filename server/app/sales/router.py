@@ -1,0 +1,255 @@
+"""Sales endpoints (S1.3, ticket #9).
+
+Writes (POST) are gated by `sale.create` (legacy level-1 area المبيعات, plan/02
+§3; admin/pharmacist/cashier roles cover it). Reads are open to any
+authenticated user and are branch-scoped to the caller's branch. Totals are
+exact decimal strings (plan/02 §2 — money never leaves as a float). The print
+view is the 80mm/A5 brand receipt (plan/09 P06).
+"""
+from __future__ import annotations
+
+from datetime import date, datetime
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import HTMLResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.dependencies import get_current_user
+from app.auth.rbac import require_permission
+from app.core import money
+from app.core.db import get_session
+from app.models import Branch, Drug, Invoice, InvoiceLine, Journal, JournalLine, PaymentSplit, User
+from app.sales import print_html
+from app.sales.schemas import SaleCreateRequest, SaleOut
+from app.sales.service import save_sale
+
+router = APIRouter()
+
+CREATE_SALE = require_permission("sale.create")
+
+
+def _money(value) -> str:
+    return money.format2(value)
+
+
+def _qty(value) -> str:
+    return format(money.round4(value), "f")
+
+
+def _caller_branch_id(user: User) -> int:
+    if user.branch_id is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "user has no branch assigned")
+    return user.branch_id
+
+
+async def _invoice_or_404(session: AsyncSession, invoice_id: int, branch_id: int) -> Invoice:
+    invoice = (
+        await session.execute(
+            select(Invoice).where(Invoice.id == invoice_id, Invoice.branch_id == branch_id)
+        )
+    ).scalar_one_or_none()
+    if invoice is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "invoice not found")
+    return invoice
+
+
+async def _serialize_sale(
+    session: AsyncSession, invoice: Invoice, user: User
+) -> dict:
+    rows = (
+        await session.execute(
+            select(InvoiceLine, Drug)
+            .join(Drug, Drug.id == InvoiceLine.drug_id)
+            .where(InvoiceLine.invoice_id == invoice.id)
+            .order_by(InvoiceLine.id)
+        )
+    ).all()
+    lines = [inv_line for inv_line, _ in rows]
+    payments = (
+        await session.execute(
+            select(PaymentSplit)
+            .where(PaymentSplit.invoice_id == invoice.id)
+            .order_by(PaymentSplit.id)
+        )
+    ).scalars().all()
+    journal = (
+        await session.execute(
+            select(Journal).where(Journal.ref_invoice_id == invoice.id)
+        )
+    ).scalars().first()
+    journal_info: Optional[dict] = None
+    if journal is not None:
+        jlines = (
+            await session.execute(
+                select(JournalLine).where(JournalLine.journal_id == journal.id)
+            )
+        ).scalars().all()
+        debit_total = money.add(jl.debit for jl in jlines)
+        credit_total = money.add(jl.credit for jl in jlines)
+        journal_info = {
+            "id": journal.id,
+            "entry_no": journal.entry_no,
+            "datee": journal.datee.isoformat(),
+            "balanced": debit_total == credit_total,
+            "debit_total": _money(debit_total),
+            "credit_total": _money(credit_total),
+        }
+
+    net = money.round2(
+        money.dec(invoice.totalvalue) - money.dec(invoice.vat)
+    )
+    return SaleOut(
+        id=invoice.id,
+        branch_id=invoice.branch_id,
+        kind=invoice.kind,
+        invoice_no=invoice.invoice_no,
+        datee=invoice.datee.isoformat(),
+        silsilaid=invoice.silsilaid or "",
+        status=invoice.status,
+        subtotal=_money(invoice.subtotal),
+        discount=_money(invoice.discount),
+        vat=_money(invoice.vat),
+        totalvalue=_money(invoice.totalvalue),
+        net=_money(net),
+        payed=_money(invoice.payed),
+        agel=_money(invoice.agel),
+        created_by=invoice.created_by,
+        lines=[
+            {
+                "id": line.id,
+                "drug_id": line.drug_id,
+                "drugname": drug.drugname,
+                "drugnamear": drug.drugnamear,
+                "batch_id": line.batch_id,
+                "qty": _qty(line.qty),
+                "unit": line.unit or "pack",
+                "unit_price": money.format2(line.unit_price),
+                "cost": money.format2(line.cost),
+                "tax_type": line.tax_type,
+                "vat_amount": _money(line.vat_amount),
+                "line_total": _money(line.line_total),
+            }
+            for line, drug in rows
+        ],
+        payments=[
+            {"method": p.method, "amount": _money(p.amount)} for p in payments
+        ],
+        journal=journal_info,
+    ).model_dump()
+
+
+@router.get("")
+async def list_sales(
+    datee: Optional[date] = None,
+    limit: int = 50,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Recent sales for the caller's branch (today by default)."""
+    branch_id = _caller_branch_id(user)
+    limit = max(1, min(limit, 200))
+    q = select(Invoice).where(
+        Invoice.branch_id == branch_id, Invoice.kind == "sale"
+    )
+    if datee is not None:
+        q = q.where(Invoice.datee == datee)
+    else:
+        q = q.where(Invoice.datee == datetime.now().date())
+    q = q.order_by(Invoice.id.desc()).limit(limit)
+    invoices = (await session.execute(q)).scalars().all()
+    return {
+        "sales": [
+            {
+                "id": inv.id,
+                "invoice_no": inv.invoice_no,
+                "datee": inv.datee.isoformat(),
+                "totalvalue": _money(inv.totalvalue),
+                "payed": _money(inv.payed),
+                "agel": _money(inv.agel),
+                "status": inv.status,
+            }
+            for inv in invoices
+        ]
+    }
+
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_sale(
+    body: SaleCreateRequest,
+    caller: User = Depends(CREATE_SALE),
+    session: AsyncSession = Depends(get_session),
+):
+    """Record a sale: server-resolved prices/VAT, expiry-FIFO stock, balanced
+    journal, audit + outbox in one transaction."""
+    branch_id = _caller_branch_id(caller)
+    invoice = await save_sale(
+        session,
+        branch_id=branch_id,
+        user_id=caller.id,
+        datee=body.datee,
+        lines=body.lines,
+        disc_percent=body.disc_percent,
+        payments=body.payments,
+    )
+    return await _serialize_sale(session, invoice, caller)
+
+
+@router.get("/{sale_id}", response_model=SaleOut)
+async def get_sale(
+    sale_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    branch_id = _caller_branch_id(user)
+    invoice = await _invoice_or_404(session, sale_id, branch_id)
+    return await _serialize_sale(session, invoice, user)
+
+
+@router.get("/{sale_id}/print", response_class=HTMLResponse)
+async def print_sale(
+    sale_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """80mm / A5 printable receipt (RTL, brand accent, black-on-white print)."""
+    branch_id = _caller_branch_id(user)
+    invoice = await _invoice_or_404(session, sale_id, branch_id)
+    branch = await session.get(Branch, branch_id)
+    lines = (
+        await session.execute(
+            select(InvoiceLine, Drug)
+            .join(Drug, Drug.id == InvoiceLine.drug_id)
+            .where(InvoiceLine.invoice_id == invoice.id)
+            .order_by(InvoiceLine.id)
+        )
+    ).all()
+    cashier = ""
+    if invoice.created_by is not None:
+        cashier_row = await session.get(User, invoice.created_by)
+        if cashier_row is not None:
+            cashier = cashier_row.namee or cashier_row.username
+    html_body = print_html.render_invoice_print(
+        branch_name=branch.pharname if branch else "",
+        invoice_no=invoice.invoice_no,
+        datee=invoice.datee,
+        cashier=cashier,
+        lines=[
+            {
+                "drugname": drug.drugname,
+                "qty": _qty(line.qty),
+                "unit_price": money.format2(line.unit_price),
+                "line_total": _money(line.line_total),
+            }
+            for line, drug in lines
+        ],
+        subtotal=_money(invoice.subtotal),
+        discount=_money(invoice.discount),
+        vat=_money(invoice.vat),
+        totalvalue=_money(invoice.totalvalue),
+        payed=_money(invoice.payed),
+        agel=_money(invoice.agel),
+        status=invoice.status,
+    )
+    return HTMLResponse(content=html_body, status_code=status.HTTP_200_OK)

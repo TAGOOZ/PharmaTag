@@ -125,13 +125,15 @@ when a slice replaces it).
 | web `/pos` `/purchases` `/stock` `/money` `/reports` `/employees` `/settings` | module screens | stubs — show "built in the corresponding slice" (user management API exists; the `/employees`/`/settings` screens are not wired to it) |
 | desktop | same module screens (`App.tsx` STUBS) | stubs — same as web |
 | desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly |
-| API | POS, purchases, stock (write), money, reports, settings endpoints | not implemented |
+| API | purchases, stock (write), money, reports, settings endpoints | not implemented |
 | data | CC0 drug catalog download | documented, not bundled — the importer (`server/app/drugs/importer.py`, CLI `python -m app.drugs.importer <file>`) is real and de-dupes/idempotent, but the 24k-medicine source (CC0 `karem505/egyptian-drug-database`) is fetched at import time, not shipped. A sample fixture lives in `server/tests/fixtures/cc0_catalog_sample.csv`. |
 
 Real so far: `/api/v1/auth/*` (login, me, reset-password), `/api/v1/drugs`
 (read + CRUD + search-as-you-type + CC0 catalog import; writes gated by
 `drugs.manage`), `/api/v1/users` (user CRUD, roles/permissions, manager password
-reset), plugin registry, `/healthz` — and the web + desktop **الأدوية** screens.
+reset), plugin registry, sales invoicing (create/list/detail/80mm print +
+offline outbox replay; gated by `sale.create`), `/healthz` — and the web +
+desktop **الأدوية** screens.
 
 ## 7. CI
 

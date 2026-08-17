@@ -17,6 +17,8 @@ from app.core.db import SessionLocal, engine
 from app.drugs.router import router as drugs_router
 from app.plugins.registry import registry
 from app.plugins.router import router as plugins_router
+from app.sales.router import router as sales_router
+from app.sync.router import router as sync_router
 from app.users.router import router as users_router
 
 
@@ -47,6 +49,12 @@ def create_app() -> FastAPI:
     )
     application.include_router(
         users_router, prefix="/api/v1/users", tags=["users"]
+    )
+    application.include_router(
+        sales_router, prefix="/api/v1/sales", tags=["sales"]
+    )
+    application.include_router(
+        sync_router, prefix="/api/v1/sync", tags=["sync"]
     )
 
     # plan/02 §3: validation failures surface as 400 (not FastAPI's 422).

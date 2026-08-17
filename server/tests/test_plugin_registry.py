@@ -55,9 +55,15 @@ async def _stub_rows(entity: str = "plugin_eta"):
 
 async def _save_sale():
     async with SessionLocal() as session:
-        return await save_sale(
+        invoice = await save_sale(
             session, branch_id=BRANCH_ID, user_id=USER_ID, invoice_no=_next_invoice_no()
         )
+    # the seam path writes a header-only invoice; delete it so this test file
+    # never leaks rows (the plugin audit rows above survive — no FK to invoices)
+    async with SessionLocal() as session:
+        await session.execute(delete(Invoice).where(Invoice.id == invoice.id))
+        await session.commit()
+    return invoice
 
 
 async def test_load_surfaces_installed_plugins_with_grants_and_validation():

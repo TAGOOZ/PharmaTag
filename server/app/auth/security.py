@@ -79,6 +79,7 @@ def create_access_token(
             "branch_id": branch_id,
             "roles": roles,
             "permission_level": permission_level,
+            "kind": "access",
         },
         settings.access_token_expire_minutes,
     )

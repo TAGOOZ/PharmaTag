@@ -22,6 +22,12 @@ async def get_current_user(
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Invalid or expired token"
         ) from None
+    if payload.get("kind") == "refresh":
+        # a refresh token is only usable by the (future) refresh flow, never
+        # as a bearer credential for protected endpoints (30-day lifetime)
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "Invalid or expired token"
+        )
     user = await session.get(User, int(payload["sub"]))
     if user is None or not user.active:
         raise HTTPException(

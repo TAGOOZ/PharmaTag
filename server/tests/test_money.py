@@ -170,3 +170,95 @@ def test_invoice_money_exclusive_totals():
     assert inv.subtotal == D("21.00")
     assert inv.vat == money.round2(D("21.00") * money.tax_rate("14%"))
     assert inv.total == inv.subtotal + inv.vat
+
+
+# --- edge cases (ticket #1/#2 edge pass) ---
+
+
+def test_round_half_up_never_bankers_nor_truncates():
+    assert money.round2(D("2.675")) == D("2.68")  # classic half-up boundary
+    assert money.round2(D("2.685")) == D("2.69")  # half-up (banker's would be 2.68)
+    assert money.round2(D("0.005")) == D("0.01")
+    assert money.round2(D("0.015")) == D("0.02")
+    assert money.round2(D("-0.005")) == D("-0.01")
+    assert money.round2(D("-0.004")) == D("-0.00")
+
+
+def test_round_half_up_large_values():
+    assert money.round2(D("9999999999999999.994")) == D("9999999999999999.99")
+    assert money.round2(D("9999999999999999.995")) == D("10000000000000000.00")
+    assert money.round4(D("0.00005")) == D("0.0001")
+    assert money.round4(D("0.00004")) == D("0.0000")
+
+
+def test_round_half_up_zero():
+    assert money.round2(D("0")) == D("0.00")
+    assert money.round2(D("0.004")) == D("0.00")
+
+
+def test_format2_surfaces_half_up_2dp_strings():
+    assert money.format2(D("12.345")) == "12.35"  # not banker's 12.34
+    assert money.format2(D("12.344")) == "12.34"
+    assert money.format2(D("0")) == "0.00"
+    assert money.format2(D("-1.005")) == "-1.01"
+
+
+def test_split_vat_repeating_decimal_5_percent():
+    s = money.split_vat(D("1.00"), "5%", inclusive=True)
+    assert s.net == D("0.95")
+    assert s.vat == D("0.05")
+    assert s.gross == s.net + s.vat
+
+
+def test_split_vat_zero_total():
+    for tax in ("exempt", "5%", "14%"):
+        s = money.split_vat(D("0"), tax, inclusive=True)
+        assert s.gross == s.net == s.vat == D("0.00")
+
+
+def test_split_vat_negative_total_keeps_invariant():
+    s = money.split_vat(D("-1.00"), "14%", inclusive=True)
+    assert s.gross == s.net + s.vat
+    assert s.net < D("0")
+    assert s.vat < D("0")
+
+
+def test_split_vat_rejects_missing_and_malformed_tax_type():
+    with pytest.raises(ValueError):
+        money.split_vat(D("1.00"), None)
+    with pytest.raises(ValueError):
+        money.split_vat(D("1.00"), "14")  # missing %
+    with pytest.raises(ValueError):
+        money.line_money(D("1"), D("1.00"), "7%")
+
+
+def test_line_money_zero_qty_and_zero_price():
+    line = money.line_money(D("0"), D("10.50"), "14%", inclusive=True)
+    assert line.gross == line.line_total == line.net == line.vat == D("0.00")
+    line = money.line_money(D("3"), D("0"), "14%", inclusive=True)
+    assert line.gross == line.line_total == line.net == line.vat == D("0.00")
+
+
+def test_invoice_money_vat_is_per_line_never_aggregate():
+    """G06 canonical: VAT is split per line and summed — the aggregate split
+    (round2(subtotal/1.14)) differs by a piastre here and is NOT used."""
+    lines = [(D("1"), D("1.00"), "14%"), (D("1"), D("1.00"), "14%")]
+    inv = money.invoice_money(lines, inclusive=True)
+    per_line = money.add(
+        money.line_money(q, p, t, inclusive=True).vat for q, p, t in lines
+    )
+    aggregate = money.split_vat(inv.subtotal, "14%", inclusive=True).vat
+    assert inv.vat == per_line == D("0.24")
+    assert aggregate == D("0.25")  # the alternative that must NOT win
+    assert inv.total == inv.net + inv.vat
+
+
+def test_invoice_money_empty_lines_all_zero():
+    inv = money.invoice_money([], inclusive=True)
+    assert inv.subtotal == inv.discount == inv.vat == inv.total == inv.net == D("0.00")
+
+
+def test_add_empty_and_iterable():
+    assert money.add() == D("0")
+    assert money.add([]) == D("0")
+    assert money.add(["0.10", "0.20"]) == D("0.30")

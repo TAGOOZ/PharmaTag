@@ -1,0 +1,4 @@
+/* PharmaTag design-system stylesheet — tokens + fonts + component recipes */
+@import "./styles/tokens.css";
+@import "./styles/fonts.css";
+@import "./styles/components.css";

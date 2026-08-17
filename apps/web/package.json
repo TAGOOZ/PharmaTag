@@ -1,0 +1,27 @@
+{
+  "name": "@pharmatag/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PharmaTag web shell (Next.js App Router), RTL Arabic-first",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@pharmatag/ui": "workspace:*",
+    "next": "^16.3.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@pharmatag/config": "workspace:*",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~5.9.3"
+  }
+}

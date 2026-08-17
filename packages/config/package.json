@@ -1,0 +1,9 @@
+{
+  "name": "@pharmatag/config",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared toolchain presets (TS, Biome) for PharmaTag frontend packages",
+  "exports": {
+    "./tsconfig.base.json": "./tsconfig.base.json"
+  }
+}

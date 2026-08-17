@@ -1,0 +1,38 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": [
+      "apps/**",
+      "packages/**",
+      "!apps/web/.next/**",
+      "!apps/web/next-env.d.ts",
+      "!apps/web/app/globals.css",
+      "!apps/desktop/dist/**",
+      "!apps/desktop/src/index.css",
+      "!apps/desktop/src-tauri/**",
+      "!**/gen/schemas/**"
+    ]
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always"
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended"
+    }
+  }
+}

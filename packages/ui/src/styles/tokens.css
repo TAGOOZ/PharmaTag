@@ -1,0 +1,386 @@
+/* ============================================================================
+ * PharmaTag فارما تاج — design tokens (plan/09 §3, reconciled 2026-08-16)
+ *
+ * Architecture (plan/09 §2):
+ *   1. Primitives (`--pr-*`) = the verbatim client brand hexes, per theme.
+ *      NEVER referenced directly by components.
+ *   2. Semantic layer = bookmarkX canonical names (P05) with PharmaTag hexes
+ *      as values, stored as `R G B` triplets so Tailwind's `<alpha-value>`
+ *      compositing works. Light is the brand default in `:root` (P02); dark
+ *      lives under `[data-theme="dark"]`.
+ *   3. Derived-WCAG layer (`-strong`/`-soft`/`-solid`, table/pos/chart,
+ *      feedback aliases) — additive so the palette passes AA after this layer.
+ *   4. plan/09 §3 sheet aliases (`--color-*`) extend the bookmarkX base and
+ *      resolve against the canonical tokens at use-time.
+ *
+ * Fonts are self-hosted Thmanyah family (P05) — see styles/fonts.css.
+ * ========================================================================== */
+
+:root {
+  /* ---- Light primitives (verbatim client spec, plan/09 §3.2) ---- */
+  --pr-bg-0: #ffffff;
+  --pr-bg-1: #f5f5f5;
+  --pr-bg-2: #e8e8e8;
+  --pr-bg-3: #e0e0e0;
+  --pr-text-0: #1e1e1e;
+  --pr-text-1: #666666;
+  --pr-text-2: #999999;
+  --pr-text-3: #ffffff;
+  --pr-accent: #7c5cbf;
+  --pr-accent-hover: #6a4da8;
+  --pr-high: #e03e3e;
+  --pr-med: #9a8f10;
+  --pr-low: #36a854;
+
+  /* ---- Light semantic tokens (RGB triplets) ---- */
+  --background-primary: 255 255 255;
+  --background-secondary: 245 245 245;
+  --background-tertiary: 232 232 232;
+  --background-modifier-border: 224 224 224;
+  --background-form-field: 255 255 255;
+  --background-well: 248 248 248;
+  --background-scrim: 0 0 0 / 0.45;
+
+  --text-normal: 30 30 30;
+  --text-muted: 102 102 102;
+  --text-faint: 110 110 110;
+  --text-on-accent: 255 255 255;
+  --text-secondary-strong: 92 92 92;
+  --text-muted-strong: 92 92 92;
+  --text-disabled: 153 153 153;
+  --text-placeholder: 110 110 110;
+  --text-inverse: 255 255 255;
+
+  --accent-color: 124 92 191;
+  --accent-color-hover: 106 77 168;
+  --accent-active: 91 66 150;
+  --accent-soft: 239 235 247;
+  --accent-border: 186 175 220;
+  --accent-contrast: 255 255 255;
+  --accent-focus-ring: 106 77 168;
+
+  --border: 224 224 224;
+  --border-strong: 208 208 208;
+  --border-faint: 232 232 232;
+
+  --priority-high-text: 179 38 30;
+  --priority-high-text-strong: 179 38 30;
+  --priority-high-soft: 251 232 232;
+  --priority-high-solid: 224 62 62;
+  --priority-high-on-solid: 255 255 255;
+
+  --priority-medium-text: 122 106 0;
+  --priority-medium-text-strong: 122 106 0;
+  --priority-medium-soft: 243 242 226;
+  --priority-medium-solid: 154 143 16;
+  --priority-medium-on-solid: 30 30 30;
+
+  --priority-low-text: 47 125 79;
+  --priority-low-text-strong: 47 125 79;
+  --priority-low-soft: 231 245 234;
+  --priority-low-solid: 54 168 84;
+  --priority-low-on-solid: 30 30 30;
+
+  --danger-solid-strong: 179 38 30;
+
+  --control-bg: 255 255 255;
+  --control-bg-hover: 245 245 245;
+  --control-bg-active: 232 232 232;
+  --control-bg-disabled: 245 245 245;
+  --control-border: 208 208 208;
+  --control-border-hover: 208 208 208;
+  --control-border-focus: 106 77 168;
+
+  --focus-ring: 106 77 168;
+  --focus-ring-offset: 255 255 255;
+  --selection-bg: 124 92 191 / 0.25;
+  --selection-text: 30 30 30;
+
+  --table-bg: 255 255 255;
+  --table-stripe: 245 245 245;
+  --table-hover: 242 242 242;
+  --table-selected: 232 232 232;
+  --table-header-bg: 245 245 245;
+  --table-header-text: 92 92 92;
+  --table-border: 232 232 232;
+  --table-totals-bg: 242 239 249;
+  --table-sticky-bg: 255 255 255 / 0.94;
+
+  --pos-line: 232 232 232;
+  --pos-totals-bg: 248 248 248;
+  --pos-key-bg: 245 245 245;
+  --pos-key-accent: 239 235 247;
+  --pos-total-accent: 106 77 168;
+
+  --chart-1: #7c5cbf;
+  --chart-2: #36a854;
+  --chart-3: #9a8f10;
+  --chart-4: #e03e3e;
+  --chart-5: #5c5c5c;
+  --chart-6: #1e1e1e;
+
+  /* ---- Theme-independent scales (bookmarkX naming) ---- */
+  --space-xs: 4px;
+  --space-s: 8px;
+  --space-m: 12px;
+  --space-l: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+  --space-3xl: 48px;
+
+  --radius-xs: 2px;
+  --radius-s: 4px;
+  --radius-m: 8px;
+  --radius-l: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
+
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-sm: 0 2px 6px rgb(0 0 0 / 0.42);
+  --shadow-md: 0 6px 16px rgb(0 0 0 / 0.5);
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.55);
+  --shadow-xl: 0 20px 60px rgb(0 0 0 / 0.6);
+  --shadow-accent-glow: 0 0 0 3px rgb(106 77 168 / 0.3);
+
+  --transition-fast: 100ms;
+  --transition-normal: 200ms;
+  --dur-fast: 100ms;
+  --dur-base: 150ms;
+  --dur-slow: 200ms;
+  --dur-slower: 300ms;
+  --ease-std: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --z-base: 1;
+  --z-dropdown: 10;
+  --z-sticky: 20;
+  --z-overlay: 100;
+  --z-modal: 200;
+  --z-toast: 300;
+
+  --density-row-sm: 28px;
+  --density-row-md: 34px;
+  --density-row-lg: 40px;
+  --touch-target: 48px;
+  --pad-cell-tight: 4px 6px;
+  --pad-cell-default: 6px 10px;
+  --pad-cell-loose: 8px 12px;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --text-2xl: 20px;
+  --text-3xl: 24px;
+  --text-4xl: 28px;
+  --text-5xl: 32px;
+
+  --leading-body: 1.65;
+  --leading-heading: 1.3;
+  --leading-dense: 1.4;
+
+  /* ---- Typography stacks (Thmanyah, self-hosted — P05) ---- */
+  --pt-font-sans: "Thmanyah", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --pt-font-display:
+    "Thmanyah Serif Display", "Thmanyah", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --pt-font-body:
+    "Thmanyah Serif Text", "Thmanyah", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --pt-font-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* plan/09 §2.4 names — aliases of the values above */
+  --font-sans: var(--pt-font-sans);
+  --font-display: var(--pt-font-display);
+  --font-body: var(--pt-font-body);
+  --font-mono: var(--pt-font-mono);
+
+  /* ---- plan/09 §3 sheet aliases (resolve against canonical tokens) ---- */
+  --color-bg-app: var(--background-primary);
+  --color-bg-surface: var(--background-secondary);
+  --color-bg-raised: var(--background-tertiary);
+  --color-bg-overlay: var(--background-modifier-border);
+  --color-bg-input: var(--background-form-field);
+  --color-bg-well: var(--background-well);
+  --color-bg-scrim: rgb(var(--background-scrim));
+  --color-text-primary: var(--text-normal);
+  --color-text-secondary: var(--text-muted);
+  --color-text-muted: var(--text-faint);
+  --color-text-secondary-strong: var(--text-secondary-strong);
+  --color-text-muted-strong: var(--text-muted-strong);
+  --color-text-disabled: var(--text-disabled);
+  --color-text-placeholder: var(--text-placeholder);
+  --color-text-inverse: var(--text-inverse);
+  --color-text-on-accent: var(--text-on-accent);
+  --color-accent: var(--accent-color);
+  --color-accent-hover: var(--accent-color-hover);
+  --color-accent-active: var(--accent-active);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-border: var(--accent-border);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-accent-focus-ring: var(--accent-focus-ring);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-border-faint: var(--border-faint);
+  --color-priority-high-text: var(--priority-high-text);
+  --color-priority-high-text-strong: var(--priority-high-text-strong);
+  --color-priority-high-soft: var(--priority-high-soft);
+  --color-priority-high-solid: var(--priority-high-solid);
+  --color-priority-high-on-solid: var(--priority-high-on-solid);
+  --color-priority-medium-text: var(--priority-medium-text);
+  --color-priority-medium-text-strong: var(--priority-medium-text-strong);
+  --color-priority-medium-soft: var(--priority-medium-soft);
+  --color-priority-medium-solid: var(--priority-medium-solid);
+  --color-priority-medium-on-solid: var(--priority-medium-on-solid);
+  --color-priority-low-text: var(--priority-low-text);
+  --color-priority-low-text-strong: var(--priority-low-text-strong);
+  --color-priority-low-soft: var(--priority-low-soft);
+  --color-priority-low-solid: var(--priority-low-solid);
+  --color-priority-low-on-solid: var(--priority-low-on-solid);
+  --color-danger-solid-strong: var(--danger-solid-strong);
+  --color-success-text: var(--priority-low-text);
+  --color-success-soft: var(--priority-low-soft);
+  --color-success-solid: var(--priority-low-solid);
+  --color-warning-text: var(--priority-medium-text);
+  --color-warning-soft: var(--priority-medium-soft);
+  --color-warning-solid: var(--priority-medium-solid);
+  --color-danger-text: var(--priority-high-text);
+  --color-danger-soft: var(--priority-high-soft);
+  --color-danger-solid: var(--priority-high-solid);
+  --color-info: var(--accent-color);
+  --color-info-soft: var(--accent-soft);
+  --color-control-bg: var(--control-bg);
+  --color-control-bg-hover: var(--control-bg-hover);
+  --color-control-bg-active: var(--control-bg-active);
+  --color-control-bg-disabled: var(--control-bg-disabled);
+  --color-control-border: var(--control-border);
+  --color-control-border-focus: var(--control-border-focus);
+  --color-focus-ring: var(--focus-ring);
+  --color-selection-bg: rgb(var(--selection-bg));
+  --color-selection-text: var(--selection-text);
+  --color-table-bg: var(--table-bg);
+  --color-table-stripe: var(--table-stripe);
+  --color-table-hover: var(--table-hover);
+  --color-table-selected: var(--table-selected);
+  --color-table-header-bg: var(--table-header-bg);
+  --color-table-header-text: var(--table-header-text);
+  --color-table-border: var(--table-border);
+  --color-table-totals-bg: var(--table-totals-bg);
+  --color-table-sticky-bg: rgb(var(--table-sticky-bg));
+  --color-pos-line: var(--pos-line);
+  --color-pos-totals-bg: var(--pos-totals-bg);
+  --color-pos-key-bg: var(--pos-key-bg);
+  --color-pos-key-accent: var(--pos-key-accent);
+  --color-pos-total-accent: var(--pos-total-accent);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+}
+
+[data-theme="dark"] {
+  /* ---- Dark primitives (verbatim client spec, plan/09 §3.1) ---- */
+  --pr-bg-0: #1e1e1e;
+  --pr-bg-1: #262626;
+  --pr-bg-2: #363636;
+  --pr-bg-3: #3f3f3f;
+  --pr-text-0: #dadada;
+  --pr-text-1: #999999;
+  --pr-text-2: #808080;
+  --pr-text-3: #ffffff;
+  --pr-accent: #a882ff;
+  --pr-accent-hover: #b99aff;
+  --pr-high: #fb464c;
+  --pr-med: #f0ee5a;
+  --pr-low: #44cf6e;
+
+  /* ---- Dark semantic tokens (RGB triplets) ---- */
+  --background-primary: 30 30 30;
+  --background-secondary: 38 38 38;
+  --background-tertiary: 54 54 54;
+  --background-modifier-border: 63 63 63;
+  --background-form-field: 30 30 30;
+  --background-well: 26 26 26;
+  --background-scrim: 0 0 0 / 0.6;
+
+  --text-normal: 218 218 218;
+  --text-muted: 153 153 153;
+  --text-faint: 128 128 128;
+  --text-on-accent: 30 30 30;
+  --text-secondary-strong: 172 172 172;
+  --text-muted-strong: 158 158 158;
+  --text-disabled: 110 110 110;
+  --text-placeholder: 128 128 128;
+  --text-inverse: 30 30 30;
+
+  --accent-color: 168 130 255;
+  --accent-color-hover: 185 154 255;
+  --accent-active: 196 173 255;
+  --accent-soft: 56 51 68;
+  --accent-border: 110 90 150;
+  --accent-contrast: 30 30 30;
+  --accent-focus-ring: 185 154 255;
+
+  --border: 54 54 54;
+  --border-strong: 63 63 63;
+  --border-faint: 46 46 46;
+
+  --priority-high-text: 251 70 76;
+  --priority-high-text-strong: 255 123 128;
+  --priority-high-soft: 64 42 43;
+  --priority-high-solid: 251 70 76;
+  --priority-high-on-solid: 30 30 30;
+
+  --priority-medium-text: 240 238 90;
+  --priority-medium-text-strong: 240 238 90;
+  --priority-medium-soft: 62 62 44;
+  --priority-medium-solid: 240 238 90;
+  --priority-medium-on-solid: 30 30 30;
+
+  --priority-low-text: 68 207 110;
+  --priority-low-text-strong: 68 207 110;
+  --priority-low-soft: 42 58 47;
+  --priority-low-solid: 68 207 110;
+  --priority-low-on-solid: 30 30 30;
+
+  --danger-solid-strong: 251 70 76;
+
+  --control-bg: 38 38 38;
+  --control-bg-hover: 54 54 54;
+  --control-bg-active: 63 63 63;
+  --control-bg-disabled: 38 38 38;
+  --control-border: 63 63 63;
+  --control-border-hover: 63 63 63;
+  --control-border-focus: 168 130 255;
+
+  --focus-ring: 185 154 255;
+  --focus-ring-offset: 30 30 30;
+  --selection-bg: 168 130 255 / 0.35;
+  --selection-text: 30 30 30;
+
+  --table-bg: 30 30 30;
+  --table-stripe: 38 38 38;
+  --table-hover: 46 46 46;
+  --table-selected: 54 54 54;
+  --table-header-bg: 38 38 38;
+  --table-header-text: 172 172 172;
+  --table-border: 46 46 46;
+  --table-totals-bg: 44 40 52;
+  --table-sticky-bg: 30 30 30 / 0.92;
+
+  --pos-line: 46 46 46;
+  --pos-totals-bg: 26 26 26;
+  --pos-key-bg: 38 38 38;
+  --pos-key-accent: 51 47 60;
+  --pos-total-accent: 185 154 255;
+
+  --chart-1: #a882ff;
+  --chart-2: #44cf6e;
+  --chart-3: #f0ee5a;
+  --chart-4: #fb464c;
+  --chart-5: #acacac;
+  --chart-6: #dadada;
+
+  --shadow-accent-glow: 0 0 0 3px rgb(168 130 255 / 0.35);
+}

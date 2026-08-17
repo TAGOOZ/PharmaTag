@@ -1,0 +1,24 @@
+{
+  "name": "pharmatag",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PharmaTag فارما تاج — monorepo (Next.js web + Tauri desktop, shared ui/tokens)",
+  "packageManager": "pnpm@10.14.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "lint": "biome check apps packages",
+    "lint:fix": "biome check --write apps packages",
+    "format": "biome format --write apps packages"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.8",
+    "turbo": "^2.10.10",
+    "typescript": "~5.9.3"
+  }
+}

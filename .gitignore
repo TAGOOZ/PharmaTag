@@ -13,3 +13,9 @@ target/
 *.sqlite
 *.sqlite3
 .DS_Store
+
+# frontend tooling
+.turbo/
+coverage/
+*.tsbuildinfo
+**/gen/schemas/

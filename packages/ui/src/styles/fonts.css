@@ -1,0 +1,76 @@
+/* ============================================================================
+ * PharmaTag typography — Thmanyah family, self-hosted (plan/09 §2.4, P05).
+ *
+ * Licensed WOFF2 files sourced from bookmarkX/public/fonts (client assets).
+ * IBM Plex Mono is not bundled: --pt-font-mono falls back to JetBrains Mono /
+ * ui-monospace until a licensed mono is added. Offline-first: no CDN.
+ * ========================================================================== */
+
+/* Thmanyah Sans — UI, buttons, labels, nav (Light–Black) */
+@font-face {
+  font-family: "Thmanyah";
+  src: url("./fonts/ThmanyahSans-300.woff2") format("woff2");
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah";
+  src: url("./fonts/ThmanyahSans-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah";
+  src: url("./fonts/ThmanyahSans-500.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah";
+  src: url("./fonts/ThmanyahSans-700.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah";
+  src: url("./fonts/ThmanyahSans-900.woff2") format("woff2");
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Thmanyah Serif Display — headings, dashboards, wordmark */
+@font-face {
+  font-family: "Thmanyah Serif Display";
+  src: url("./fonts/ThmanyahSerifDisplay-500.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah Serif Display";
+  src: url("./fonts/ThmanyahSerifDisplay-700.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Thmanyah Serif Text — long-form body / reports */
+@font-face {
+  font-family: "Thmanyah Serif Text";
+  src: url("./fonts/ThmanyahSerifText-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah Serif Text";
+  src: url("./fonts/ThmanyahSerifText-700.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}

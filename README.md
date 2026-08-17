@@ -104,7 +104,25 @@ price, price_now, tax_type, vat, active}] }`, scoped to the caller's branch.
 The desktop never calls the API — `initDb()` seeds its local SQLite with the
 same `003_drug_seeds` rows on first run and renders the identical list offline.
 
-## 6. CI
+## 6. Known stubs (not finished work)
+
+Keep this inventory honest: a screen/endpoint listed here is a **placeholder**, not
+a shipped feature. Slices replace entries as they land; agents must update this
+list in the same commit as the work (add when a placeholder is created, remove
+when a slice replaces it).
+
+| Area | Item | Status |
+| --- | --- | --- |
+| web `/` | dashboard (home) | stub — static shell only, today-summary not wired |
+| web `/pos` `/purchases` `/stock` `/money` `/reports` `/employees` `/settings` | module screens | stubs — show "built in the corresponding slice" |
+| desktop | same module screens (`App.tsx` STUBS) | stubs — same as web |
+| desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly |
+| API | POS, purchases, stock (write), money, reports, employees, settings endpoints | not implemented |
+
+Real so far: `GET /api/v1/auth/*`, `GET /api/v1/drugs` (branch-scoped), plugin registry,
+`/healthz` — and the web + desktop **الأدوية** screens.
+
+## 7. CI
 
 `.github/workflows/ci.yml` runs on push to `main` and pull requests:
 

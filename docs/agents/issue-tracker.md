@@ -10,6 +10,13 @@ Issues and PRDs for this project live as GitHub issues on **TAGOOZ/PharmaTag**, 
 - **Comment on an issue**: `gh issue comment <number> --repo TAGOOZ/PharmaTag --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --repo TAGOOZ/PharmaTag --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --repo TAGOOZ/PharmaTag --comment "..."` — close the ticket when its acceptance criteria are implemented AND verified (both twins green where relevant), with a comment summarizing what was done and referencing the commit. Also remove the `ready-for-agent` label so it isn't re-grabbed. Don't close on "written but not verified".
+- **Edge-case pass (required before close)**: after the ACs are green, run an explicit edge-case pass on the ticket's deliverable before closing. Enumerate the slice's edge cases and cover the important ones with tests; fix whatever the tests expose:
+  - data: empty result set, missing/null fields, duplicates, boundary values, deleted/inactive rows;
+  - auth/permission: unauthenticated, wrong/expired token, insufficient `permission_level` / granular permission, cross-branch access;
+  - connectivity: offline/disconnected (desktop SQLite must still work), API down, CORS origin, timeouts;
+  - money/stock (when the slice touches them): exact-decimal rounding, zero/negative qty, insufficient stock, concurrent updates (`FOR UPDATE`), audit + outbox rows written atomically, idempotent replay (LWW), day-close reversal;
+  - UI: empty states, RTL, light/dark theme, keyboard focus, a11y basics.
+  For pure-shell / UI-only / no-logic tickets the pass is lighter but still covers empty states, RTL, theme, and a11y. List the edge cases covered in the close comment.
 
 ## When a skill says "publish to the issue tracker"
 

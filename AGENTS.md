@@ -31,6 +31,8 @@ Each ticket on the tracker (TAGOOZ/PharmaTag) is self-contained (what + acceptan
 - Money is exact-decimal; VAT-inclusive net = total ÷ 1.14 with per-line `tax_type` (exempt/5%/14%).
 - Offline-first: writes enqueue `sync_log` outbox rows atomically; conflicts are LWW + recorded, never lost.
 - Legacy `permission_level` 1–9 plus granular permission rows; day-close reopen requires perm ≥7 with reversal + audit.
+- **Edge-case pass before every close:** after ACs are green, enumerate + test the slice's edge cases (empty/missing data, dupes, boundary values, auth/permission failures, offline/API-down, and for money/stock: rounding, zero/negative qty, concurrency, atomic audit+outbox, idempotent replay) and fix what the tests expose. Full checklist in `docs/agents/issue-tracker.md`. List covered cases in the close comment.
+- **Known-stub inventory (README §6):** keep it current in the same commit as the work — add a row when you create a placeholder screen/endpoint, remove it when your slice replaces a stub with real functionality. Never present a stub as shipped.
 
 **Testing discipline (tdd skill):**
 - Every slice with logic to verify is built test-first: RED→GREEN→refactor, one test → one implementation, repeated vertically (tracer bullets). No horizontal "write all tests then all code."

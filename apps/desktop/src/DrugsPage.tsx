@@ -10,7 +10,9 @@ type PageState = 'loading' | 'ready' | 'error';
  * local SQLite twin (never the API). Same seed catalog as the API returns.
  */
 export function DrugsPage({ db }: { db: Database | null }) {
-  const [state, setState] = useState<PageState>('loading');
+  // a null db means the Tauri init failed — surface that immediately instead
+  // of hanging on the loading chip forever
+  const [state, setState] = useState<PageState>(db ? 'loading' : 'error');
   const [drugs, setDrugs] = useState<DrugRow[]>([]);
 
   useEffect(() => {
@@ -47,6 +49,8 @@ export function DrugsPage({ db }: { db: Database | null }) {
       </div>
       {state === 'error' ? (
         <p className="pt-caption">تعذّرت قراءة قائمة الأدوية من قاعدة البيانات المحلية.</p>
+      ) : drugs.length === 0 ? (
+        <p className="pt-caption">لا توجد أدوية مفعّلة في قاعدة البيانات المحلية.</p>
       ) : (
         <div className="pt-card">
           <p className="pt-caption mb-3">قائمة الأدوية المفعلة (من SQLite المحلي — بدون اتصال)</p>

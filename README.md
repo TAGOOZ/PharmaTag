@@ -102,12 +102,16 @@ pnpm --filter @pharmatag/web dev
 pnpm --filter @pharmatag/desktop tauri dev
 ```
 
-The web page logs in with the seed user and fetches
-`GET /api/v1/drugs` (Bearer token) → `{ "branch": {id, pharmacyid, pharname},
-"drugs": [{id, drugname, drugnamear, generic, classy, co, units, unitsmall,
-price, price_wholesale, price_cost, price_now, tax_type, vat, barcodes, active}] }`,
-scoped to the caller's branch. The desktop never calls the API — `initDb()`
-seeds its local SQLite with the same `003_drug_seeds` rows on first run and
+The web **الأدوية** page asks you to sign in first (the login form keeps your
+token in localStorage; `must_reset_password` from the seed admin blocks entry
+until the password is changed via `/api/v1/auth/reset-password`). It then
+fetches `GET /api/v1/drugs` (Bearer token) → `{ "branch": {id, pharmacyid,
+pharname}, "drugs": [{id, drugname, drugnamear, generic, classy, co, units,
+unitsmall, price, price_wholesale, price_cost, price_now, tax_type, vat,
+barcodes, active}] }`, scoped to the caller's branch (a deleted branch → 404,
+an inactive branch → 403; results paginated, `limit` default 200 / cap 500).
+The desktop never calls the API — `initDb()` seeds its local SQLite with the
+same `003_drug_seeds` rows on first run (seed-set-aware, idempotent) and
 renders the identical list offline.
 
 Drug-master **writes** (ticket #8) live on the same API: `POST /api/v1/drugs`,

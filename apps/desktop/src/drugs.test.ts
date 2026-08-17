@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
-import { DRUG_INSERT_SQL, DRUG_LIST_SQL, DRUG_SEEDS, type DrugRow } from './drugs';
+import { DRUG_INSERT_SQL, DRUG_LIST_SQL, DRUG_SEEDS, type DrugRow, seedDrugs } from './drugs';
 import { splitStatements } from './migrations';
 
 const SCHEMA_PATH = new URL('./resources/schema_sqlite.sql', import.meta.url);
@@ -66,6 +66,70 @@ describe('offline drug master (ticket #6 / S0.3 — desktop reads SQLite, never 
     expect(countDrugs(db)).toBe(DRUG_SEEDS.length);
 
     // seedDrugs() guards on COUNT(*) > 0 — re-running the seed must not duplicate
+    expect(countDrugs(db)).toBe(DRUG_SEEDS.length);
+  });
+});
+
+describe('seedDrugs (seed-set-aware idempotency)', () => {
+  // tauri-plugin-sql exposes async select/execute; adapt node:sqlite to it.
+  function adapter(db: DatabaseSync) {
+    return {
+      async select<T>(sql: string, params: (string | number)[] = []): Promise<T[]> {
+        return db.prepare(sql.replace(/\$\d+/g, '?')).all(...params) as T[];
+      },
+      async execute(sql: string, params: (string | number)[] = []): Promise<void> {
+        db.prepare(sql.replace(/\$\d+/g, '?')).run(...params);
+      },
+    };
+  }
+
+  it('seeds all five rows on an empty table', async () => {
+    const db = buildOfflineDb();
+    await seedDrugs(adapter(db) as never);
+    expect(countDrugs(db)).toBe(DRUG_SEEDS.length);
+  });
+
+  it('completes a partially-seeded table without duplicating', async () => {
+    const db = buildOfflineDb();
+    const panadol = DRUG_SEEDS[0];
+    if (!panadol) throw new Error('seed catalog is empty');
+    db.prepare(INSERT_SQL).run(
+      panadol.drugname,
+      panadol.drugnamear,
+      panadol.generic,
+      panadol.classy,
+      panadol.pharmacology,
+      panadol.co,
+      panadol.unitsclass,
+      panadol.taxType,
+      panadol.vat,
+      panadol.units,
+      panadol.unitsmall,
+      panadol.price,
+      panadol.price_now,
+      panadol.priceWholesale,
+      panadol.priceCost,
+      0,
+      1,
+    );
+    expect(countDrugs(db)).toBe(1);
+
+    await seedDrugs(adapter(db) as never);
+
+    expect(countDrugs(db)).toBe(DRUG_SEEDS.length);
+    const names = new Set(
+      (db.prepare('SELECT drugname FROM drugs').all() as { drugname: string }[]).map(
+        (r) => r.drugname,
+      ),
+    );
+    expect(names.size).toBe(DRUG_SEEDS.length);
+  });
+
+  it('leaves a fully-seeded table exactly as-is on re-run', async () => {
+    const db = buildOfflineDb();
+    seed(db);
+    await seedDrugs(adapter(db) as never);
+    await seedDrugs(adapter(db) as never);
     expect(countDrugs(db)).toBe(DRUG_SEEDS.length);
   });
 });

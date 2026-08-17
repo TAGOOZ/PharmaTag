@@ -218,3 +218,30 @@ async def test_login_very_long_password_rejected_without_error(client):
         json={"username": "admin", "password": "x" * 200},
     )
     assert r.status_code == 401
+
+
+# --- #6 edge-case pass: login input edges + web preflight ---
+
+
+async def test_login_missing_field_is_400(client):
+    # plan/02 §3 — validation failures surface as 400 (not FastAPI's 422).
+    for body in ({"username": "admin"}, {"password": "changeme"}, {}):
+        r = await client.post("/api/v1/auth/login", json=body)
+        assert r.status_code == 400, body
+
+
+async def test_login_non_json_body_is_400(client):
+    r = await client.post(
+        "/api/v1/auth/login",
+        content="username=admin&password=changeme",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    assert r.status_code == 400
+
+
+async def test_login_oversized_username_no_crash(client):
+    r = await client.post(
+        "/api/v1/auth/login",
+        json={"username": "x" * 300, "password": "changeme"},
+    )
+    assert r.status_code == 401

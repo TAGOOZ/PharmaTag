@@ -122,12 +122,19 @@ export const DRUG_SEEDS: SeedDrug[] = [
 /** Minor-unit scale for money (plan/01 §4.2): NUMERIC(18,4) <-> INTEGER ×10000. */
 export const PRICE_MINOR_UNIT = 10000;
 
-/** Insert the seed catalog on first run (idempotent: skips a non-empty table). */
+/**
+ * Insert the seed catalog (idempotent): only the drugnames still missing are
+ * inserted, so a partial table is completed instead of permanently suppressed.
+ */
 export async function seedDrugs(db: Database): Promise<void> {
-  const count = await db.select<{ n: number }[]>('SELECT COUNT(*) AS n FROM drugs');
-  if (count[0] && count[0].n > 0) return;
-
+  const placeholders = DRUG_SEEDS.map((_, i) => `$${i + 1}`).join(',');
+  const rows = await db.select<{ drugname: string }[]>(
+    `SELECT drugname FROM drugs WHERE drugname IN (${placeholders})`,
+    DRUG_SEEDS.map((d) => d.drugname),
+  );
+  const existing = new Set(rows.map((r) => r.drugname));
   for (const drug of DRUG_SEEDS) {
+    if (existing.has(drug.drugname)) continue;
     await db.execute(DRUG_INSERT_SQL, [
       drug.drugname,
       drug.drugnamear,

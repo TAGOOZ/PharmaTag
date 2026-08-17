@@ -227,12 +227,17 @@ async def get_drug(session: AsyncSession, drug_id: int) -> Optional[Drug]:
     return result.scalar_one_or_none()
 
 
-async def list_branch_drugs(session: AsyncSession, branch_id: int) -> list[Drug]:
-    """Active drug catalog visible to `branch_id` (global drugs, active only)."""
+async def list_branch_drugs(
+    session: AsyncSession, branch_id: int, *, limit: int = 200, offset: int = 0
+) -> list[Drug]:
+    """Active drug catalog visible to `branch_id` (global drugs, active only),
+    paginated so a 24k+ row catalog never comes back in one response."""
     result = await session.execute(
         select(Drug)
         .where(Drug.active.is_(True))
         .order_by(Drug.drugname, Drug.id)
+        .offset(offset)
+        .limit(limit)
         .options(selectinload(Drug.barcodes))
     )
     return list(result.scalars().all())

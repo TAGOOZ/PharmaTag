@@ -28,7 +28,15 @@ async def get_current_user(
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Invalid or expired token"
         )
-    user = await session.get(User, int(payload["sub"]))
+    try:
+        user_id = int(payload["sub"])
+    except (KeyError, TypeError, ValueError):
+        # a tampered/foreign token (missing or non-numeric sub) is an auth
+        # failure, never a 500
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "Invalid or expired token"
+        ) from None
+    user = await session.get(User, user_id)
     if user is None or not user.active:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Invalid or expired token"

@@ -96,14 +96,25 @@ class DrugUpdateRequest(BaseModel):
 
 @router.get("")
 async def list_drugs(
+    limit: int = 200,
+    offset: int = 0,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    if limit < 0 or offset < 0:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "limit and offset must be non-negative"
+        )
+    limit = min(limit, 500)  # cap: the CC0 catalog can reach 24k+ rows
     branch_id = _caller_branch_id(user)
     branch = await session.get(Branch, branch_id)
     if branch is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "branch not found for user")
-    drugs = await service.list_branch_drugs(session, branch_id)
+    if not branch.is_active:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "branch is inactive")
+    drugs = await service.list_branch_drugs(
+        session, branch_id, limit=limit, offset=offset
+    )
     return {
         "branch": {
             "id": branch.id,

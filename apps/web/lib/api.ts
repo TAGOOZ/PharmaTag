@@ -1,10 +1,40 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
+const TOKEN_KEY = 'pharmatag:token';
+
 export type Health = { status: string };
+
+/** A non-2xx API response. `status === 401` means the credential/session is bad. */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(`API returned ${status}`);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+async function throwForStatus(res: Response): Promise<void> {
+  if (!res.ok) throw new ApiError(res.status);
+}
+
+export function loadToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return window.localStorage.getItem(TOKEN_KEY);
+}
+
+export function saveToken(token: string): void {
+  window.localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearToken(): void {
+  window.localStorage.removeItem(TOKEN_KEY);
+}
 
 export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
   const res = await fetch(`${API_URL}/healthz`, { signal });
-  if (!res.ok) throw new Error(`healthz returned ${res.status}`);
+  await throwForStatus(res);
   return (await res.json()) as Health;
 }
 
@@ -22,7 +52,6 @@ export interface LoginResponse {
   };
 }
 
-/** Login with a username/password (seed user for the S0.3 demo: admin/changeme). */
 export async function login(
   username: string,
   password: string,
@@ -34,7 +63,7 @@ export async function login(
     body: JSON.stringify({ username, password }),
     signal,
   });
-  if (!res.ok) throw new Error(`login returned ${res.status}`);
+  await throwForStatus(res);
   return (await res.json()) as LoginResponse;
 }
 
@@ -65,6 +94,6 @@ export async function fetchDrugs(token: string, signal?: AbortSignal): Promise<D
     headers: { Authorization: `Bearer ${token}` },
     signal,
   });
-  if (!res.ok) throw new Error(`drugs returned ${res.status}`);
+  await throwForStatus(res);
   return (await res.json()) as DrugListResponse;
 }

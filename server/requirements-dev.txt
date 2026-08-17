@@ -1,0 +1,17 @@
+# PharmaTag API runtime + dev/test deps (mirrors pyproject.toml [project] + dev extra).
+# Used by CI (pip install -r server/requirements-dev.txt) and the README runbook.
+SQLAlchemy>=2.0
+alembic>=1.13
+psycopg[binary]>=3.2
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic-settings>=2.0
+passlib[bcrypt]>=1.7.4
+bcrypt==4.0.1
+PyJWT>=2.8
+packaging>=23
+
+# dev / test
+pytest>=8.0
+pytest-asyncio>=0.24
+httpx>=0.27

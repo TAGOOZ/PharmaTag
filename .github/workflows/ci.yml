@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    name: API (pytest + schema twin parity)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: pharmatag_test
+          POSTGRES_PASSWORD: pharmatag_test
+          POSTGRES_DB: pharmatag_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pharmatag_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PHARMATAG_DB_URL: postgresql+psycopg://pharmatag_test:pharmatag_test@localhost:5432/pharmatag_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install dependencies
+        run: pip install -r server/requirements-dev.txt
+      - name: Migrate fresh DB (seeds reproducible)
+        working-directory: server
+        run: python -m alembic upgrade head
+      - name: Schema twin parity guard
+        working-directory: server
+        run: python scripts/parity_check.py
+      - name: pytest (unit + integration)
+        working-directory: server
+        run: python -m pytest tests -q
+
+  node:
+    name: Frontend (lint / typecheck / test / build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Biome lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Vitest (ui + desktop)
+        run: pnpm test
+      - name: Build (web + desktop vite)
+        run: pnpm build

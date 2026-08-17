@@ -14,6 +14,9 @@ Multi-context: CONTEXT-MAP.md at root points to per-context CONTEXT.md files. Se
 ### TDD
 Test-driven development via the `tdd` skill. Use it for every slice that has logic to verify (money, stock, events, ETA, reports). See `docs/agents/tdd.md`.
 
+### System design patterns
+The patterns & standards the codebase follows (router→service layering, G12 atomic audit+outbox, transactional outbox + idempotent replay, advisory-lock numbering, twin parity, events, RBAC). Read it before building or extending a feature seam. See `docs/agents/patterns.md`.
+
 ## Getting started for agents
 
 Before touching any code or filing anything, read in this order:
@@ -42,5 +45,14 @@ Each ticket on the tracker (TAGOOZ/PharmaTag) is self-contained (what + acceptan
 - Never refactor while RED. Confirm with the user which behaviors matter most before writing tests.
 
 **Where code lives:** this workspace (project root `testTLS/`) IS the repo — its clone is `TAGOOZ/PharmaTag` (push/pull there; `TITAN.W1B.exe` is gitignored). Legacy corpus: `titan_extract/`, `titan_decompile/`, `legacy_import/`. Schema drafts: `schema/`. Build details per ticket references. The monorepo scaffold is built by tickets T01/T04 on top of this initial commit.
+
+**Local throwaway Postgres DBs (recurring agent failure — READ BEFORE CREATING ONE):**
+- There is NO postgres superuser password on this machine. Do NOT try `sudo -S -u postgres psql` interactively; it is not needed.
+- The `pharmatag_test` role has CREATEDB, so create/drop throwaway DBs directly and non-interactively:
+  - `PGPASSWORD=pharmatag_test createdb -h localhost -U pharmatag_test -T template0 <name>`
+  - `PGPASSWORD=pharmatag_test dropdb -h localhost -U pharmatag_test <name>`
+- The collation-version `HINT` printed by `createdb` is a WARNING, not an error — exit code 0 means success. Proceed.
+- Migrate the throwaway DB with `PHARMATAG_DB_URL="postgresql+psycopg://pharmatag_test:pharmatag_test@localhost:5432/<name>" .venv/bin/alembic upgrade head` (run from `server/`).
+- Alternative (if a superuser is ever required, e.g. for an extension): `printf 'Mustafa_Mu@@@\n' | sudo -S -u postgres psql -c "CREATE DATABASE <name> TEMPLATE template0"` — but you shouldn't need it for tests.
 
 **Conventions:** decisions change only via `plan/00_decisions_master.md` (append, don't rewrite history); plans are reconciled, not regenerated; research claims cite sources.

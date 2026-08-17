@@ -30,6 +30,32 @@ function buttonByText(text: string): HTMLButtonElement {
   return button as HTMLButtonElement;
 }
 
+function installControllableMatchMedia(): { setDark(dark: boolean): void } {
+  const listeners = new Set<(e: MediaQueryListEvent) => void>();
+  const state = { matches: false };
+  const query = {
+    get matches() {
+      return state.matches;
+    },
+    media: '(prefers-color-scheme: dark)',
+    onchange: null,
+    addEventListener: (_: string, cb: (e: MediaQueryListEvent) => void) => listeners.add(cb),
+    removeEventListener: (_: string, cb: (e: MediaQueryListEvent) => void) => listeners.delete(cb),
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  } as unknown as MediaQueryList;
+  window.matchMedia = () => query;
+  return {
+    setDark(dark: boolean) {
+      state.matches = dark;
+      listeners.forEach((cb) => {
+        cb({ matches: dark } as MediaQueryListEvent);
+      });
+    },
+  };
+}
+
 describe('ThemeProvider + ThemeToggle (plan/09 §4.2 through the public interface)', () => {
   it('applies light on <html> by default (P02: light is the brand default)', () => {
     render(
@@ -86,5 +112,52 @@ describe('ThemeProvider + ThemeToggle (plan/09 §4.2 through the public interfac
     } finally {
       window.matchMedia = realMatchMedia;
     }
+  });
+
+  it('re-resolves at runtime when the OS preference changes while setting=system', () => {
+    const realMatchMedia = window.matchMedia.bind(window);
+    const mq = installControllableMatchMedia();
+    try {
+      window.localStorage.setItem('pharmatag:theme', 'system');
+      render(
+        <ThemeProvider>
+          <div />
+        </ThemeProvider>,
+      );
+      expect(document.documentElement.dataset.theme).toBe('light');
+      act(() => mq.setDark(true));
+      expect(document.documentElement.dataset.theme).toBe('dark');
+      act(() => mq.setDark(false));
+      expect(document.documentElement.dataset.theme).toBe('light');
+    } finally {
+      window.matchMedia = realMatchMedia;
+    }
+  });
+
+  it('keeps multiple toggles in sync with the shared setting', () => {
+    render(
+      <ThemeProvider>
+        <ThemeToggle />
+        <ThemeToggle />
+      </ThemeProvider>,
+    );
+    const darkButtons = [...host.querySelectorAll('button')].filter(
+      (b) => b.textContent?.trim() === 'داكن',
+    );
+    expect(darkButtons.length).toBe(2);
+    act(() => darkButtons[0]?.click());
+    expect(darkButtons.every((b) => b.getAttribute('aria-pressed') === 'true')).toBe(true);
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(window.localStorage.getItem('pharmatag:theme')).toBe('dark');
+  });
+
+  it('falls back to light (P02) for an unknown stored value — never the OS flash', () => {
+    window.localStorage.setItem('pharmatag:theme', 'rainbow');
+    render(
+      <ThemeProvider>
+        <div />
+      </ThemeProvider>,
+    );
+    expect(document.documentElement.dataset.theme).toBe('light');
   });
 });

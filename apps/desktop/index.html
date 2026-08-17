@@ -5,19 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PharmaTag</title>
     <script>
-      // plan/09 §4.2 — resolve the stored/system theme before first paint to avoid a flash.
-      (() => {
-        try {
-          const stored = localStorage.getItem('pharmatag:theme');
-          const theme =
-            stored === 'dark' || stored === 'light'
-              ? stored
-              : window.matchMedia('(prefers-color-scheme: dark)').matches
-                ? 'dark'
-                : 'light';
-          document.documentElement.setAttribute('data-theme', theme);
-        } catch {}
-      })();
+      // plan/09 §4.2 — anti-flash boot; default is LIGHT when nothing stored (P02).
+      (()=>{var s;var t;try{s=localStorage.getItem('pharmatag:theme');if(s==='dark'){t='dark'}else if(s==='light'){t='light'}else if(s==='system'){t=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}else{t='light'}document.documentElement.setAttribute('data-theme',t);}catch(_e){}})();
     </script>
   </head>
   <body>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDate, formatMoney, formatNumber, getDir, isRTL } from './rtl';
+import { applyLanguage, formatDate, formatMoney, formatNumber, getDir, isRTL } from './rtl';
 
 describe('RTL / locale helpers (plan/09 §4.3, §2.4)', () => {
   it('treats Arabic languages as RTL', () => {
@@ -14,6 +14,24 @@ describe('RTL / locale helpers (plan/09 §4.3, §2.4)', () => {
     expect(getDir('ar')).toBe('rtl');
     expect(getDir('ar-EG')).toBe('rtl');
     expect(getDir('en')).toBe('ltr');
+  });
+
+  it('applyLanguage sets lang and dir together for Arabic (rtl) and English (ltr)', () => {
+    const target = { lang: 'en', dir: 'ltr' };
+    applyLanguage(target, 'ar');
+    expect(target).toEqual({ lang: 'ar', dir: 'rtl' });
+
+    applyLanguage(target, 'ar-EG');
+    expect(target).toEqual({ lang: 'ar-EG', dir: 'rtl' });
+
+    applyLanguage(target, 'en');
+    expect(target).toEqual({ lang: 'en', dir: 'ltr' });
+  });
+
+  it('applyLanguage normalizes case for the direction decision', () => {
+    const target = { lang: '', dir: '' };
+    applyLanguage(target, 'AR');
+    expect(target.dir).toBe('rtl');
   });
 
   it('formats numbers with forced latin digits, never Arabic-Indic', () => {

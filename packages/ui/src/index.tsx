@@ -45,6 +45,7 @@ export {
   ThemeToggle,
   useTheme,
 } from './theme';
+export { resolveBootTheme, THEME_BOOT_SCRIPT } from './theme-boot';
 export {
   applyTheme,
   createThemeStorage,

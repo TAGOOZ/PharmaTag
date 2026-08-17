@@ -384,3 +384,16 @@
 
   --shadow-accent-glow: 0 0 0 3px rgb(168 130 255 / 0.35);
 }
+
+/* plan/09 §2.3 — prefers-reduced-motion: collapse every motion token to instant. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition-fast: 0ms;
+    --transition-normal: 0ms;
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+    --dur-slower: 0ms;
+    --ease-std: linear;
+  }
+}

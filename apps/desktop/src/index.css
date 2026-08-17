@@ -3,15 +3,15 @@
 
 @theme inline {
   --color-app: rgb(var(--background-primary));
-  --color-surface: rgb(var(--surface-soft));
-  --color-elevated: rgb(var(--surface-elevated));
+  --color-surface: rgb(var(--background-secondary));
+  --color-elevated: rgb(var(--background-tertiary));
   --color-primary: rgb(var(--text-normal));
   --color-muted: rgb(var(--text-muted));
   --color-accent: rgb(var(--accent-color));
   --color-accent-soft: rgb(var(--accent-soft));
   --color-danger: rgb(var(--danger-solid-strong));
-  --color-border: rgb(var(--border-default));
-  --color-brand: rgb(var(--brand-solid));
+  --color-border: rgb(var(--border));
+  --color-brand: rgb(var(--accent-color));
   --font-sans: var(--pt-font-sans);
   --font-mono: var(--pt-font-mono);
 }

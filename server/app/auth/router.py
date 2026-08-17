@@ -18,6 +18,11 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ResetPasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+
 def _public_user(user: User) -> dict:
     return {
         "id": user.id,
@@ -40,7 +45,7 @@ async def login(body: LoginRequest, session: AsyncSession = Depends(get_session)
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Invalid username or password"
         )
-    ok, legacy = security.verify_password(body.password, user.pass_hash)
+    ok, must_reset = security.verify_password(body.password, user.pass_hash)
     if not ok:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Invalid username or password"
@@ -56,9 +61,34 @@ async def login(body: LoginRequest, session: AsyncSession = Depends(get_session)
             str(user.id), branch_id=branch_id
         ),
         "token_type": "bearer",
-        "must_reset_password": legacy,
+        "must_reset_password": must_reset,
         "user": _public_user(user),
     }
+
+
+@router.post("/reset-password")
+async def reset_password(
+    body: ResetPasswordRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Self-service forced reset (P07): the authenticated user proves their
+    current password and sets a new one. Rejecting the weak seeded default
+    keeps 'changeme' unusable; the plain-bcrypt write clears the flag."""
+    ok, _ = security.verify_password(body.old_password, user.pass_hash)
+    if not ok:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "Old password is incorrect"
+        )
+    if body.new_password == security.WEAK_DEFAULT_PASSWORD:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "New password must differ from the weak default",
+        )
+    user.pass_hash = security.hash_password(body.new_password)
+    session.add(user)
+    await session.commit()
+    return {"ok": True}
 
 
 @router.get("/me")

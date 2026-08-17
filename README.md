@@ -114,12 +114,13 @@ when a slice replaces it).
 | Area | Item | Status |
 | --- | --- | --- |
 | web `/` | dashboard (home) | stub — static shell only, today-summary not wired |
-| web `/pos` `/purchases` `/stock` `/money` `/reports` `/employees` `/settings` | module screens | stubs — show "built in the corresponding slice" |
+| web `/pos` `/purchases` `/stock` `/money` `/reports` `/employees` `/settings` | module screens | stubs — show "built in the corresponding slice" (user management API exists; the `/employees`/`/settings` screens are not wired to it) |
 | desktop | same module screens (`App.tsx` STUBS) | stubs — same as web |
 | desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly |
-| API | POS, purchases, stock (write), money, reports, employees, settings endpoints | not implemented |
+| API | POS, purchases, stock (write), money, reports, settings endpoints | not implemented |
 
-Real so far: `GET /api/v1/auth/*`, `GET /api/v1/drugs` (branch-scoped), plugin registry,
+Real so far: `/api/v1/auth/*` (login, me, reset-password), `/api/v1/drugs` (branch-scoped),
+`/api/v1/users` (user CRUD, roles/permissions, manager password reset), plugin registry,
 `/healthz` — and the web + desktop **الأدوية** screens.
 
 ## 7. CI

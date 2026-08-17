@@ -4,8 +4,10 @@ Run: uvicorn app.main:app --reload   (from server/)
 """
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.auth.router import router as auth_router
@@ -14,6 +16,7 @@ from app.core.db import SessionLocal, engine
 from app.drugs.router import router as drugs_router
 from app.plugins.registry import registry
 from app.plugins.router import router as plugins_router
+from app.users.router import router as users_router
 
 
 @asynccontextmanager
@@ -41,6 +44,17 @@ def create_app() -> FastAPI:
     application.include_router(
         plugins_router, prefix="/api/v1/system/plugins", tags=["plugins"]
     )
+    application.include_router(
+        users_router, prefix="/api/v1/users", tags=["users"]
+    )
+
+    # plan/02 §3: validation failures surface as 400 (not FastAPI's 422).
+    @application.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request, exc: RequestValidationError):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": exc.errors()},
+        )
 
     @application.get("/healthz", tags=["ops"])
     async def healthz():

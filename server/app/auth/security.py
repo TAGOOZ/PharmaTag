@@ -1,8 +1,10 @@
 """Password hashing + JWT issuance/verification (plan/02 §3).
 
-Legacy plaintext hashes are detected (P07: force password reset on first
-login); a `legacy` flag tells the client the stored hash predates the
-bcrypt migration. New hashes are always bcrypt via passlib.
+The `must_reset_password` signal (P07) covers two shapes of stored hash:
+  * legacy plaintext (pre-hash, e.g. the seeded admin `changeme`), and
+  * a freshly-created user's initial password, stored as bcrypt behind the
+    `MUST_RESET_PREFIX` marker so the login flow can flag a forced reset.
+New/changed passwords are always plain bcrypt via passlib (no marker).
 """
 from __future__ import annotations
 
@@ -16,6 +18,12 @@ from app.core.config import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+# Seeded admin default (rev 002_seeds) — refused as a new password.
+WEAK_DEFAULT_PASSWORD = "changeme"
+
+# Marker prefix for a freshly-created user's initial password (must reset).
+MUST_RESET_PREFIX = "mustreset:"
+
 
 class InvalidTokenError(Exception):
     pass
@@ -25,9 +33,22 @@ def hash_password(plain: str) -> str:
     return pwd_context.hash(plain)
 
 
+def hash_password_force_reset(plain: str) -> str:
+    """Initial password for a freshly-created user: bcrypt + reset marker."""
+    return MUST_RESET_PREFIX + pwd_context.hash(plain)
+
+
+def is_force_reset(stored: str) -> bool:
+    """True when the stored hash forces a password reset on next login
+    (legacy plaintext, a marked initial password, or an empty hash)."""
+    return not stored.startswith("$2")
+
+
 def verify_password(plain: str, stored: str) -> tuple[bool, bool]:
-    """Return (ok, legacy). `legacy`=True when the stored value is pre-hash
-    plaintext; such a login must be forced to reset (P07)."""
+    """Return (ok, must_reset). `must_reset`=True when the stored value is
+    legacy plaintext or a force-reset-marked initial password (P07)."""
+    if stored.startswith(MUST_RESET_PREFIX):
+        return pwd_context.verify(plain, stored[len(MUST_RESET_PREFIX):]), True
     if stored.startswith("$2"):
         return pwd_context.verify(plain, stored), False
     return plain == stored, True

@@ -62,6 +62,13 @@ user_roles_table = Table(
     Column("role_id", BigInteger, ForeignKey("roles.id"), primary_key=True),
 )
 
+role_permissions_table = Table(
+    "role_permissions",
+    Base.metadata,
+    Column("role_id", BigInteger, ForeignKey("roles.id"), primary_key=True),
+    Column("permission_id", BigInteger, ForeignKey("permissions.id"), primary_key=True),
+)
+
 
 class Branch(Base):
     """`branches` (wzphar) — mirrored from rev 001 so FKs resolve; used by
@@ -107,6 +114,14 @@ class Role(Base):
     description: Mapped[str] = mapped_column(String(200), server_default="")
 
     users: Mapped[list["User"]] = relationship(secondary=user_roles_table, back_populates="roles")
+
+
+class Permission(Base):
+    __tablename__ = "permissions"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    name_ar: Mapped[str] = mapped_column(String(100), server_default="")
 
 
 class User(Base):

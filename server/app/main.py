@@ -15,8 +15,10 @@ from app.auth.router import router as auth_router
 from app.core.config import settings
 from app.core.db import SessionLocal, engine
 from app.drugs.router import router as drugs_router
+from app.parties.router import router as parties_router
 from app.plugins.registry import registry
 from app.plugins.router import router as plugins_router
+from app.purchases.router import router as purchases_router
 from app.sales.router import router as sales_router
 from app.sync.router import router as sync_router
 from app.users.router import router as users_router
@@ -52,6 +54,12 @@ def create_app() -> FastAPI:
     )
     application.include_router(
         sales_router, prefix="/api/v1/sales", tags=["sales"]
+    )
+    application.include_router(
+        purchases_router, prefix="/api/v1/purchases", tags=["purchases"]
+    )
+    application.include_router(
+        parties_router, prefix="/api/v1/parties", tags=["parties"]
     )
     application.include_router(
         sync_router, prefix="/api/v1/sync", tags=["sync"]

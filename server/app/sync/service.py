@@ -19,7 +19,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import atomic
 from app.models import Invoice, SyncLog
 from app.sales.numbering import acquire_branch_lock
-from app.sales.service import apply_sale_payload
+
+
+async def _apply_row(
+    session: AsyncSession, *, branch_id: int, payload: dict, user_id: Optional[int]
+) -> None:
+    """Dispatch a pending invoice row to its kind's replay (sale or purchase)."""
+    kind = payload.get("kind", "sale")
+    if kind == "purchase":
+        from app.purchases.replay import apply_purchase_payload
+
+        await apply_purchase_payload(
+            session, branch_id=branch_id, payload=payload, user_id=user_id
+        )
+    else:
+        from app.sales.replay import apply_sale_payload
+
+        await apply_sale_payload(
+            session, branch_id=branch_id, payload=payload, user_id=user_id
+        )
 
 
 async def _invoice_exists(
@@ -74,7 +92,7 @@ async def replay_pending(
                 summary["skipped"] += 1
                 continue
             try:
-                await apply_sale_payload(
+                await _apply_row(
                     session,
                     branch_id=branch_id,
                     payload=payload,

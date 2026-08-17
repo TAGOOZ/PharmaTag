@@ -4,10 +4,10 @@ Management endpoints are authenticated (existing Bearer scaffold) and audited
 (action plugin_enable / plugin_disable in audit_log).
 """
 import pytest
-from sqlalchemy import update
+from sqlalchemy import delete, update
 
 from app.core.db import SessionLocal
-from app.models import AppConfig, AppPlugin, PluginBranchGrant
+from app.models import AppConfig, AppPlugin, AuditLog, Branch, PluginBranchGrant
 from app.plugins.registry import registry
 
 BRANCH_ID = 1
@@ -110,3 +110,99 @@ async def test_enable_unknown_plugin_returns_404(seeded):
         headers=await _auth(seeded),
     )
     assert r.status_code == 404
+
+
+async def test_disable_unknown_plugin_returns_404(seeded):
+    r = await seeded.post(
+        "/api/v1/system/plugins/ghost/disable",
+        json={"branch_id": BRANCH_ID},
+        headers=await _auth(seeded),
+    )
+    assert r.status_code == 404
+
+
+async def test_enable_and_disable_require_auth(seeded):
+    r = await seeded.post(
+        "/api/v1/system/plugins/pharmatag-eta/enable", json={"branch_id": BRANCH_ID}
+    )
+    assert r.status_code == 401
+    r = await seeded.post(
+        "/api/v1/system/plugins/pharmatag-eta/disable", json={"branch_id": BRANCH_ID}
+    )
+    assert r.status_code == 401
+
+
+async def test_enable_requires_branch_id_and_rejects_zero(seeded):
+    h = await _auth(seeded)
+    r = await seeded.post(
+        "/api/v1/system/plugins/pharmatag-eta/enable", json={}, headers=h
+    )
+    assert r.status_code == 400, "missing branch_id is a validation error, not a silent enable"
+    r = await seeded.post(
+        "/api/v1/system/plugins/pharmatag-eta/enable",
+        json={"branch_id": 0},
+        headers=h,
+    )
+    assert r.status_code == 400, "branch_id must be > 0"
+    r = await seeded.post(
+        "/api/v1/system/plugins/pharmatag-eta/disable",
+        json={"branch_id": 0},
+        headers=h,
+    )
+    assert r.status_code == 400
+
+
+async def test_enable_plugin_for_another_branch_is_forbidden(seeded):
+    """Branch-scoped authz: the caller may only manage their own branch's grant
+    (plan/02 §3: cross-branch access is a permission, not a default)."""
+    branch_2_id: int = 0
+    async with SessionLocal() as session:
+        branch_2 = Branch(pharmacyid="__t3_api_b2__", mobile="0", pharname="Branch 2")
+        session.add(branch_2)
+        await session.flush()
+        branch_2_id = branch_2.id
+        await session.commit()
+    try:
+        h = await _auth(seeded)  # admin is on branch 1
+        r = await seeded.post(
+            "/api/v1/system/plugins/pharmatag-eta/enable",
+            json={"branch_id": branch_2_id},
+            headers=h,
+        )
+        assert r.status_code == 403, "must not enable another branch's grant"
+        r = await seeded.post(
+            "/api/v1/system/plugins/pharmatag-eta/disable",
+            json={"branch_id": branch_2_id},
+            headers=h,
+        )
+        assert r.status_code == 403
+    finally:
+        async with SessionLocal() as session:
+            await session.execute(
+                delete(PluginBranchGrant).where(PluginBranchGrant.branch_id == branch_2_id)
+            )
+            await session.execute(
+                delete(AuditLog).where(AuditLog.branch_id == branch_2_id)
+            )
+            await session.execute(delete(Branch).where(Branch.id == branch_2_id))
+            await session.commit()
+
+
+async def test_plugins_enabled_false_returns_all_inactive(seeded):
+    async with SessionLocal() as session:
+        cfg = await session.get(AppConfig, "plugins_enabled")
+        cfg.value = "false"
+        await session.commit()
+        await registry.load(session)
+    try:
+        r = await seeded.get("/api/v1/system/plugins", headers=await _auth(seeded))
+        assert r.status_code == 200
+        plugins = r.json()["plugins"]
+        assert plugins, "list still returns plugins"
+        assert all(p["active"] is False for p in plugins), "kill switch must show every plugin inactive"
+    finally:
+        async with SessionLocal() as session:
+            cfg = await session.get(AppConfig, "plugins_enabled")
+            cfg.value = "true"
+            await session.commit()
+            await registry.load(session)

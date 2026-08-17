@@ -110,10 +110,18 @@ class EventBus:
     async def emit(self, event: str, ctx: SaleContext, *, phase: str) -> None:
         """Dispatch handlers for (event, phase) in subscription order.
 
+        The event name and phase are core-owned stable APIs: emitting with an
+        unknown event/phase is a core-side bug and fails fast (strict-but-explicit),
+        never a silent no-op that would skip every hook.
+
         A strict `in_txn` handler that raises propagates the exception so the
         caller's transaction rolls back; every other failure is caught, recorded
         on `self.errors` and logged — it never aborts the write.
         """
+        if event not in KNOWN_EVENTS:
+            raise ValueError(f"unknown core event {event!r}")
+        if phase not in PHASES:
+            raise ValueError(f"unknown phase {phase!r}")
         for sub in self._subs.get(event, {}).get(phase, []):
             try:
                 await sub.handler(ctx)

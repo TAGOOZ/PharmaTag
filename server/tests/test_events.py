@@ -241,3 +241,115 @@ def test_subscribe_rejects_unknown_event_and_phase(empty_bus):
         empty_bus.subscribe("made.up.event", lambda ctx: None, phase=IN_TXN)
     with pytest.raises(ValueError, match="unknown phase"):
         empty_bus.subscribe(SALE_SAVED, lambda ctx: None, phase="mid_txn")
+
+
+def _bare_ctx() -> SaleContext:
+    return SaleContext(session=None, branch_id=1, user_id=1, sale=None, payload={})
+
+
+async def test_emit_with_no_subscribers_is_a_noop(empty_bus):
+    ctx = _bare_ctx()
+    await empty_bus.emit(SALE_SAVED, ctx, phase=IN_TXN)
+    await empty_bus.emit(SALE_SAVED, ctx, phase=AFTER_COMMIT)
+    assert empty_bus.errors == []
+
+
+async def test_emit_rejects_unknown_event_and_phase(empty_bus):
+    ctx = _bare_ctx()
+    with pytest.raises(ValueError, match="unknown core event"):
+        await empty_bus.emit("made.up.event", ctx, phase=IN_TXN)
+    with pytest.raises(ValueError, match="unknown phase"):
+        await empty_bus.emit(SALE_SAVED, ctx, phase="mid_txn")
+    with pytest.raises(ValueError, match="unknown phase"):
+        await empty_bus.emit(SALE_SAVED, ctx, phase="")
+
+
+async def test_multiple_subscribers_run_all_in_subscription_order(empty_bus):
+    order: list[str] = []
+
+    async def first(ctx):
+        order.append("first")
+
+    async def second(ctx):
+        order.append("second")
+
+    async def third(ctx):
+        order.append("third")
+
+    empty_bus.subscribe(SALE_SAVED, first, phase=IN_TXN)
+    empty_bus.subscribe(SALE_SAVED, second, phase=IN_TXN)
+    empty_bus.subscribe(SALE_SAVED, third, phase=IN_TXN)
+
+    await empty_bus.emit(SALE_SAVED, _bare_ctx(), phase=IN_TXN)
+    assert order == ["first", "second", "third"]
+
+
+async def test_hooks_run_only_in_their_subscribed_phase(empty_bus):
+    counts = {"in_txn": 0, "after_commit": 0}
+
+    async def in_txn(ctx):
+        counts["in_txn"] += 1
+
+    async def after(ctx):
+        counts["after_commit"] += 1
+
+    empty_bus.subscribe(SALE_SAVED, in_txn, phase=IN_TXN)
+    empty_bus.subscribe(SALE_SAVED, after, phase=AFTER_COMMIT)
+
+    ctx = _bare_ctx()
+    await empty_bus.emit(SALE_SAVED, ctx, phase=IN_TXN)
+    assert counts == {"in_txn": 1, "after_commit": 0}, "after_commit hook leaked into in_txn"
+    await empty_bus.emit(SALE_SAVED, ctx, phase=AFTER_COMMIT)
+    assert counts == {"in_txn": 1, "after_commit": 1}, "in_txn hook leaked into after_commit"
+
+
+async def test_best_effort_in_txn_failure_does_not_stop_later_hooks(empty_bus):
+    ran: list[str] = []
+
+    async def failing(ctx):
+        raise RuntimeError("kpi dashboard hiccup")
+
+    async def later(ctx):
+        ran.append("later")
+
+    empty_bus.subscribe(SALE_SAVED, failing, phase=IN_TXN)
+    empty_bus.subscribe(SALE_SAVED, later, phase=IN_TXN)
+
+    await empty_bus.emit(SALE_SAVED, _bare_ctx(), phase=IN_TXN)
+    assert ran == ["later"], "later in_txn hook must still run after a best-effort failure"
+    assert len(empty_bus.errors) == 1
+    assert empty_bus.errors[0]["phase"] == IN_TXN
+
+
+async def test_after_commit_failure_isolation_and_order(empty_bus):
+    order: list[str] = []
+
+    async def failing(ctx):
+        order.append("failing")
+        raise RuntimeError("submission worker down")
+
+    async def later(ctx):
+        order.append("later")
+
+    empty_bus.subscribe(SALE_SAVED, failing, phase=AFTER_COMMIT)
+    empty_bus.subscribe(SALE_SAVED, later, phase=AFTER_COMMIT)
+
+    await empty_bus.emit(SALE_SAVED, _bare_ctx(), phase=AFTER_COMMIT)
+    assert order == ["failing", "later"], "later after_commit hook must still run in order"
+    assert len(empty_bus.errors) == 1
+    assert empty_bus.errors[0]["phase"] == AFTER_COMMIT
+
+
+async def test_reentrant_emit_is_deterministic(empty_bus):
+    calls = {"n": 0}
+
+    async def reenter(ctx):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            await empty_bus.emit(SALE_SAVED, ctx, phase=IN_TXN)
+
+    empty_bus.subscribe(SALE_SAVED, reenter, phase=IN_TXN)
+
+    await empty_bus.emit(SALE_SAVED, _bare_ctx(), phase=IN_TXN)
+    assert calls["n"] == 2, "re-entrant emit re-runs handlers deterministically, no corruption"
+    assert empty_bus.errors == []

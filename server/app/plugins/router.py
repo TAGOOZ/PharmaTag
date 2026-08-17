@@ -21,6 +21,16 @@ class BranchRequest(BaseModel):
     branch_id: int = Field(gt=0)
 
 
+def _ensure_own_branch(user: User, branch_id: int) -> None:
+    """Branch-scoped authz (plan/02 §3): cross-branch access is a permission,
+    not a default — a caller may only manage their own branch's grants."""
+    if user.branch_id != branch_id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "plugin management is branch-scoped to the caller's branch",
+        )
+
+
 @router.get("")
 async def list_plugins(
     session: AsyncSession = Depends(get_session),
@@ -37,6 +47,7 @@ async def enable_plugin(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
+    _ensure_own_branch(user, body.branch_id)
     try:
         await registry.enable(session, slug, branch_id=body.branch_id, user_id=user.id)
     except KeyError:
@@ -53,6 +64,7 @@ async def disable_plugin(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
+    _ensure_own_branch(user, body.branch_id)
     try:
         await registry.disable(session, slug, branch_id=body.branch_id, user_id=user.id)
     except KeyError:

@@ -106,12 +106,20 @@ class PluginRegistry:
         installed = {row.slug: row.version for row in rows}
 
         for row in rows:
-            module = _load_plugin_module(row.slug)
             manifest: Optional[PluginManifest] = None
             hooks: dict[str, list[Any]] = {}
             errors: list[str] = []
+            try:
+                module = _load_plugin_module(row.slug)
+            except Exception as exc:
+                # a package that cannot even import its manifest (missing fields,
+                # bad syntax, dependency errors) is an invalid plugin, never a
+                # registry-wide crash — one broken plugin must not take down the rest
+                module = None
+                errors.append(f"plugin package failed to import: {exc}")
             if module is None:
-                errors.append("plugin package not found")
+                if not errors:
+                    errors.append("plugin package not found")
             else:
                 candidate = getattr(module, "manifest", None)
                 if not isinstance(candidate, PluginManifest):

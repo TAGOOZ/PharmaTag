@@ -33,6 +33,18 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 30
 
+    # Web app origins allowed to call the API (S0.3: web /drugs reads via the
+    # API; Next dev defaults to 3000/3001). Override via PHARMATAG_CORS_ORIGINS.
+    cors_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:3001",
+        ],
+        validation_alias="PHARMATAG_CORS_ORIGINS",
+    )
+
     model_config = SettingsConfigDict(
         env_prefix="PHARMATAG_",
         env_file=".env",

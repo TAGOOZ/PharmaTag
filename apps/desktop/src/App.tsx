@@ -6,7 +6,9 @@ import {
   TagCrossMark,
   ThemeToggle,
 } from '@pharmatag/ui';
+import type Database from '@tauri-apps/plugin-sql';
 import { useCallback, useEffect, useState } from 'react';
+import { DrugsPage } from './DrugsPage';
 import { initDb } from './db';
 
 type DbState = 'booting' | 'ready' | 'error';
@@ -42,6 +44,7 @@ const STUBS: Record<string, { title: string }> = {
 export function App() {
   const [route, setRoute] = useState<string>(currentRoute);
   const [dbState, setDbState] = useState<DbState>('booting');
+  const [db, setDb] = useState<Database | null>(null);
 
   useEffect(() => {
     const onHashChange = () => setRoute(currentRoute());
@@ -51,7 +54,10 @@ export function App() {
 
   useEffect(() => {
     initDb()
-      .then(() => setDbState('ready'))
+      .then((database) => {
+        setDb(database);
+        setDbState('ready');
+      })
       .catch(() => setDbState('error'));
   }, []);
 
@@ -89,7 +95,7 @@ export function App() {
         </>
       }
     >
-      <PageStub title={stub.title} />
+      {route === '/drugs' ? <DrugsPage db={db} /> : <PageStub title={stub.title} />}
     </AppShell>
   );
 }

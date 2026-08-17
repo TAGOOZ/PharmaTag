@@ -80,7 +80,31 @@ pnpm --filter @pharmatag/desktop tauri dev   # full Tauri window (needs system w
   Alembic offline SQL and asserts the SQLite twin matches (no REAL/FLOAT money, no
   plugin tables in core). It must stay green on every change.
 
-## 5. CI
+## 5. Demo (S0.3: login + branch + drug-master read)
+
+> Login as `admin` / `changeme`, open **الأدوية** on the web
+> (`http://localhost:3000/drugs`), or launch the desktop app and open **الأدوية**:
+> both show the seeded MAIN-branch drug master (5 VAT-exempt medicines from
+> `003_drug_seeds`).
+
+```bash
+# 1. API on :8000  (server/)
+PHARMATAG_DB_URL=postgresql+psycopg://pharmatag_test:pharmatag_test@localhost:5432/pharmatag_test \
+  .venv/bin/python -m uvicorn app.main:app
+# 2. web on :3000  (repo root)
+pnpm --filter @pharmatag/web dev
+# 3. or the offline desktop (disconnected, reads SQLite — no API needed)
+pnpm --filter @pharmatag/desktop tauri dev
+```
+
+The web page logs in with the seed user and fetches
+`GET /api/v1/drugs` (Bearer token) → `{ "branch": {id, pharmacyid, pharname},
+"drugs": [{id, drugname, drugnamear, generic, classy, co, units, unitsmall,
+price, price_now, tax_type, vat, active}] }`, scoped to the caller's branch.
+The desktop never calls the API — `initDb()` seeds its local SQLite with the
+same `003_drug_seeds` rows on first run and renders the identical list offline.
+
+## 6. CI
 
 `.github/workflows/ci.yml` runs on push to `main` and pull requests:
 

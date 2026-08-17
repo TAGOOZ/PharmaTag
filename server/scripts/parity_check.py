@@ -4,7 +4,8 @@
 Asserts the Postgres (Alembic) and SQLite twin describe the SAME table/column
 set and that the money scale mapping holds — PG NUMERIC(n,s) <-> SQLite INTEGER
 (value × 10^s). Never a REAL/FLOAT/DOUBLE on PG. Fails the build if the twins
-drift again.
+drift again. Both sides are parsed across all migration scripts (CREATE TABLE
++ incremental ALTER TABLE ADD COLUMN), so later revisions stay parity'd too.
 
 Usage: python scripts/parity_check.py  (run from server/; needs alembic on PATH)
 """
@@ -16,7 +17,6 @@ import sys
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parent.parent
-SQLITE_CORE = SERVER / "sqlite" / "migrations" / "001_core_schema.sql"
 
 # plugin-owned [S] tables that must NOT be in core rev 001 (A08)
 PLUGIN_TABLES = {
@@ -27,6 +27,11 @@ PLUGIN_TABLES = {
 }
 
 CREATE_RE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)\s*\((.*?)\);", re.S | re.I)
+# incremental column adds: alembic `op.add_column` renders as ALTER TABLE
+# ADD COLUMN in offline SQL — captured so post-rev-001 migrations stay parity'd.
+ALTER_ADD_COL_RE = re.compile(
+    r"ALTER TABLE (\w+)\s+ADD COLUMN\s+(\w+)\s+(\S+)", re.I
+)
 # lines that open a table-body continuation (constraints), not a column
 CONSTRAINT_KW = {"PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT", "REFERENCES"}
 
@@ -48,14 +53,20 @@ def _columns(body: str) -> dict[str, str]:
     return cols
 
 
-def parse_sqlite(path: Path):
+def parse_sqlite(paths: list[Path]) -> dict[str, dict[str, str]]:
+    """Parse the SQLite twin across ALL migration scripts (001 base + later
+    incremental ALTER TABLE ADD COLUMN scripts), merging into one table map."""
     tables: dict[str, dict[str, str]] = {}
-    sql = path.read_text(encoding="utf-8")
-    for m in CREATE_RE.finditer(sql):
-        name = m.group(1)
-        if name == "schema_migrations":
-            continue
-        tables[name] = _columns(m.group(2))
+    for path in paths:
+        sql = path.read_text(encoding="utf-8")
+        for m in CREATE_RE.finditer(sql):
+            name = m.group(1)
+            if name == "schema_migrations":
+                continue
+            tables[name] = _columns(m.group(2))
+        for m in ALTER_ADD_COL_RE.finditer(sql):
+            name, col, typ = m.group(1), m.group(2), m.group(3)
+            tables.setdefault(name, {})[col] = typ.rstrip(",").rstrip("(")
     return tables
 
 
@@ -70,6 +81,9 @@ def parse_postgres_offline() -> dict[str, dict[str, str]]:
         if name == "alembic_version":
             continue
         tables[name] = _columns(m.group(2))
+    for m in ALTER_ADD_COL_RE.finditer(sql):
+        name, col, typ = m.group(1), m.group(2), m.group(3)
+        tables.setdefault(name, {})[col] = typ.rstrip(",").rstrip("(")
     return tables
 
 
@@ -79,7 +93,7 @@ def normalize(pg_type: str) -> str:
 
 
 def main() -> int:
-    sqlite = parse_sqlite(SQLITE_CORE)
+    sqlite = parse_sqlite(sorted((SERVER / "sqlite" / "migrations").glob("*.sql")))
     pg = parse_postgres_offline()
 
     errors: list[str] = []

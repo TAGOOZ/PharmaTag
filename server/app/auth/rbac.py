@@ -31,6 +31,7 @@ LEGACY_LEVEL_FLOOR = {
     "sale.edit_invoice": 8,
     "day.close": 7,
     "stock.adjust": 3,
+    "drugs.manage": 3,  # الأصناف والمخزون (drug master + stock module, plan/02 §3)
     "approvals": 5,
     "reports": 9,
     "users.manage": 6,

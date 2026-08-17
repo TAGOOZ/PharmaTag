@@ -301,3 +301,25 @@ All 12 below are **resolved** against `plan/00_decisions_master.md` (2026-08-16)
 ## Bottom line
 
 The schema is **approved with 8 surgical corrections** (§1.3) and all **10 GAPS §2 contradictions are settled** (§2). The money discipline is exact-decimal on PostgreSQL and **integer minor-units on SQLite** (§4). **A08** moves the plugin-owned (`[S]`) tables into per-plugin schemas/migrations, so core rev 001 ships only core truth tables + the plugin host + seeds (§3, §5.1). The migration path is staged and mostly tooled (§5); the two hard blockers are **production `.phy` samples** (MonyInfo/Dailymax/full Daily tail) and **data-gated confirmations** (G12 invoicedata dump). All 12 open questions in §6 are **resolved** against `plan/00_decisions_master.md` (see the Reconciled note above); no column decision remains open before Phase 1 lock.
+---
+
+## Ticket #8 decision note (2026-08-17, appended — no history rewrite)
+
+**3 price levels on `drugs`, not a separate table.** plan/00 F14.3 defines three
+selling-price levels (سعر الجمهور / سعر الجملة / سعر الشراء-التكلفة) but plan/01
+did not model them. Implemented decision (ticket #8 / S1.2):
+
+* `drugs.price` = public level (existing), **new `drugs.price_wholesale`** and
+  **`drugs.price_cost`** columns (NUMERIC(18,4), server_default `0`, CHECK
+  `price >= 0 AND price_wholesale >= 0 AND price_cost >= 0`) — rev `005_drug_price_levels`.
+  Rationale: the levels are drug attributes (not journal entries); a separate
+  `drug_price_levels` table adds indirection without benefit until a future price-
+  list slice needs history-per-level (that slice can normalize then).
+* `drug_costs` remains the wzdrugs2 legacy ETL mirror (purchase-cost line for
+  stock batches), NOT the CRUD surface for price levels.
+* VAT-inclusive net = total ÷ 1.14 with per-line `tax_type` (exempt / 5% / 14%),
+  per G06; `price_now` (current price) tracks the public price unless explicitly set.
+* Money stays exact decimal, API surfaces 2-dp half-up strings (`money.format2`);
+  float input rejected (A05).
+* New granular permission `drugs.manage` (الأصناف والمخزون) gates drug writes,
+  legacy level floor 3 (plan/02 §3).

@@ -5,6 +5,7 @@ Run: uvicorn app.main:app --reload   (from server/)
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -53,7 +54,7 @@ def create_app() -> FastAPI:
     async def validation_exception_handler(request, exc: RequestValidationError):
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"detail": exc.errors()},
+            content={"detail": jsonable_encoder(exc.errors())},
         )
 
     @application.get("/healthz", tags=["ops"])

@@ -33,6 +33,7 @@ __all__ = [
     "round_half_up",
     "round2",
     "round4",
+    "format2",
     "tax_rate",
     "split_vat",
     "line_money",
@@ -76,6 +77,16 @@ def round2(value) -> Decimal:
 
 def round4(value) -> Decimal:
     return round_half_up(value, 4)
+
+
+def format2(value) -> str:
+    """Exact 2-dp string for display/API wire (round-half-up, plan/01 §4.1).
+
+    Money leaves the API as strings so JS never corrupts a decimal (plan/02 §2).
+    Half-up, never Decimal.quantize's default half-even — a 4dp price like
+    12.345 must surface as '12.35'.
+    """
+    return format(round_half_up(value, 2), "f")
 
 
 def tax_rate(tax_type: str) -> Decimal:

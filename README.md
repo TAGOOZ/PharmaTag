@@ -100,9 +100,17 @@ pnpm --filter @pharmatag/desktop tauri dev
 The web page logs in with the seed user and fetches
 `GET /api/v1/drugs` (Bearer token) → `{ "branch": {id, pharmacyid, pharname},
 "drugs": [{id, drugname, drugnamear, generic, classy, co, units, unitsmall,
-price, price_now, tax_type, vat, active}] }`, scoped to the caller's branch.
-The desktop never calls the API — `initDb()` seeds its local SQLite with the
-same `003_drug_seeds` rows on first run and renders the identical list offline.
+price, price_wholesale, price_cost, price_now, tax_type, vat, barcodes, active}] }`,
+scoped to the caller's branch. The desktop never calls the API — `initDb()`
+seeds its local SQLite with the same `003_drug_seeds` rows on first run and
+renders the identical list offline.
+
+Drug-master **writes** (ticket #8) live on the same API: `POST /api/v1/drugs`,
+`PATCH /api/v1/drugs/{id}`, `GET /api/v1/drugs/{id}` (all gated by the
+`drugs.manage` permission — legacy level ≥ 3 or admin role), plus
+`GET /api/v1/drugs/search?q=` (name AR/EN or barcode prefix, open to any
+authenticated user) and `POST /api/v1/drugs/import` (CSV body, CC0 catalog —
+see §6). Prices are exact decimal strings, rounded half-up to 2 dp.
 
 ## 6. Known stubs (not finished work)
 
@@ -118,10 +126,12 @@ when a slice replaces it).
 | desktop | same module screens (`App.tsx` STUBS) | stubs — same as web |
 | desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly |
 | API | POS, purchases, stock (write), money, reports, settings endpoints | not implemented |
+| data | CC0 drug catalog download | documented, not bundled — the importer (`server/app/drugs/importer.py`, CLI `python -m app.drugs.importer <file>`) is real and de-dupes/idempotent, but the 24k-medicine source (CC0 `karem505/egyptian-drug-database`) is fetched at import time, not shipped. A sample fixture lives in `server/tests/fixtures/cc0_catalog_sample.csv`. |
 
-Real so far: `/api/v1/auth/*` (login, me, reset-password), `/api/v1/drugs` (branch-scoped),
-`/api/v1/users` (user CRUD, roles/permissions, manager password reset), plugin registry,
-`/healthz` — and the web + desktop **الأدوية** screens.
+Real so far: `/api/v1/auth/*` (login, me, reset-password), `/api/v1/drugs`
+(read + CRUD + search-as-you-type + CC0 catalog import; writes gated by
+`drugs.manage`), `/api/v1/users` (user CRUD, roles/permissions, manager password
+reset), plugin registry, `/healthz` — and the web + desktop **الأدوية** screens.
 
 ## 7. CI
 

@@ -39,13 +39,13 @@ function tableNames(db: DatabaseSync): string[] {
 }
 
 describe('bootstrapSchema (first-run offline schema application)', () => {
-  it('applies the full 51-table schema on first boot (branches guard)', async () => {
+  it('applies the full 38-table schema on first boot (branches guard)', async () => {
     const { db, runner } = openInMemory();
     expect(tableNames(db)).toEqual([]);
     await bootstrapSchema(runner, schemaSql);
     const names = tableNames(db);
     expect(names).toContain('branches');
-    expect(names.length).toBe(51);
+    expect(names.length).toBe(38);
   });
 
   it('is idempotent — a second boot is a no-op, never duplicate tables', async () => {
@@ -63,7 +63,9 @@ describe('bootstrapSchema (first-run offline schema application)', () => {
     db.exec(
       "INSERT INTO branches (pharmacyid, mobile, pharname) VALUES ('br-1', '0100', 'أوليفر فارماسي')",
     );
-    const row = db.prepare('SELECT pharname FROM branches').get() as { pharname: string };
+    const row = db.prepare("SELECT pharname FROM branches WHERE pharmacyid = 'br-1'").get() as {
+      pharname: string;
+    };
     expect(row.pharname).toBe('أوليفر فارماسي');
   });
 

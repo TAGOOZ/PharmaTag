@@ -1,72 +1,68 @@
 -- ============================================================================
--- TITAN.W1 → Modern Replacement — SQLITE DIALECT (Tauri desktop, offline-first)
--- Mirrors schema_postgres.sql (the canonical FastAPI/PostgreSQL design).
--- 51 tables, same columns/constraints, adapted to SQLite:
+-- PharmaTag — SQLite offline twin (desktop bundle, single self-contained file)
 --
---   ENUMS        -> TEXT columns + CHECK (...) on the same allowed values
---   BIGINT IDENTITY -> INTEGER PRIMARY KEY AUTOINCREMENT (or composite PKs)
---   TIMESTAMPTZ  -> TEXT ISO-8601 (UTC) or INTEGER unix; app writes ISO-8601 UTC
---   JSONB        -> TEXT (JSON)
---   NUMERIC(n,s) -> NUMERIC affinity + app-side rounding (SQLite has no decimal)
---   schemas      -> none (single default)
+-- The CANONICAL SQLite twin is the versioned `server/sqlite/migrations/*.sql`
+-- set (applied by server/sqlite/runner.py). This file merges rev 001 (core
+-- schema), rev 002 (core seeds) and rev 005 (drug price levels + drugs.manage)
+-- into ONE script the Tauri desktop bundles
+-- (`apps/desktop/src/resources/schema_sqlite.sql`, Vite `?raw`) and applies on
+-- first boot (`apps/desktop/src/db.ts` bootstrapSchema, guarded on the
+-- `branches` table). `server/scripts/parity_check.py` asserts this file == the
+-- merged migrations twin in CI, so the bundle cannot drift from the API.
 --
--- MONEY TYPING (SCHEMA_EVALUATION §1.11):
---   SQLite NUMERIC affinity does NOT guarantee 2-dp precision. All money values are
---   therefore stored as NUMERIC but MUST be rounded half-up to 2 dp (totals) / 4 dp
---   (per-unit) at the app layer BEFORE INSERT. The Tauri app shares the FastAPI
---   money/rounding module; a migration from SQLite -> Postgres preserves these values
---   verbatim (NUMERIC(18,2) accepts them exactly).
+-- MONEY TYPING (plan/01 §4.2): PG NUMERIC(n,s) <-> SQLite INTEGER storing
+-- value × 10^s, so a double can never be inserted:
+--   NUMERIC(18,2) <-> INTEGER ×100      NUMERIC(18,4) <-> INTEGER ×10000
+--   NUMERIC(5,2)  <-> INTEGER ×100      NUMERIC(18,6) <-> INTEGER ×1000000
+-- Timestamps: TEXT ISO-8601 UTC. JSONB: TEXT. Enums: TEXT + CHECK.
+-- Booleans: INTEGER 0/1.
 --
--- AUDIT REQUIREMENT (§1.6): every money/stock table carries an "AUDIT:" comment;
--- the app MUST insert audit_log rows in the same transaction as any money/stock write.
+-- A08: only core [C] tables + the plugin host ship here; plugin tables live in
+-- per-plugin ATTACHed SQLite files (p_<slug>_ prefix fallback).
 --
--- BALANCED JOURNAL INVARIANT: SUM(debit)=SUM(credit) per journal_id enforced at the
--- app layer (cross-table CHECK is not expressible in DDL); single-side CHECK below.
---
--- This file is self-contained and loadable by `sqlite3 schema_sqlite.sql`.
+-- The S0.3 drug-master rows are NOT embedded here — the desktop seeds them
+-- separately (`apps/desktop/src/drugs.ts` seedDrugs, mirroring alembic rev 003
+-- / `server/sqlite/migrations/003_drug_seeds.sql` in INTEGER minor units) so
+-- the offline catalog stays identical to what the API serves.
 -- ============================================================================
 
 BEGIN;
 
 PRAGMA foreign_keys = ON;
 
--- ============================================================================
--- 1. BRANCHES — wzphar (§2.1, §1.12)
--- ============================================================================
-
+-- 1. branches (wzphar)
 CREATE TABLE branches (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    pharmacyid     TEXT NOT NULL,
-    phar           TEXT DEFAULT '',
-    mobile         TEXT NOT NULL,
-    pharname       TEXT NOT NULL DEFAULT '',
-    adress         TEXT DEFAULT '',
-    governorate    TEXT DEFAULT '',
-    district       TEXT DEFAULT '',
-    country        TEXT DEFAULT '',
-    currency       TEXT DEFAULT '',
-    vat_default    NUMERIC NOT NULL DEFAULT 15.00,
-    is_main_device INTEGER NOT NULL DEFAULT 0,       -- BOOLEAN 0/1
-    is_active      INTEGER NOT NULL DEFAULT 1,
-    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    pharmacyid          TEXT NOT NULL,
+    phar                TEXT DEFAULT '',
+    mobile              TEXT NOT NULL,
+    pharname            TEXT NOT NULL DEFAULT '',
+    adress              TEXT DEFAULT '',
+    governorate         TEXT DEFAULT '',
+    district            TEXT DEFAULT '',
+    country             TEXT DEFAULT '',
+    currency            TEXT DEFAULT '',
+    vat_default         INTEGER NOT NULL DEFAULT 1400,          -- 14.00 ×100
+    vat_inclusive_prices INTEGER NOT NULL DEFAULT 1,
+    is_main_device      INTEGER NOT NULL DEFAULT 0,
+    is_active           INTEGER NOT NULL DEFAULT 1,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (pharmacyid),
     UNIQUE (mobile)
 );
 
--- ============================================================================
--- 2. USERS / RBAC — FormUsers/FFFUserEdit (§1.12)
--- ============================================================================
-
+-- 2. users / rbac
 CREATE TABLE users (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    username   TEXT NOT NULL UNIQUE,
-    namee      TEXT NOT NULL DEFAULT '',
-    mobile     TEXT DEFAULT '',
-    pass_hash  TEXT DEFAULT '',
-    branch_id  INTEGER REFERENCES branches(id),
-    active     INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    username        TEXT NOT NULL UNIQUE,
+    namee           TEXT NOT NULL DEFAULT '',
+    mobile          TEXT DEFAULT '',
+    pass_hash       TEXT DEFAULT '',
+    permission_level INTEGER NOT NULL DEFAULT 1 CHECK (permission_level BETWEEN 1 AND 9),
+    branch_id       INTEGER REFERENCES branches(id),
+    active          INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE roles (
@@ -76,8 +72,8 @@ CREATE TABLE roles (
 );
 
 CREATE TABLE permissions (
-    id     INTEGER PRIMARY KEY AUTOINCREMENT,
-    code   TEXT NOT NULL UNIQUE,
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    code    TEXT NOT NULL UNIQUE,
     name_ar TEXT DEFAULT ''
 );
 
@@ -93,25 +89,23 @@ CREATE TABLE user_roles (
     PRIMARY KEY (user_id, role_id)
 );
 
--- ============================================================================
--- 3. DRUG MASTER — wzdrugs + tar.phy (EN@0x00/AR@0x34 cp1256)
--- ============================================================================
-
+-- 3. drug master
 CREATE TABLE drugs (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    drugname     TEXT NOT NULL UNIQUE,
+    drugname     TEXT NOT NULL,
     drugnamear   TEXT NOT NULL DEFAULT '',
     generic      TEXT DEFAULT '',
     classy       TEXT DEFAULT '',
     pharmacology TEXT DEFAULT '',
     co           TEXT DEFAULT '',
     unitsclass   TEXT DEFAULT '',
-    vat          NUMERIC NOT NULL DEFAULT 0,
+    tax_type     TEXT NOT NULL DEFAULT 'exempt' CHECK (tax_type IN ('exempt','5%','14%')),
+    vat          INTEGER NOT NULL DEFAULT 0,                    -- rate ×100
     units        INTEGER NOT NULL DEFAULT 0,
     unitsmall    INTEGER NOT NULL DEFAULT 0,
-    price        NUMERIC DEFAULT 0,
-    price_now    NUMERIC DEFAULT 0,
-    disco        NUMERIC DEFAULT 0,
+    price        INTEGER DEFAULT 0,                             -- ×10000
+    price_now    INTEGER DEFAULT 0,
+    disco        INTEGER DEFAULT 0,                             -- rate ×100
     pricechanged INTEGER DEFAULT 0,
     localimport  INTEGER DEFAULT 0,
     titanid      INTEGER DEFAULT 0,
@@ -121,6 +115,7 @@ CREATE TABLE drugs (
     updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
     lastedit     TEXT
 );
+CREATE UNIQUE INDEX uq_drugs_drugname ON drugs (drugname) WHERE drugname <> '';
 
 CREATE TABLE drug_barcodes (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,21 +124,18 @@ CREATE TABLE drug_barcodes (
     is_primary INTEGER NOT NULL DEFAULT 0,
     UNIQUE (drug_id, barcode)
 );
-CREATE UNIQUE INDEX uq_drug_barcodes_barcode ON drug_barcodes (barcode);
+CREATE UNIQUE INDEX uq_drug_barcodes_barcode ON drug_barcodes (barcode) WHERE barcode <> '';
 
 CREATE TABLE unit_conversions (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     drug_id   INTEGER NOT NULL REFERENCES drugs(id),
     from_unit TEXT NOT NULL,
     to_unit   TEXT NOT NULL,
-    factor    NUMERIC NOT NULL,
+    factor    INTEGER NOT NULL,                                  -- ×1000000
     CHECK (factor > 0)
 );
 
--- ============================================================================
--- 4. ACCOUNTS — wzaccfreetree + acctree.phy (§1.4)
--- ============================================================================
-
+-- 4. accounts
 CREATE TABLE accounts (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     branch_id  INTEGER NOT NULL REFERENCES branches(id),
@@ -159,10 +151,7 @@ CREATE TABLE accounts (
     UNIQUE (branch_id, code)
 );
 
--- ============================================================================
--- 5. PARTIES — wzcustomers + companies + wzsuppliers + customers.w.phy
--- ============================================================================
-
+-- 5. parties
 CREATE TABLE parties (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     branch_id             INTEGER NOT NULL REFERENCES branches(id),
@@ -174,7 +163,7 @@ CREATE TABLE parties (
     adress                TEXT DEFAULT '',
     governorate           TEXT DEFAULT '',
     district              TEXT DEFAULT '',
-    credit_limit          NUMERIC NOT NULL DEFAULT 0,
+    credit_limit          INTEGER NOT NULL DEFAULT 0,            -- ×100
     receivable_account_id INTEGER REFERENCES accounts(id),
     payable_account_id    INTEGER REFERENCES accounts(id),
     writer                TEXT DEFAULT '',
@@ -185,37 +174,29 @@ CREATE TABLE parties (
     UNIQUE (branch_id, randomid)
 );
 
--- ============================================================================
--- 6. DRUG COSTS — wzdrugs2 (§2.1)
--- ============================================================================
-
+-- 6. drug_costs (global — correction §1.3#2)
 CREATE TABLE drug_costs (
-    branch_id INTEGER NOT NULL REFERENCES branches(id),
-    drug_id   INTEGER NOT NULL REFERENCES drugs(id),
-    unitcost  NUMERIC NOT NULL DEFAULT 0,
-    costvalue NUMERIC NOT NULL DEFAULT 0,
-    expire    TEXT,
-    PRIMARY KEY (branch_id, drug_id)
+    drug_id   INTEGER PRIMARY KEY REFERENCES drugs(id),
+    unitcost  INTEGER NOT NULL DEFAULT 0,                        -- ×10000
+    costvalue INTEGER NOT NULL DEFAULT 0,
+    expire    TEXT
 );
 
--- ============================================================================
--- 7. STOCK BATCHES — wzgard (§1.2)
--- ============================================================================
-
+-- 7. stock_batches
 CREATE TABLE stock_batches (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     branch_id    INTEGER NOT NULL REFERENCES branches(id),
     drug_id      INTEGER NOT NULL REFERENCES drugs(id),
     randomid     TEXT NOT NULL,
-    qty          NUMERIC NOT NULL DEFAULT 0,
+    qty          INTEGER NOT NULL DEFAULT 0,                     -- ×10000
     expire       TEXT,
-    cost         NUMERIC NOT NULL DEFAULT 0,
-    vat          NUMERIC NOT NULL DEFAULT 0,
-    price        NUMERIC NOT NULL DEFAULT 0,
-    oldstock     NUMERIC NOT NULL DEFAULT 0,
+    cost         INTEGER NOT NULL DEFAULT 0,                     -- ×10000
+    vat          INTEGER NOT NULL DEFAULT 0,                     -- rate ×100
+    price        INTEGER NOT NULL DEFAULT 0,                     -- ×10000
+    oldstock     INTEGER NOT NULL DEFAULT 0,                     -- ×10000
     typee        TEXT NOT NULL DEFAULT 'purchase' CHECK (typee IN ('purchase','sale','return','count','transfer_in','transfer_out','opening','correction')),
-    vatvalue     NUMERIC DEFAULT 0,
-    totalwithvat NUMERIC DEFAULT 0,
+    vatvalue     INTEGER DEFAULT 0,                              -- ×100
+    totalwithvat INTEGER DEFAULT 0,                              -- ×100
     writer       TEXT DEFAULT '',
     classy       TEXT DEFAULT '',
     created_by   INTEGER REFERENCES users(id),
@@ -224,10 +205,7 @@ CREATE TABLE stock_batches (
 );
 CREATE INDEX ix_stock_batches_expiry ON stock_batches (branch_id, drug_id, expire);
 
--- ============================================================================
--- 8. WORK PERIODS & SHIFTS — workperiod.phy (§1.9)
--- ============================================================================
-
+-- 8. work periods & shifts
 CREATE TABLE work_periods (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     branch_id INTEGER NOT NULL REFERENCES branches(id),
@@ -244,14 +222,11 @@ CREATE TABLE shifts (
     opened_by      INTEGER NOT NULL REFERENCES users(id),
     opened_at      TEXT NOT NULL DEFAULT (datetime('now')),
     closed_at      TEXT,
-    cash_start     NUMERIC NOT NULL DEFAULT 0,
+    cash_start     INTEGER NOT NULL DEFAULT 0,                   -- ×100
     CHECK (closed_at IS NULL OR closed_at >= opened_at)
 );
 
--- ============================================================================
--- 9. INVOICES — invoicedata 17-col hybrid + titanksasales 9-col
--- ============================================================================
-
+-- 9. invoices + lines + versions + splits
 CREATE TABLE invoices (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     branch_id      INTEGER NOT NULL REFERENCES branches(id),
@@ -261,18 +236,19 @@ CREATE TABLE invoices (
     datetimee      TEXT,
     silsilaid      TEXT DEFAULT '',
     party_id       INTEGER REFERENCES parties(id),
-    subtotal       NUMERIC NOT NULL DEFAULT 0,
-    discount       NUMERIC NOT NULL DEFAULT 0,
-    vat            NUMERIC NOT NULL DEFAULT 0,
-    totalvalue     NUMERIC NOT NULL DEFAULT 0,
-    payed          NUMERIC NOT NULL DEFAULT 0,
-    agel           NUMERIC NOT NULL DEFAULT 0,
+    subtotal       INTEGER NOT NULL DEFAULT 0,                   -- ×100
+    discount       INTEGER NOT NULL DEFAULT 0,
+    vat            INTEGER NOT NULL DEFAULT 0,
+    totalvalue     INTEGER NOT NULL DEFAULT 0,
+    payed          INTEGER NOT NULL DEFAULT 0,
+    agel           INTEGER NOT NULL DEFAULT 0,
     status         TEXT NOT NULL DEFAULT 'saved' CHECK (status IN ('saved','unsaved','unsave','copy','transfer_to_sale_return','transfer_to_purchase','closed','archived','void')),
     writer         TEXT DEFAULT '',
     created_by     INTEGER REFERENCES users(id),
     created_at     TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
     last_edited_at TEXT,
+    UNIQUE (branch_id, invoice_no),
     CHECK (payed + agel = totalvalue)
 );
 CREATE INDEX ix_invoices_branch_date ON invoices (branch_id, datee);
@@ -285,15 +261,17 @@ CREATE TABLE invoice_lines (
     branch_id  INTEGER NOT NULL REFERENCES branches(id),
     drug_id    INTEGER NOT NULL REFERENCES drugs(id),
     batch_id   INTEGER REFERENCES stock_batches(id),
-    qty        NUMERIC NOT NULL DEFAULT 0,
+    qty        INTEGER NOT NULL DEFAULT 0,                       -- ×10000
     unit       TEXT DEFAULT 'pack',
-    unit_price NUMERIC NOT NULL DEFAULT 0,
-    cost       NUMERIC NOT NULL DEFAULT 0,
-    disc       NUMERIC NOT NULL DEFAULT 0,
-    vat        NUMERIC NOT NULL DEFAULT 0,
-    line_total NUMERIC NOT NULL DEFAULT 0,
+    unit_price INTEGER NOT NULL DEFAULT 0,                       -- ×10000
+    cost       INTEGER NOT NULL DEFAULT 0,                       -- ×10000
+    disc       INTEGER NOT NULL DEFAULT 0,                       -- rate ×100
+    tax_type   TEXT NOT NULL DEFAULT 'exempt' CHECK (tax_type IN ('exempt','5%','14%')),
+    vat        INTEGER NOT NULL DEFAULT 0,                       -- rate ×100
+    vat_amount INTEGER NOT NULL DEFAULT 0,                       -- ×100
+    line_total INTEGER NOT NULL DEFAULT 0,                       -- ×100
     expire     TEXT,
-    minimum    NUMERIC DEFAULT 0,
+    minimum    INTEGER DEFAULT 0,                                -- ×10000
     tips       TEXT DEFAULT '',
     iddatetime TEXT,
     CHECK (unit_price >= 0)
@@ -317,16 +295,13 @@ CREATE TABLE payment_splits (
     invoice_id  INTEGER NOT NULL REFERENCES invoices(id),
     branch_id   INTEGER NOT NULL REFERENCES branches(id),
     method      TEXT NOT NULL DEFAULT 'cash' CHECK (method IN ('cash','card','credit','manual_cash','manual_card')),
-    amount      NUMERIC NOT NULL DEFAULT 0,
+    amount      INTEGER NOT NULL DEFAULT 0,                      -- ×100
     received_at TEXT NOT NULL DEFAULT (datetime('now')),
     user_id     INTEGER REFERENCES users(id),
     CHECK (amount > 0)
 );
 
--- ============================================================================
--- 10. JOURNALS & LEDGER — farysales 17-col + Accounting\moves (§1.4)
--- ============================================================================
-
+-- 10. journals + lines
 CREATE TABLE journals (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     branch_id      INTEGER NOT NULL REFERENCES branches(id),
@@ -346,8 +321,8 @@ CREATE TABLE journal_lines (
     journal_id      INTEGER NOT NULL REFERENCES journals(id),
     branch_id       INTEGER NOT NULL REFERENCES branches(id),
     account_id      INTEGER NOT NULL REFERENCES accounts(id),
-    debit           NUMERIC NOT NULL DEFAULT 0,
-    credit          NUMERIC NOT NULL DEFAULT 0,
+    debit           INTEGER NOT NULL DEFAULT 0,                  -- ×100
+    credit          INTEGER NOT NULL DEFAULT 0,
     contra_party_id INTEGER REFERENCES parties(id),
     datee           TEXT NOT NULL,
     month           INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
@@ -362,47 +337,21 @@ CREATE TABLE journal_lines (
 CREATE INDEX ix_journal_lines_account ON journal_lines (branch_id, account_id, month, year);
 CREATE INDEX ix_journal_lines_journal ON journal_lines (journal_id);
 
--- ============================================================================
--- 11. BALANCES & MONTH CLOSE — farysales monthe/yearo, monthy\moves + start-data
--- ============================================================================
-
+-- 11. balances
 CREATE TABLE balances (
     branch_id  INTEGER NOT NULL REFERENCES branches(id),
     account_id INTEGER NOT NULL REFERENCES accounts(id),
     month      INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
     year       INTEGER NOT NULL,
-    debit      NUMERIC NOT NULL DEFAULT 0,
-    credit     NUMERIC NOT NULL DEFAULT 0,
-    balance    NUMERIC NOT NULL DEFAULT 0,
+    debit      INTEGER NOT NULL DEFAULT 0,                       -- ×100
+    credit     INTEGER NOT NULL DEFAULT 0,
+    balance    INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (branch_id, account_id, month, year),
     CHECK (balance = debit - credit)
 );
 
-CREATE TABLE monthly_close (
-    branch_id INTEGER NOT NULL REFERENCES branches(id),
-    year      INTEGER NOT NULL,
-    month     INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
-    status    TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','reopened')),
-    closed_by INTEGER REFERENCES users(id),
-    closed_at TEXT,
-    PRIMARY KEY (branch_id, year, month)
-);
-
-CREATE TABLE month_open_balances (
-    branch_id  INTEGER NOT NULL REFERENCES branches(id),
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
-    year       INTEGER NOT NULL,
-    month      INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
-    debit      NUMERIC NOT NULL DEFAULT 0,
-    credit     NUMERIC NOT NULL DEFAULT 0,
-    PRIMARY KEY (branch_id, account_id, year, month)
-);
-
--- ============================================================================
--- 12. DRAWER & DAY CLOSE — Daily.phy, MonyInfo.phy (§1.1, §1.5, §1.11)
--- ============================================================================
-
+-- 12. drawer & day close
 CREATE TABLE drawer_movements (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     branch_id      INTEGER NOT NULL REFERENCES branches(id),
@@ -410,7 +359,7 @@ CREATE TABLE drawer_movements (
     direction      TEXT NOT NULL DEFAULT 'in' CHECK (direction IN ('in','out')),
     reason         TEXT NOT NULL DEFAULT 'cash_sale' CHECK (reason IN ('cash_sale','cash_return','supplier_pay','customer_settlement','expense','transfer','opening','correction')),
     method         TEXT NOT NULL DEFAULT 'cash' CHECK (method IN ('cash','network')),
-    amount         NUMERIC NOT NULL DEFAULT 0,
+    amount         INTEGER NOT NULL DEFAULT 0,                   -- ×100
     shift_id       INTEGER REFERENCES shifts(id),
     ref_invoice_id INTEGER REFERENCES invoices(id),
     user_id        INTEGER REFERENCES users(id),
@@ -425,22 +374,22 @@ CREATE TABLE daily_close (
     datee          TEXT NOT NULL,
     shift_id       INTEGER REFERENCES shifts(id),
     work_period_id INTEGER REFERENCES work_periods(id),
-    drawer_start   NUMERIC NOT NULL DEFAULT 0,
-    expected_cash  NUMERIC NOT NULL DEFAULT 0,
-    counted_cash   NUMERIC NOT NULL DEFAULT 0,
-    difference     NUMERIC NOT NULL DEFAULT 0,
-    manual_cash    NUMERIC NOT NULL DEFAULT 0,
-    manual_card    NUMERIC NOT NULL DEFAULT 0,
-    net_cash       NUMERIC NOT NULL DEFAULT 0,
-    net_network    NUMERIC NOT NULL DEFAULT 0,
-    purchases      NUMERIC NOT NULL DEFAULT 0,
-    expenses       NUMERIC NOT NULL DEFAULT 0,
-    cost_of_sales  NUMERIC NOT NULL DEFAULT 0,
-    net_profit     NUMERIC NOT NULL DEFAULT 0,
-    discounts      NUMERIC NOT NULL DEFAULT 0,
-    vat_sales      NUMERIC NOT NULL DEFAULT 0,
-    vat_purchases  NUMERIC NOT NULL DEFAULT 0,
-    vat_expenses   NUMERIC NOT NULL DEFAULT 0,
+    drawer_start   INTEGER NOT NULL DEFAULT 0,                   -- ×100
+    expected_cash  INTEGER NOT NULL DEFAULT 0,
+    counted_cash   INTEGER NOT NULL DEFAULT 0,
+    difference     INTEGER NOT NULL DEFAULT 0,
+    manual_cash    INTEGER NOT NULL DEFAULT 0,
+    manual_card    INTEGER NOT NULL DEFAULT 0,
+    net_cash       INTEGER NOT NULL DEFAULT 0,
+    net_network    INTEGER NOT NULL DEFAULT 0,
+    purchases      INTEGER NOT NULL DEFAULT 0,
+    expenses       INTEGER NOT NULL DEFAULT 0,
+    cost_of_sales  INTEGER NOT NULL DEFAULT 0,
+    net_profit     INTEGER NOT NULL DEFAULT 0,
+    discounts      INTEGER NOT NULL DEFAULT 0,
+    vat_sales      INTEGER NOT NULL DEFAULT 0,
+    vat_purchases  INTEGER NOT NULL DEFAULT 0,
+    vat_expenses   INTEGER NOT NULL DEFAULT 0,
     status         TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','reopened')),
     closed_by      INTEGER REFERENCES users(id),
     closed_at      TEXT,
@@ -448,93 +397,31 @@ CREATE TABLE daily_close (
     CHECK (difference = counted_cash - expected_cash)
 );
 
--- ============================================================================
--- 13. BRANCH STOCK — titanstock + titanksastock (§2.1)
--- ============================================================================
-
+-- 13. branch_stock
 CREATE TABLE branch_stock (
     branch_id INTEGER NOT NULL REFERENCES branches(id),
     drug_id   INTEGER NOT NULL REFERENCES drugs(id),
-    qty       NUMERIC NOT NULL DEFAULT 0,
-    minimum   NUMERIC NOT NULL DEFAULT 0,
+    qty       INTEGER NOT NULL DEFAULT 0,                        -- ×10000
+    minimum   INTEGER NOT NULL DEFAULT 0,
     silsilaid TEXT DEFAULT '',
     classy    TEXT DEFAULT '',
-    price     NUMERIC DEFAULT 0,
+    price     INTEGER DEFAULT 0,                                 -- ×10000
     barcode   TEXT DEFAULT '',
     lastedit  TEXT,
     PRIMARY KEY (branch_id, drug_id)
 );
 
--- ============================================================================
--- 14. TRANSFERS — titaninn + delivery.phy (§1.9)
--- ============================================================================
-
-CREATE TABLE transfers (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch_id        INTEGER NOT NULL REFERENCES branches(id),
-    fatid            INTEGER NOT NULL DEFAULT 0,
-    datee            TEXT,
-    silsilaid        TEXT DEFAULT '',
-    source_branch_id INTEGER REFERENCES branches(id),
-    target_branch_id INTEGER REFERENCES branches(id),
-    legacy_source    TEXT DEFAULT '',
-    legacy_target    TEXT DEFAULT '',
-    itemsasstring    TEXT DEFAULT '',
-    status           TEXT NOT NULL DEFAULT 'created' CHECK (status IN ('created','in_transit','delivered','received','cancelled')),
-    created_by       INTEGER REFERENCES users(id),
-    created_at       TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX ix_transfers_target ON transfers (target_branch_id);
-
-CREATE TABLE transfer_lines (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    transfer_id INTEGER NOT NULL REFERENCES transfers(id),
-    drug_id     INTEGER NOT NULL REFERENCES drugs(id),
-    qty         NUMERIC NOT NULL DEFAULT 0,
-    expire      TEXT,
-    batch_id    INTEGER REFERENCES stock_batches(id),
-    unit_price  NUMERIC DEFAULT 0
-);
-
--- ============================================================================
--- 15. SHORTAGES & NEEDS — §1.8, titanneed, orders
--- ============================================================================
-
+-- 15. shortages + corrections
 CREATE TABLE shortage_flags (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     branch_id   INTEGER NOT NULL REFERENCES branches(id),
     drug_id     INTEGER NOT NULL REFERENCES drugs(id),
-    current_qty NUMERIC NOT NULL DEFAULT 0,
-    minimum     NUMERIC NOT NULL DEFAULT 0,
+    current_qty INTEGER NOT NULL DEFAULT 0,                      -- ×10000
+    minimum     INTEGER NOT NULL DEFAULT 0,
     method      TEXT NOT NULL DEFAULT 'manual' CHECK (method IN ('manual','half_auto','sales_rate')),
     flagged_at  TEXT NOT NULL DEFAULT (datetime('now')),
     resolved_at TEXT,
     resolved_by INTEGER REFERENCES users(id)
-);
-
-CREATE TABLE needs (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch_id        INTEGER NOT NULL REFERENCES branches(id),
-    drug_id          INTEGER NOT NULL REFERENCES drugs(id),
-    qty              NUMERIC NOT NULL DEFAULT 0,
-    datee            TEXT,
-    sender_branch_id INTEGER REFERENCES branches(id),
-    target_branch_id INTEGER REFERENCES branches(id),
-    legacy_sender    TEXT DEFAULT '',
-    legacy_target    TEXT DEFAULT '',
-    status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','fulfilled','cancelled')),
-    created_at       TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE purchase_orders (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch_id  INTEGER NOT NULL REFERENCES branches(id),
-    orderid    TEXT DEFAULT '',
-    orderdate  TEXT,
-    datee      TEXT,
-    status     TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','saved','received','cancelled')),
-    created_by INTEGER REFERENCES users(id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE stock_correction_requests (
@@ -542,7 +429,7 @@ CREATE TABLE stock_correction_requests (
     branch_id    INTEGER NOT NULL REFERENCES branches(id),
     drug_id      INTEGER NOT NULL REFERENCES drugs(id),
     batch_id     INTEGER REFERENCES stock_batches(id),
-    delta        NUMERIC NOT NULL,
+    delta        INTEGER NOT NULL,                               -- ×10000
     reason       TEXT DEFAULT '',
     requested_by INTEGER NOT NULL REFERENCES users(id),
     status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
@@ -552,86 +439,7 @@ CREATE TABLE stock_correction_requests (
     CHECK ((status = 'pending') = (decided_at IS NULL))
 );
 
--- ============================================================================
--- 16. CHAIN / DEAD-STOCK EXCHANGE — RawakidTablew + ChainBuyStore + ChainBuyUsers
--- ============================================================================
-
-CREATE TABLE dead_stock_exchange (
-    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch_id             INTEGER NOT NULL REFERENCES branches(id),
-    drug_id               INTEGER NOT NULL REFERENCES drugs(id),
-    qty                   NUMERIC NOT NULL DEFAULT 0,
-    expire                TEXT,
-    price                 NUMERIC DEFAULT 0,
-    sell_disc             NUMERIC DEFAULT 0,
-    tips                  TEXT DEFAULT '',
-    governorate           TEXT DEFAULT '',
-    district              TEXT DEFAULT '',
-    source_pharmacist_tel TEXT DEFAULT '',
-    requester_tel         TEXT DEFAULT '',
-    source_iddatetime     TEXT,
-    country               TEXT DEFAULT '',
-    status                TEXT NOT NULL DEFAULT 'created' CHECK (status IN ('created','in_transit','delivered','received','cancelled')),
-    created_at            TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE chain_buy_orders (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch_id     INTEGER NOT NULL REFERENCES branches(id),
-    drug_id       INTEGER NOT NULL REFERENCES drugs(id),
-    store_name    TEXT DEFAULT '',
-    pharmacist_tel TEXT DEFAULT '',
-    requester_tel TEXT DEFAULT '',
-    qty           NUMERIC NOT NULL DEFAULT 0,
-    price         NUMERIC DEFAULT 0,
-    sell_disc     NUMERIC DEFAULT 0,
-    expire        TEXT,
-    tips          TEXT DEFAULT '',
-    governorate   TEXT DEFAULT '',
-    district      TEXT DEFAULT '',
-    country       TEXT DEFAULT '',
-    iddatetime    TEXT,
-    status        TEXT NOT NULL DEFAULT 'created' CHECK (status IN ('created','in_transit','delivered','received','cancelled')),
-    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- ============================================================================
--- 17. E-INVOICE — ZATCA + oot3/netcounter (§1.10)
--- ============================================================================
-
-CREATE TABLE einvoice_log (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    invoice_id   INTEGER NOT NULL REFERENCES invoices(id),
-    branch_id    INTEGER NOT NULL REFERENCES branches(id),
-    kind         TEXT NOT NULL DEFAULT 'zatca' CHECK (kind IN ('zatca','eta')),
-    uuid         TEXT DEFAULT '',
-    status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','submitted','accepted','rejected','failed','cancelled','void')),
-    hash         TEXT DEFAULT '',
-    qr_counter   INTEGER,
-    qr_hash      TEXT,
-    qr_data      TEXT DEFAULT '',
-    payload_xml  TEXT DEFAULT '',
-    payload_json TEXT,
-    response     TEXT DEFAULT '',
-    submitted_at TEXT,
-    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX ix_einvoice_log_invoice ON einvoice_log (invoice_id);
-CREATE INDEX ix_einvoice_log_kind_status ON einvoice_log (kind, status);
-
-CREATE TABLE einvoice_counters (
-    branch_id    INTEGER NOT NULL REFERENCES branches(id),
-    kind         TEXT NOT NULL DEFAULT 'zatca' CHECK (kind IN ('zatca','eta')),
-    last_counter INTEGER NOT NULL DEFAULT 0,
-    last_hash    TEXT DEFAULT '',
-    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (branch_id, kind)
-);
-
--- ============================================================================
--- 18. AUDIT & SYNC — TitanUserAction, usersourceupdate (§1.6, §1.3)
--- ============================================================================
-
+-- 18. audit + sync (core outbox seam)
 CREATE TABLE audit_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     branch_id  INTEGER REFERENCES branches(id),
@@ -666,21 +474,6 @@ CREATE TABLE sync_log (
 );
 CREATE INDEX ix_sync_log_status ON sync_log (branch_id, status);
 
-CREATE TABLE drug_sync_outbox (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch_id   INTEGER NOT NULL REFERENCES branches(id),
-    drug_id     INTEGER NOT NULL REFERENCES drugs(id),
-    price       NUMERIC DEFAULT 0,
-    units       INTEGER DEFAULT 0,
-    vat         NUMERIC DEFAULT 0,
-    barcode     TEXT DEFAULT '',
-    shape       INTEGER DEFAULT 0,
-    datee       TEXT,
-    localimport INTEGER DEFAULT 0,
-    status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','applied','failed','skipped')),
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
 CREATE TABLE branch_identities (
     legacy_table  TEXT NOT NULL,
     legacy_column TEXT NOT NULL,
@@ -689,36 +482,7 @@ CREATE TABLE branch_identities (
     PRIMARY KEY (legacy_table, legacy_column, legacy_value)
 );
 
--- ============================================================================
--- 19. OPERATIONAL / STATE FILES → SQL (§1.9, §2.2)
--- ============================================================================
-
-CREATE TABLE user_drawer_money (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch_id   INTEGER NOT NULL REFERENCES branches(id),
-    user_id     INTEGER REFERENCES users(id),
-    shift_id    INTEGER REFERENCES shifts(id),
-    datee       TEXT,
-    cash        NUMERIC NOT NULL DEFAULT 0,
-    card        NUMERIC NOT NULL DEFAULT 0,
-    manual_cash NUMERIC NOT NULL DEFAULT 0,
-    manual_card NUMERIC NOT NULL DEFAULT 0,
-    credit      NUMERIC NOT NULL DEFAULT 0,
-    record_no   INTEGER,
-    source_file TEXT DEFAULT 'usersmony.phy',
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE drug_interactions (
-    id       INTEGER PRIMARY KEY AUTOINCREMENT,
-    drug_a   INTEGER NOT NULL REFERENCES drugs(id),
-    drug_b   INTEGER NOT NULL REFERENCES drugs(id),
-    severity TEXT NOT NULL DEFAULT 'unknown' CHECK (severity IN ('minor','moderate','major','contraindicated','unknown')),
-    note     TEXT DEFAULT '',
-    UNIQUE (drug_a, drug_b),
-    CHECK (drug_a < drug_b)
-);
-
+-- 19. ops/config
 CREATE TABLE integration_config (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     branch_id  INTEGER REFERENCES branches(id),
@@ -729,51 +493,15 @@ CREATE TABLE integration_config (
     UNIQUE (branch_id, key)
 );
 
-CREATE TABLE archive_imports (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch_id   INTEGER REFERENCES branches(id),
-    source_path TEXT DEFAULT '',
-    file_count  INTEGER DEFAULT 0,
-    status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','done','failed')),
-    started_at  TEXT,
-    finished_at TEXT,
-    note        TEXT DEFAULT ''
-);
-
-CREATE TABLE archive_exports (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch_id   INTEGER REFERENCES branches(id),
-    target_path TEXT DEFAULT '',
-    file_count  INTEGER DEFAULT 0,
-    status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','done','failed')),
-    started_at  TEXT,
-    finished_at TEXT,
-    note        TEXT DEFAULT ''
-);
-
-CREATE TABLE external_drug_catalog (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch_id   INTEGER REFERENCES branches(id),
-    create_date TEXT,
-    mobile      TEXT DEFAULT '',
-    name_en     TEXT DEFAULT '',
-    name_ar     TEXT DEFAULT '',
-    drugname    TEXT DEFAULT '',
-    price       NUMERIC DEFAULT 0,
-    barcode     TEXT DEFAULT '',
-    status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','applied','failed','skipped')),
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
 CREATE TABLE price_change_log (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     branch_id     INTEGER REFERENCES branches(id),
     drug_id       INTEGER REFERENCES drugs(id),
     barcode       TEXT DEFAULT '',
-    price         NUMERIC DEFAULT 0,
-    disco         NUMERIC DEFAULT 0,
+    price         INTEGER DEFAULT 0,                             -- ×10000
+    disco         INTEGER DEFAULT 0,                             -- rate ×100
     units         INTEGER DEFAULT 0,
-    quant         NUMERIC DEFAULT 0,
+    quant         INTEGER DEFAULT 0,                             -- ×10000
     datee         TEXT,
     tips          TEXT DEFAULT '',
     country       TEXT DEFAULT '',
@@ -793,38 +521,146 @@ CREATE TABLE manual_journal_entries (
     branch_id   INTEGER NOT NULL REFERENCES branches(id),
     record_no   INTEGER,
     datee       TEXT,
-    amount      NUMERIC NOT NULL DEFAULT 0,
+    amount      INTEGER NOT NULL DEFAULT 0,                      -- ×100
     source_file TEXT DEFAULT 'daily-manual.phy',
     journal_id  INTEGER REFERENCES journals(id),
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE branch_registry (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    mobile       TEXT NOT NULL UNIQUE,
-    pharmacyname TEXT DEFAULT '',
-    barcode      TEXT DEFAULT '',
-    changed      TEXT,
-    apptype      TEXT DEFAULT '',
-    is_registered INTEGER NOT NULL DEFAULT 1
-);
-
--- ============================================================================
--- 20. APP CONFIG — VAT/currency country config (§1.11)
--- ============================================================================
-
 CREATE TABLE app_config (
     key           TEXT PRIMARY KEY,
     value         TEXT DEFAULT '',
-    value_numeric NUMERIC,
+    value_numeric INTEGER,                                       -- ×10000
     updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Seed config (Gulf 15% default; Egypt switch in app_config)
+-- plugin host (plan/08 §2.2.1)
+CREATE TABLE app_plugins (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug               TEXT NOT NULL UNIQUE,
+    name_ar            TEXT NOT NULL,
+    name_en            TEXT NOT NULL,
+    version            TEXT NOT NULL,
+    core_requires      TEXT NOT NULL,
+    sdk_version        TEXT NOT NULL,
+    status             TEXT NOT NULL DEFAULT 'installed' CHECK (status IN ('installed','enabled','disabled','error')),
+    license_status     TEXT NOT NULL DEFAULT 'unlicensed' CHECK (license_status IN ('unlicensed','trial','licensed','expired')),
+    license_expires_at TEXT,
+    installed_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE plugin_dependencies (
+    plugin_id   INTEGER NOT NULL REFERENCES app_plugins(id),
+    depends_on  TEXT NOT NULL,
+    min_version TEXT NOT NULL,
+    max_version TEXT,
+    PRIMARY KEY (plugin_id, depends_on)
+);
+
+CREATE TABLE plugin_branch_grants (
+    plugin_id INTEGER NOT NULL REFERENCES app_plugins(id),
+    branch_id INTEGER NOT NULL REFERENCES branches(id),
+    enabled   INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (plugin_id, branch_id)
+);
+
+CREATE TABLE plugin_settings (
+    branch_id INTEGER NOT NULL REFERENCES branches(id),
+    plugin_id INTEGER NOT NULL REFERENCES app_plugins(id),
+    key       TEXT NOT NULL,
+    value     TEXT,
+    encrypted INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (branch_id, plugin_id, key)
+);
+
+-- rev 002 seeds (mirrors sqlite/migrations/002_seeds.sql).
+-- app_config: EG/EGP/14% (correction §1.3#5); values in minor units.
 INSERT INTO app_config (key, value, value_numeric) VALUES
-    ('country', 'SA', NULL),
-    ('currency', 'SAR', NULL),
-    ('vat_default_rate', NULL, 15.00),
-    ('rounding', 'half-up-2dp', NULL);
+    ('country', 'EG', NULL),
+    ('currency', 'EGP', NULL),
+    ('vat_default_rate', NULL, 140000),   -- 14.00 ×10000
+    ('rounding', 'half-up-2dp', NULL),
+    ('vat_inclusive_prices', 'true', NULL),
+    ('plugins_enabled', 'true', NULL);
+
+INSERT INTO branches
+    (pharmacyid, phar, mobile, pharname, vat_default, vat_inclusive_prices, is_main_device, is_active)
+VALUES
+    ('MAIN', 'MAIN', '01000000000', 'Main Pharmacy', 1400, 1, 1, 1);
+
+INSERT INTO permissions (code, name_ar) VALUES
+    ('1', 'المبيعات'), ('2', 'المشتريات'), ('3', 'الأصناف والمخزون'),
+    ('4', 'العملاء والموردين'), ('5', 'الخزينة والأمانات'), ('6', 'الصلاحيات والمستخدمين'),
+    ('7', 'إغلاق اليوم'), ('8', 'تعديل الفواتير'), ('9', 'التقارير'),
+    ('sale.create', 'بيع'), ('sale.edit_invoice', 'تعديل فاتورة'),
+    ('day.close', 'إغلاق اليوم'), ('stock.adjust', 'تعديل رصيد'),
+    ('approvals', 'الموافقات'), ('reports', 'التقارير'), ('users.manage', 'إدارة المستخدمين');
+
+INSERT INTO roles (name) VALUES
+    ('admin'), ('pharmacist'), ('cashier'), ('accountant'), ('manager');
+
+-- admin -> all permissions
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r, permissions p WHERE r.name = 'admin';
+-- manager -> operational subset
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r, permissions p
+WHERE r.name = 'manager' AND p.code IN
+    ('sale.create','sale.edit_invoice','day.close','stock.adjust','approvals','reports');
+-- accountant -> reports/approvals
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r, permissions p
+WHERE r.name = 'accountant' AND p.code IN ('reports','approvals');
+-- pharmacist/cashier -> sale.create
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r, permissions p
+WHERE r.name IN ('pharmacist','cashier') AND p.code = 'sale.create';
+
+INSERT INTO users (username, namee, pass_hash, permission_level, branch_id, active)
+VALUES ('admin', 'Administrator', 'changeme', 9, 1, 1);
+
+INSERT INTO user_roles (user_id, role_id)
+SELECT u.id, r.id FROM users u, roles r WHERE u.username = 'admin' AND r.name = 'admin';
+
+-- default chart of accounts (per-branch template)
+INSERT INTO accounts (branch_id, code, name_ar, type, is_active) VALUES
+    (1, '1000', 'اصول.متداولة.خزينة/درج', 'asset', 1),
+    (1, '1100', 'اصول.متداولة.عملاء', 'asset', 1),
+    (1, '1200', 'اصول.متداولة.مخزون', 'asset', 1),
+    (1, '1300', 'اصول.ثابتة', 'asset', 1),
+    (1, '2000', 'خصوم.متداولة.موردين', 'liability', 1),
+    (1, '2100', 'خصوم.ضريبة.مبيعات', 'liability', 1),
+    (1, '2110', 'خصوم.ضريبة.مشتريات', 'liability', 1),
+    (1, '3000', 'حقوق ملكية.راس المال', 'equity', 1),
+    (1, '4000', 'ايرادات.مبيعات', 'income', 1),
+    (1, '5000', 'مصروفات', 'expense', 1),
+    (1, '6000', 'تكلفة المبيعات', 'expense', 1);
+
+-- pilot plugins registered (A10), disabled until the plugin ships
+INSERT INTO app_plugins (slug, name_ar, name_en, version, core_requires, sdk_version, status)
+VALUES
+    ('pharmatag-eta', 'الفوترة الإلكترونية', 'E-invoicing (ETA)', '0.0.0', '>=0.1.0,<1.0.0', '0.1.0', 'installed'),
+    ('pharmatag-ledger', 'المحاسبة', 'Accounting & Ledger', '0.0.0', '>=0.1.0,<1.0.0', '0.1.0', 'installed');
+
+INSERT INTO plugin_branch_grants (plugin_id, branch_id, enabled)
+SELECT id, 1, 0 FROM app_plugins;
+
+-- rev 005: drug-master price levels (mirrors sqlite/migrations/005_drug_price_levels.sql).
+-- Runs AFTER the rev 002 seeds so the drugs.manage role link can resolve roles/permissions.
+-- NUMERIC(18,4) <-> INTEGER ×10000; column-level CHECKs (SQLite can't ALTER table-level).
+ALTER TABLE drugs ADD COLUMN price_wholesale INTEGER DEFAULT 0 CHECK (price_wholesale >= 0);
+ALTER TABLE drugs ADD COLUMN price_cost     INTEGER DEFAULT 0 CHECK (price_cost >= 0);
+
+-- Seeded medicines (rev 003): wholesale == public price (same backfill as PG).
+-- The desktop seeds 003 rows at runtime (apps/desktop/src/drugs.ts seedDrugs), which
+-- supplies price_wholesale/price_cost directly; this UPDATE is the twin-equivalent backfill.
+UPDATE drugs SET price_wholesale = price WHERE price_wholesale = 0;
+
+-- drugs.manage gates drug-master writes (legacy level-3 area الأصناف والمخزون).
+INSERT INTO permissions (code, name_ar) VALUES ('drugs.manage', 'الأصناف والمخزون');
+INSERT INTO role_permissions (role_id, permission_id)
+    SELECT 1, id FROM permissions WHERE code = 'drugs.manage';
 
 COMMIT;

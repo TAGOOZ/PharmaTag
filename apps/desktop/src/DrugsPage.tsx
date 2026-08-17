@@ -1,7 +1,7 @@
 import { formatMoney, StatusChip } from '@pharmatag/ui';
 import type Database from '@tauri-apps/plugin-sql';
 import { useEffect, useState } from 'react';
-import { type DrugRow, listDrugs } from './drugs';
+import { type DrugRow, listDrugs, PRICE_MINOR_UNIT } from './drugs';
 
 type PageState = 'loading' | 'ready' | 'error';
 
@@ -64,7 +64,9 @@ export function DrugsPage({ db }: { db: Database | null }) {
                   <tr key={drug.id} className="border-b border-border">
                     <td className="px-3 py-2">{drug.drugnamear}</td>
                     <td className="pt-mono px-3 py-2 text-muted">{drug.drugname}</td>
-                    <td className="pt-mono px-3 py-2">{formatMoney(drug.price)}</td>
+                    <td className="pt-mono px-3 py-2">
+                      {formatMoney(drug.price / PRICE_MINOR_UNIT)}
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -4,20 +4,23 @@ Monorepo: Next.js web shell (`apps/web`), Tauri 2 desktop app (`apps/desktop`), 
 
 ## Prerequisites
 
-- **Node.js ≥ 20** (developed on 24) + **pnpm 10.14.0** (`corepack enable pnpm` or `npm i -g pnpm@10.14.0`)
+- **Node.js ≥ 23.4** (recommended: 24) + **pnpm 10.14.0** (`corepack enable pnpm` or `npm i -g pnpm@10.14.0`) — the desktop tests import `node:sqlite`, which is not on Node 20
 - **Python ≥ 3.12** (developed on 3.14) + `python3-venv`
 - **PostgreSQL ≥ 16** running locally
+- **Rust toolchain + Tauri system deps** (desktop only): `pnpm --filter @pharmatag/desktop tauri dev` needs `cargo` and, on Linux, `webkit2gtk-4.1` + `libappindicator3` (see the [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/)); other OSes need the equivalent per-OS deps
 
 ## 1. PostgreSQL
 
-Create the test role/database (names are the defaults `server/app/core/config.py` expects):
+Create the test role/database (names are the defaults `server/app/core/config.py` expects). `CREATEDB` is required — the migration tests create/drop throwaway databases as this role:
 
 ```bash
-psql -U postgres <<'SQL'
-CREATE ROLE pharmatag_test LOGIN PASSWORD 'pharmatag_test';
+sudo -u postgres psql <<'SQL'
+CREATE ROLE pharmatag_test LOGIN CREATEDB PASSWORD 'pharmatag_test';
 CREATE DATABASE pharmatag_test OWNER pharmatag_test;
 SQL
 ```
+
+(If your user has a peer-login `postgres` superuser session, plain `psql -U postgres` works too; the `sudo -u postgres psql` variant covers the common case.)
 
 ## 2. API server (`server/`)
 
@@ -41,6 +44,8 @@ Run tests (unit + integration against Postgres):
 PHARMATAG_DB_URL=postgresql+psycopg://pharmatag_test:pharmatag_test@localhost:5432/pharmatag_test \
   .venv/bin/python -m pytest tests -q
 ```
+
+**Non-dev deployments:** set `PHARMATAG_JWT_SECRET` to a strong random value — the compiled-in default (`server/app/core/config.py`) is a dev-only placeholder.
 
 **SQLite twin + parity guard** (the desktop uses the SQLite twin; keep it in sync):
 

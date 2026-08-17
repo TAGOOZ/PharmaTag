@@ -26,11 +26,17 @@ function seed(db: DatabaseSync): void {
       drug.drugnamear,
       drug.generic,
       drug.classy,
+      drug.pharmacology,
       drug.co,
+      drug.unitsclass,
+      drug.taxType,
+      drug.vat,
       drug.units,
       drug.unitsmall,
       drug.price,
       drug.price_now,
+      drug.priceWholesale,
+      drug.priceCost,
       0,
       1,
     );
@@ -51,7 +57,7 @@ describe('offline drug master (ticket #6 / S0.3 — desktop reads SQLite, never 
     expect(rows.map((r) => r.drugname)).toEqual([...DRUG_SEEDS].map((d) => d.drugname).sort());
     const panadol = rows.find((r) => r.drugname === 'Panadol Extra');
     expect(panadol?.drugnamear).toBe('بانادول إكسترا');
-    expect(panadol?.price).toBe(12.5);
+    expect(panadol?.price).toBe(125000);
   });
 
   it('is idempotent: an already-seeded table is left untouched', () => {

@@ -95,6 +95,9 @@ def normalize(pg_type: str) -> str:
 def main() -> int:
     sqlite = parse_sqlite(sorted((SERVER / "sqlite" / "migrations").glob("*.sql")))
     pg = parse_postgres_offline()
+    # the desktop runtime twin — a single merged script the Tauri app bundles
+    # (`apps/desktop/src/resources/schema_sqlite.sql`) and applies on first boot.
+    desktop = parse_sqlite([SERVER.parent / "schema" / "schema_sqlite.sql"])
 
     errors: list[str] = []
 
@@ -104,6 +107,28 @@ def main() -> int:
     for t in pg:
         if t not in sqlite:
             errors.append(f"Postgres table {t!r} missing from SQLite twin")
+
+    # the desktop bundle must describe the exact same schema as the migrations twin
+    for t in sqlite:
+        if t not in desktop:
+            errors.append(f"desktop twin missing table {t!r} (schema/schema_sqlite.sql)")
+    for t in desktop:
+        if t not in sqlite:
+            errors.append(f"desktop twin has extra table {t!r} (not in migrations twin)")
+    for t in sqlite:
+        if t not in desktop:
+            continue
+        for col, stype in sqlite[t].items():
+            if col not in desktop[t]:
+                errors.append(f"desktop twin missing column {t}.{col}")
+            elif desktop[t][col] != stype:
+                errors.append(
+                    f"desktop twin type drift: {t}.{col} is {desktop[t][col]} "
+                    f"(migrations twin: {stype})"
+                )
+        for col in desktop[t]:
+            if col not in sqlite[t]:
+                errors.append(f"desktop twin extra column {t}.{col}")
 
     for t in pg:
         if t in PLUGIN_TABLES:
@@ -135,7 +160,8 @@ def main() -> int:
         return 1
     print(
         f"PARITY OK — {len(pg)} tables, {sum(len(c) for c in pg.values())} PG columns "
-        f"mirrored in SQLite twin; no REAL/FLOAT money; no plugin tables in core."
+        f"mirrored in SQLite twin + desktop bundle (schema/schema_sqlite.sql); "
+        f"no REAL/FLOAT money; no plugin tables in core."
     )
     return 0
 

@@ -9,19 +9,26 @@ import type Database from '@tauri-apps/plugin-sql';
  * and the SQLite twin (`server/sqlite/migrations/003_drug_seeds.sql`), so web
  * (via API) and desktop (offline) render the identical list.
  *
- * The desktop twin schema predates `tax_type`, so medicines (all VAT-exempt
- * per G06) are seeded without a tax column here.
+ * Money is INTEGER minor units (plan/01 §4.2): price/price_now ×10000,
+ * vat rate ×100. Medicines are VAT-exempt (G06): tax_type 'exempt', vat 0.
+ * price_wholesale/price_cost repeat the public price (rev 005 backfill).
  */
 export interface SeedDrug {
   drugname: string;
   drugnamear: string;
   generic: string;
   classy: string;
+  pharmacology: string;
   co: string;
+  unitsclass: string;
+  taxType: string;
+  vat: number;
   units: number;
   unitsmall: number;
   price: number;
   price_now: number;
+  priceWholesale: number;
+  priceCost: number;
 }
 
 export const DRUG_SEEDS: SeedDrug[] = [
@@ -30,57 +37,90 @@ export const DRUG_SEEDS: SeedDrug[] = [
     drugnamear: 'بانادول إكسترا',
     generic: 'paracetamol + caffeine',
     classy: 'analgesic',
+    pharmacology: '',
     co: 'GSK',
+    unitsclass: 'pack',
+    taxType: 'exempt',
+    vat: 0,
     units: 24,
     unitsmall: 0,
-    price: 12.5,
-    price_now: 12.5,
+    price: 125000,
+    price_now: 125000,
+    priceWholesale: 125000,
+    priceCost: 125000,
   },
   {
     drugname: 'Augmentin 1g',
     drugnamear: 'أوجمنتين',
     generic: 'amoxicillin/clavulanate',
     classy: 'antibiotic',
+    pharmacology: '',
     co: 'GSK',
+    unitsclass: 'pack',
+    taxType: 'exempt',
+    vat: 0,
     units: 14,
     unitsmall: 0,
-    price: 48,
-    price_now: 48,
+    price: 480000,
+    price_now: 480000,
+    priceWholesale: 480000,
+    priceCost: 480000,
   },
   {
     drugname: 'Amaryl 2mg',
     drugnamear: 'أماريل',
     generic: 'glimepiride',
     classy: 'antidiabetic',
+    pharmacology: '',
     co: 'Sanofi',
+    unitsclass: 'pack',
+    taxType: 'exempt',
+    vat: 0,
     units: 30,
     unitsmall: 0,
-    price: 28.75,
-    price_now: 28.75,
+    price: 287500,
+    price_now: 287500,
+    priceWholesale: 287500,
+    priceCost: 287500,
   },
   {
     drugname: 'Cataflam 50mg',
     drugnamear: 'كاتافلام',
     generic: 'diclofenac potassium',
     classy: 'antiinflammatory',
+    pharmacology: '',
     co: 'Novartis',
+    unitsclass: 'pack',
+    taxType: 'exempt',
+    vat: 0,
     units: 20,
     unitsmall: 0,
-    price: 15,
-    price_now: 15,
+    price: 150000,
+    price_now: 150000,
+    priceWholesale: 150000,
+    priceCost: 150000,
   },
   {
     drugname: 'Ventolin Inhaler',
     drugnamear: 'فينتولين',
     generic: 'salbutamol',
     classy: 'bronchodilator',
+    pharmacology: '',
     co: 'GSK',
+    unitsclass: 'pack',
+    taxType: 'exempt',
+    vat: 0,
     units: 1,
     unitsmall: 0,
-    price: 22.5,
-    price_now: 22.5,
+    price: 225000,
+    price_now: 225000,
+    priceWholesale: 225000,
+    priceCost: 225000,
   },
 ];
+
+/** Minor-unit scale for money (plan/01 §4.2): NUMERIC(18,4) <-> INTEGER ×10000. */
+export const PRICE_MINOR_UNIT = 10000;
 
 /** Insert the seed catalog on first run (idempotent: skips a non-empty table). */
 export async function seedDrugs(db: Database): Promise<void> {
@@ -93,11 +133,17 @@ export async function seedDrugs(db: Database): Promise<void> {
       drug.drugnamear,
       drug.generic,
       drug.classy,
+      drug.pharmacology,
       drug.co,
+      drug.unitsclass,
+      drug.taxType,
+      drug.vat,
       drug.units,
       drug.unitsmall,
       drug.price,
       drug.price_now,
+      drug.priceWholesale,
+      drug.priceCost,
       0,
       1,
     ]);
@@ -120,9 +166,10 @@ export async function listDrugs(db: Database): Promise<DrugRow[]> {
 // Shared SQL (exported so the offline read is verifiable against a real
 // SQLite engine in tests without the Tauri runtime).
 export const DRUG_INSERT_SQL = `INSERT INTO drugs
-   (drugname, drugnamear, generic, classy, co, units, unitsmall,
-    price, price_now, disco, active)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`;
+   (drugname, drugnamear, generic, classy, pharmacology, co, unitsclass,
+    tax_type, vat, units, unitsmall, price, price_now, price_wholesale,
+    price_cost, disco, active)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`;
 
 export const DRUG_LIST_SQL = `SELECT id, drugname, drugnamear, price, units
  FROM drugs WHERE active = 1 ORDER BY drugname`;

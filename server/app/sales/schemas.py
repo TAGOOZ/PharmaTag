@@ -47,6 +47,7 @@ class SaleLineOut(BaseModel):
     drugname: str
     drugnamear: str = ""
     batch_id: Optional[int] = None
+    ref_invoice_line_id: Optional[int] = None
     qty: str
     unit: str = "pack"
     unit_price: str
@@ -69,6 +70,7 @@ class SaleOut(BaseModel):
     datee: str
     silsilaid: str = ""
     status: str
+    ref_invoice_id: Optional[int] = None
     subtotal: str
     discount: str
     vat: str

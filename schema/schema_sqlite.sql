@@ -236,6 +236,7 @@ CREATE TABLE invoices (
     datetimee      TEXT,
     silsilaid      TEXT DEFAULT '',
     party_id       INTEGER REFERENCES parties(id),
+    ref_invoice_id INTEGER REFERENCES invoices(id),
     subtotal       INTEGER NOT NULL DEFAULT 0,                   -- ×100
     discount       INTEGER NOT NULL DEFAULT 0,
     vat            INTEGER NOT NULL DEFAULT 0,
@@ -254,6 +255,7 @@ CREATE TABLE invoices (
 CREATE INDEX ix_invoices_branch_date ON invoices (branch_id, datee);
 CREATE INDEX ix_invoices_branch_party ON invoices (branch_id, party_id);
 CREATE INDEX ix_invoices_last_edited ON invoices (last_edited_at);
+CREATE INDEX ix_invoices_ref_invoice ON invoices (ref_invoice_id);
 
 CREATE TABLE invoice_lines (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -261,6 +263,7 @@ CREATE TABLE invoice_lines (
     branch_id  INTEGER NOT NULL REFERENCES branches(id),
     drug_id    INTEGER NOT NULL REFERENCES drugs(id),
     batch_id   INTEGER REFERENCES stock_batches(id),
+    ref_invoice_line_id INTEGER REFERENCES invoice_lines(id),
     qty        INTEGER NOT NULL DEFAULT 0,                       -- ×10000
     unit       TEXT DEFAULT 'pack',
     unit_price INTEGER NOT NULL DEFAULT 0,                       -- ×10000
@@ -277,6 +280,7 @@ CREATE TABLE invoice_lines (
     CHECK (unit_price >= 0)
 );
 CREATE INDEX ix_invoice_lines_invoice ON invoice_lines (invoice_id);
+CREATE INDEX ix_invoice_lines_ref_line ON invoice_lines (ref_invoice_line_id);
 CREATE INDEX ix_invoice_lines_drug ON invoice_lines (branch_id, drug_id);
 
 CREATE TABLE invoice_versions (

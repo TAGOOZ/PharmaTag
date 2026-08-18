@@ -22,6 +22,8 @@ from app.core import money
 from app.core.db import get_session
 from app.models import Branch, Drug, Invoice, InvoiceLine, Journal, JournalLine, PaymentSplit, User
 from app.sales import print_html
+from app.sales.returns.schemas import ReturnCreateRequest
+from app.sales.returns.service import save_sale_return
 from app.sales.schemas import SaleCreateRequest, SaleOut
 from app.sales.service import save_sale
 
@@ -108,6 +110,7 @@ async def _serialize_sale(
         datee=invoice.datee.isoformat(),
         silsilaid=invoice.silsilaid or "",
         status=invoice.status,
+        ref_invoice_id=invoice.ref_invoice_id,
         subtotal=_money(invoice.subtotal),
         discount=_money(invoice.discount),
         vat=_money(invoice.vat),
@@ -123,6 +126,7 @@ async def _serialize_sale(
                 "drugname": drug.drugname,
                 "drugnamear": drug.drugnamear,
                 "batch_id": line.batch_id,
+                "ref_invoice_line_id": line.ref_invoice_line_id,
                 "qty": _qty(line.qty),
                 "unit": line.unit or "pack",
                 "unit_price": money.format2(line.unit_price),
@@ -192,6 +196,65 @@ async def create_sale(
         lines=body.lines,
         disc_percent=body.disc_percent,
         payments=body.payments,
+    )
+    return await _serialize_sale(session, invoice, caller)
+
+
+@router.get("/returns")
+async def list_sales_returns(
+    datee: Optional[date] = None,
+    limit: int = 50,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Recent sales returns for the caller's branch (today by default)."""
+    branch_id = _caller_branch_id(user)
+    limit = max(1, min(limit, 200))
+    q = select(Invoice).where(
+        Invoice.branch_id == branch_id, Invoice.kind == "sale_return"
+    )
+    if datee is not None:
+        q = q.where(Invoice.datee == datee)
+    else:
+        q = q.where(Invoice.datee == datetime.now().date())
+    q = q.order_by(Invoice.id.desc()).limit(limit)
+    invoices = (await session.execute(q)).scalars().all()
+    return {
+        "returns": [
+            {
+                "id": inv.id,
+                "invoice_no": inv.invoice_no,
+                "ref_invoice_id": inv.ref_invoice_id,
+                "datee": inv.datee.isoformat(),
+                "totalvalue": _money(inv.totalvalue),
+                "payed": _money(inv.payed),
+                "agel": _money(inv.agel),
+                "status": inv.status,
+            }
+            for inv in invoices
+        ]
+    }
+
+
+@router.post("/{sale_id}/return", status_code=status.HTTP_201_CREATED, response_model=SaleOut)
+async def create_sale_return(
+    sale_id: int,
+    body: ReturnCreateRequest,
+    caller: User = Depends(CREATE_SALE),
+    session: AsyncSession = Depends(get_session),
+):
+    """Record a sales return: reverses the original sale's stock + balances +
+    money into a new sale_return invoice (server-computed totals, balanced
+    journal, audit + outbox + invoice_versions in one transaction)."""
+    branch_id = _caller_branch_id(caller)
+    invoice = await save_sale_return(
+        session,
+        branch_id=branch_id,
+        user_id=caller.id,
+        original_invoice_id=sale_id,
+        lines=body.lines,
+        payments=body.payments,
+        datee=body.datee,
     )
     return await _serialize_sale(session, invoice, caller)
 

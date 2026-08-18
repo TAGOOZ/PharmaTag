@@ -141,6 +141,10 @@ Real so far: `/api/v1/auth/*` (login, me, reset-password), `/api/v1/drugs`
 (read + CRUD + search-as-you-type + CC0 catalog import; writes gated by
 `drugs.manage`), `/api/v1/users` (user CRUD, roles/permissions, manager password
 reset), plugin registry, sales invoicing (create/list/detail/80mm print +
+offline outbox replay; gated by `sale.create`), sales returns (partial/full
+return of a saved sale — reverses stock via a new return batch + branch_stock,
+reverses money/journal/balances at the original prices with a proportional
+refund split, snapshots the original into `invoice_versions`, new invoice_no,
 offline outbox replay; gated by `sale.create`), purchases (supplier invoice +
 new stock batches at net cost, supplier payable + payment splits, balanced
 journal + offline outbox replay; gated by legacy level ≥ 2), parties

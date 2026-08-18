@@ -10,12 +10,13 @@ from sqlalchemy import (
     Date,
     ForeignKey,
     Identity,
+    Integer,
     Numeric,
     String,
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import TIMESTAMP
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import (
@@ -45,6 +46,7 @@ class Invoice(Base):
     datetimee: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
     silsilaid: Mapped[Optional[str]] = mapped_column(String(15), server_default="")
     party_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("parties.id"))
+    ref_invoice_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("invoices.id"))
     subtotal: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
     discount: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
     vat: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
@@ -78,6 +80,7 @@ class InvoiceLine(Base):
     branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=False)
     drug_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("drugs.id"), nullable=False)
     batch_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("stock_batches.id"))
+    ref_invoice_line_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("invoice_lines.id"))
     qty: Mapped[object] = mapped_column(Numeric(18, 4), nullable=False, server_default="0")
     unit: Mapped[str] = mapped_column(String(20), server_default="pack")
     unit_price: Mapped[object] = mapped_column(Numeric(18, 4), nullable=False, server_default="0")
@@ -111,3 +114,25 @@ class PaymentSplit(Base):
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
     user_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
+
+
+class InvoiceVersion(Base):
+    """`invoice_versions` — snapshot of an invoice when it is edited/returned
+    (S1.5): the original sale's state is preserved before a return or edit, so
+    the audit trail always shows what the document looked like before the
+    change. `payload` mirrors the invoice header+lines (JSON primitives)."""
+
+    __tablename__ = "invoice_versions"
+    __table_args__ = (
+        UniqueConstraint("invoice_id", "version_no", name="uq_invoice_versions"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    invoice_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("invoices.id"), nullable=False)
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(String(30), server_default="")
+    payload: Mapped[Optional[dict]] = mapped_column(JSONB)
+    changed_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
+    changed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )

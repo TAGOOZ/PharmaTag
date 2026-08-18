@@ -27,7 +27,7 @@ from app.models.base import (
 from app.models.core import AppConfig, AuditLog, Branch, SyncLog
 from app.models.drugs import Drug, DrugBarcode, PriceChangeLog
 from app.models.plugins import AppPlugin, PluginBranchGrant, PluginDependencyRow, PluginSettings
-from app.models.sales import Invoice, InvoiceLine, PaymentSplit
+from app.models.sales import Invoice, InvoiceLine, InvoiceVersion, PaymentSplit
 from app.models.stock import BranchStock, StockBatch
 
 __all__ = [
@@ -43,6 +43,7 @@ __all__ = [
     "DrugBarcode",
     "Invoice",
     "InvoiceLine",
+    "InvoiceVersion",
     "Journal",
     "JournalLine",
     "Party",

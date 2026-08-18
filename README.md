@@ -126,16 +126,20 @@ see §6). Prices are exact decimal strings, rounded half-up to 2 dp.
 Keep this inventory honest: a screen/endpoint listed here is a **placeholder**, not
 a shipped feature. Slices replace entries as they land; agents must update this
 list in the same commit as the work (add when a placeholder is created, remove
-when a slice replaces it).
+when a slice replaces it). Where a placeholder is already tracked on the issue
+tracker (TAGOOZ/PharmaTag) the **Ticket** column names it — the row stays until
+the ticket ships.
 
-| Area | Item | Status |
-| --- | --- | --- |
-| web `/` | dashboard (home) | stub — static shell only, today-summary not wired |
-| web `/pos` `/purchases` `/stock` `/money` `/reports` `/employees` `/settings` | module screens | stubs — show "built in the corresponding slice" (user management API exists; the `/employees`/`/settings` screens are not wired to it) |
-| desktop | same module screens (`App.tsx` STUBS) | stubs — same as web |
-| desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly |
-| API | stock (write), money, reports, settings endpoints | not implemented |
-| data | CC0 drug catalog download | documented, not bundled — the importer (`server/app/drugs/importer.py`, CLI `python -m app.drugs.importer <file>`) is real and de-dupes/idempotent, but the 24k-medicine source (CC0 `karem505/egyptian-drug-database`) is fetched at import time, not shipped. A sample fixture lives in `server/tests/fixtures/cc0_catalog_sample.csv`. |
+| Area | Item | Status | Ticket |
+| --- | --- | --- | --- |
+| web `/` | dashboard (home) | stub — static shell, today-summary not wired | #38 |
+| web `/pos` `/purchases` `/stock` `/money` `/reports` `/employees` `/settings` | module screens | stubs — show "built in the corresponding slice" | #38 |
+| web | change-password / `must_reset_password` flow | missing — login gates but there is no form (the API is shipped) | #37 |
+| desktop | module screens (`App.tsx` STUBS) | stubs — same as web | #38 |
+| desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly | #39 |
+| API | stock (write), money, reports endpoints | not implemented | #13, #14, #15 (S2/S3 slices later) |
+| API | settings endpoints | not implemented — no branch-settings API exists | #38 |
+| data | CC0 drug catalog download | documented, not bundled — the importer (`server/app/drugs/importer.py`, CLI `python -m app.drugs.importer <file>`) is real and de-dupes/idempotent, but the 24k-medicine source (CC0 `karem505/egyptian-drug-database`) is fetched at import time, not shipped. A sample fixture lives in `server/tests/fixtures/cc0_catalog_sample.csv`. | #8 (shipped) |
 
 Real so far: `/api/v1/auth/*` (login, me, reset-password), `/api/v1/drugs`
 (read + CRUD + search-as-you-type + CC0 catalog import; writes gated by

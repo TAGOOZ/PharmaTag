@@ -5,9 +5,12 @@ entities replay:
 
 * `invoice` — the natural dedupe key is (branch_id, invoice_no), enforced by
   uq_invoices_branch_no: re-applying an already-applied invoice is a no-op
-  (marked applied). Conflicts (missing/insufficient stock, missing batch) are
-  recorded on the row as status='failed' with the reason appended to the
-  payload — never silently dropped (G10).
+  (marked applied). Conflicts (missing/insufficient stock, missing batch,
+  closed day) are recorded on the row as status='failed' with the reason
+  appended to the payload — never silently dropped (G10), and never partially
+  applied: each row runs in its own SAVEPOINT, so a failed row rolls back every
+  write it started (invoice, stock, journal, drawer movements) and the sync row
+  stays pending-capable (reset to 'pending' after the blocker is cleared).
 * `branch_stock` (S1.7, ticket #13) — the payload carries the absolute balance
   (`qty`), so LWW is trivially idempotent. A drug that no longer exists on the
   target store is recorded failed, never lost.
@@ -123,7 +126,9 @@ async def replay_pending(
     Idempotent: an invoice that already exists (from a prior online write or a
     prior replay) is skipped and marked applied. Runs in ONE transaction — a
     failure on one row marks only that row failed and does not roll back the
-    others.
+    others; each row applies inside its own SAVEPOINT, so a failed row's own
+    partial writes (if a guard fires mid-apply, e.g. a closed day) are rolled
+    back atomically instead of leaking into the committed result.
     """
     summary: dict = {"applied": 0, "skipped": 0, "failed": 0, "failures": []}
     async with atomic(session):
@@ -145,9 +150,10 @@ async def replay_pending(
             payload = dict(row.payload or {})
             if row.entity == "branch_stock":
                 try:
-                    await _apply_branch_stock(
-                        session, branch_id=branch_id, payload=payload
-                    )
+                    async with session.begin_nested():
+                        await _apply_branch_stock(
+                            session, branch_id=branch_id, payload=payload
+                        )
                     row.status = "applied"
                     row.synced_at = datetime.now(timezone.utc)
                     summary["applied"] += 1
@@ -173,12 +179,13 @@ async def replay_pending(
                 summary["skipped"] += 1
                 continue
             try:
-                await _apply_row(
-                    session,
-                    branch_id=branch_id,
-                    payload=payload,
-                    user_id=user_id,
-                )
+                async with session.begin_nested():
+                    await _apply_row(
+                        session,
+                        branch_id=branch_id,
+                        payload=payload,
+                        user_id=user_id,
+                    )
                 row.status = "applied"
                 row.synced_at = datetime.now(timezone.utc)
                 summary["applied"] += 1

@@ -5,9 +5,13 @@ drawer equation: each payment split becomes a `drawer_movements` row in the
 SAME transaction as the invoice (G12), attributed to the cashier (user_id) and
 the document (ref_invoice_id). Credit never touches the drawer.
 """
-from app.core.db import SessionLocal
-from app.models import Invoice
+from datetime import date
+
 from sqlalchemy import select
+
+from app.core.audit import enqueue_sync
+from app.core.db import SessionLocal
+from app.models import DrawerMovement, Invoice, SyncLog
 
 from tests.drawer_test_utils import (
     _cleanup_drawer,
@@ -25,12 +29,14 @@ from tests.purchase_test_utils import _make_drug, _make_supplier
 from tests.returns_test_utils import _cleanup as _return_cleanup
 from tests.sales_test_utils import _cleanup, _make_drug_and_stock
 from tests.test_sales_replay import (
+    BRANCH_ID,
     _batch_ids as _replay_batch_ids,
     _cleanup as _replay_cleanup,
     _enqueue,
     _make_drug as _make_replay_drug,
     _payload,
     _replay,
+    _stock_qty as _replay_stock_qty,
 )
 
 
@@ -256,6 +262,69 @@ async def test_replayed_sale_writes_drawer_movement(client):
         )
         assert rc.status_code == 200, rc.text
         assert rc.json()["net_cash"] == "40.00"
+    finally:
+        await _cleanup_drawer()
+        await _replay_cleanup([drug_id], invoice_ids, sync_ids)
+
+
+async def test_replay_into_a_closed_day_is_rejected_atomically(client):
+    """AC3 holds on the offline path: replaying a pending sale whose datee the
+    server already closed must NOT partially land. The outbox row is recorded
+    failed (G10, with the closed-day reason) but NO invoice, stock, journal or
+    drawer movement is written — after reopening the day the row can simply be
+    retried. Regression for the review finding that the invoice + stock landed
+    while its drawer movement was silently dropped."""
+    _mark_closed("2026-08-18")
+    drug_id = await _make_replay_drug([("10.0000", "5.0000", None)])
+    batch_ids = await _replay_batch_ids(drug_id)
+    sync_ids: list[int] = []
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        rc = await _close_day(client, token, datee="2026-08-18", counted_cash="0")
+        assert rc.status_code == 200, rc.text
+
+        key = list(batch_ids)[0]
+        payload = {
+            **_payload("70007", drug_id, batch_ids[key], key),
+            "datee": "2026-08-18",
+        }
+        async with SessionLocal() as session:
+            sync = await enqueue_sync(
+                session,
+                branch_id=BRANCH_ID,
+                entity="invoice",
+                action="insert",
+                payload=payload,
+            )
+            sync_ids.append(sync.id)
+            await session.commit()
+        stock_before = await _replay_stock_qty(drug_id)
+
+        summary = await _replay()
+        assert summary["failed"] == 1
+        assert "closed" in summary["failures"][0]["error"]
+
+        async with SessionLocal() as session:
+            invoice = (
+                await session.execute(
+                    select(Invoice).where(Invoice.invoice_no == "70007")
+                )
+            ).scalar_one_or_none()
+            assert invoice is None
+            movements = (
+                await session.execute(
+                    select(DrawerMovement).where(
+                        DrawerMovement.branch_id == BRANCH_ID,
+                        DrawerMovement.datee == date.fromisoformat("2026-08-18"),
+                    )
+                )
+            ).scalars().all()
+            assert movements == []
+            sync_row = await session.get(SyncLog, sync_ids[0])
+            assert sync_row.status == "failed"
+            assert "closed" in sync_row.payload["failure"]
+        assert await _replay_stock_qty(drug_id) == stock_before
     finally:
         await _cleanup_drawer()
         await _replay_cleanup([drug_id], invoice_ids, sync_ids)

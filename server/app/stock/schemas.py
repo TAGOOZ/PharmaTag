@@ -32,6 +32,8 @@ class CountRequestOut(BaseModel):
     reason: str = ""
     status: str
     requested_by: Optional[int] = None
+    approved_by: Optional[int] = None
+    rejected_by: Optional[int] = None
     decided_at: Optional[str] = None
     created_at: Optional[str] = None
 

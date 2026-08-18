@@ -194,7 +194,12 @@ async def test_submit_any_authenticated_user_allowed(client):
 
 
 async def test_list_count_requests(client):
-    drug_id = await _make_drug_and_stock(
+    drug_a = await _make_drug_and_stock(
+        tax_type="exempt",
+        batches=[("10.0000", "5.0000", None)],
+        stock_qty="10.0000",
+    )
+    drug_b = await _make_drug_and_stock(
         tax_type="exempt",
         batches=[("10.0000", "5.0000", None)],
         stock_qty="10.0000",
@@ -202,7 +207,7 @@ async def test_list_count_requests(client):
     request_ids: list[int] = []
     try:
         token = await _login_token(client)
-        for counted in ["12", "8"]:
+        for drug_id, counted in [(drug_a, "12"), (drug_b, "8")]:
             r = await client.post(
                 "/api/v1/stock/count-requests",
                 headers={"Authorization": f"Bearer {token}"},
@@ -229,7 +234,7 @@ async def test_list_count_requests(client):
         )
         assert all(item["status"] == "approved" for item in g2.json()["requests"])
     finally:
-        await _cleanup([drug_id], request_ids)
+        await _cleanup([drug_a, drug_b], request_ids)
 
 
 async def test_list_requests_scoped_to_own_branch(client):
@@ -264,3 +269,61 @@ async def test_list_requests_scoped_to_own_branch(client):
             await session.execute(delete(User).where(User.id == other_user_id))
             await session.commit()
         await _delete_other_branch(other_branch)
+
+async def test_submit_duplicate_pending_rejected(client):
+    """One pending request per (branch, drug): a second submit while the first
+    is undecided is refused (edge pass #3 — two pending deltas would compound
+    and neither final balance would match its counted qty)."""
+    drug_a = await _make_drug_and_stock(
+        tax_type="exempt",
+        batches=[("10.0000", "5.0000", None)],
+        stock_qty="10.0000",
+    )
+    drug_b = await _make_drug_and_stock(
+        tax_type="exempt",
+        batches=[("7.0000", "5.0000", None)],
+        stock_qty="7.0000",
+    )
+    request_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        first = await client.post(
+            "/api/v1/stock/count-requests",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"drug_id": drug_a, "counted": "15"},
+        )
+        assert first.status_code == 201, first.text
+        request_ids.append(first.json()["id"])
+
+        dup = await client.post(
+            "/api/v1/stock/count-requests",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"drug_id": drug_a, "counted": "20"},
+        )
+        assert dup.status_code == 409
+        assert "already pending" in dup.json()["detail"]
+
+        other = await client.post(
+            "/api/v1/stock/count-requests",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"drug_id": drug_b, "counted": "9"},
+        )
+        assert other.status_code == 201, other.text
+        request_ids.append(other.json()["id"])
+
+        # after the first is decided, a fresh request for the same drug is fine
+        assert (
+            await client.post(
+                f"/api/v1/stock/count-requests/{request_ids[0]}/approve",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        ).status_code == 200
+        again = await client.post(
+            "/api/v1/stock/count-requests",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"drug_id": drug_a, "counted": "18"},
+        )
+        assert again.status_code == 201, again.text
+        request_ids.append(again.json()["id"])
+    finally:
+        await _cleanup([drug_a, drug_b], request_ids)

@@ -45,6 +45,15 @@ class Settings(BaseSettings):
         validation_alias="PHARMATAG_CORS_ORIGINS",
     )
 
+    # Business timezone (IANA name) used to turn a UTC server timestamp into the
+    # local business DATE for ledger posting (journal/price-change datee). The
+    # domain is single-country Egypt (UTC+2 baseline), so the ledger day is the
+    # Cairo day; override via PHARMATAG_TIMEZONE for a different region.
+    timezone: str = Field(
+        default="Africa/Cairo",
+        validation_alias="PHARMATAG_TIMEZONE",
+    )
+
     model_config = SettingsConfigDict(
         env_prefix="PHARMATAG_",
         env_file=".env",

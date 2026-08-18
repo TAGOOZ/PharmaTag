@@ -4,16 +4,25 @@ Two-phase approval flow (feature_stock_counting §2.4, plan/02 §4.4):
 
 * `submit_count_request` — a staff user records the physical counted qty; the
   server derives the signed delta vs the system balance and stores a `pending`
-  `stock_correction_requests` row. No stock is touched yet.
+  `stock_correction_requests` row (with the `counted` snapshot). No stock is
+  touched yet. One pending request per (branch, drug) — two undecided deltas
+  would compound.
 * `approve_count_request` — a manager (perm >= 7) applies the delta atomically
   (G12): batches + branch_stock, audit (`count`/`correction`), sync outbox,
   a balanced `correction` journal re-booking inventory value, and a
-  `price_change_log` row capturing the corrected units at unit cost.
-* `reject_count_request` — a manager marks the request rejected; stock untouched.
+  `price_change_log` row capturing the corrected units at unit cost. The
+  journal is valued at the cost of the units ACTUALLY moved (FIFO take x cost,
+  or the target batch's cost), never at a book average, so account 1200 always
+  equals the inventory ledger.
+* `reject_count_request` — a manager marks the request rejected; stock
+  untouched. Locked FOR UPDATE under the branch advisory lock so it can never
+  race an approval.
 
-The delta is applied only if it is still valid: a deficit may never exceed the
-current system qty (the request goes stale if stock changed meanwhile), and a
-`batch_id`-scoped request may never drive that batch below zero.
+The delta is applied only while still valid: the stored `counted` snapshot
+means approval re-checks `balance_now + delta == counted` (a deficit can never
+take more than exists, an overage can never overshoot the observed qty — the
+request goes stale if stock moved meanwhile, feature §2.4 'cannot accept after
+change'). A batch_id-scoped request may never drive that batch below zero.
 """
 from __future__ import annotations
 
@@ -28,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import money
 from app.core.audit import audit, enqueue_sync
 from app.core.db import atomic
+from app.core.time import business_date
 from app.money.journal import post_journal
 from app.models import (
     BranchStock,
@@ -51,6 +61,12 @@ STALE_REQUEST = HTTPException(
 BATCH_NOT_FOUND = HTTPException(
     status.HTTP_400_BAD_REQUEST, "batch does not belong to this drug/branch"
 )
+NO_COST = HTTPException(
+    status.HTTP_409_CONFLICT,
+    "no stock cost to value the correction (enter the pharmacy's balances "
+    "as purchase invoices first)",
+)
+
 
 async def _system_qty(session: AsyncSession, branch_id: int, drug_id: int) -> Decimal:
     row = (
@@ -88,6 +104,7 @@ async def submit_count_request(
 ) -> StockCorrectionRequest:
     """Record a pending correction request; derives delta = counted - system."""
     async with atomic(session):
+        await acquire_branch_lock(session, branch_id)
         drug = await session.get(Drug, drug_id)
         if drug is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "drug not found")
@@ -109,6 +126,25 @@ async def submit_count_request(
             ):
                 raise BATCH_NOT_FOUND
 
+        # one pending request per (branch, drug) — two undecided deltas would
+        # compound and neither final balance would match its counted qty
+        pending = (
+            await session.execute(
+                select(StockCorrectionRequest.id)
+                .where(
+                    StockCorrectionRequest.branch_id == branch_id,
+                    StockCorrectionRequest.drug_id == drug_id,
+                    StockCorrectionRequest.status == "pending",
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if pending is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "a count request is already pending for this drug",
+            )
+
         system = await _system_qty(session, branch_id, drug_id)
         delta = money.round4(counted - system)
         if delta == 0:
@@ -122,6 +158,7 @@ async def submit_count_request(
             drug_id=drug_id,
             batch_id=batch_id,
             delta=delta,
+            counted=counted,
             reason=reason or "",
             requested_by=user_id,
             status="pending",
@@ -148,12 +185,14 @@ async def _weighted_avg_cost(
     branch_id: int,
     drug_id: int,
     fallback_cost=None,
-) -> Decimal:
+) -> tuple[Decimal, bool]:
     """Weighted-average unit cost across the drug's positive batches, locked.
 
-    Falls back to the drug master's cost price when no positive-qty batch exists
-    (e.g. a from-zero overage after stock sold down) so the re-book still has a
-    defensible unit value (feature §2.3 — opening at cost excl. VAT)."""
+    Returns `(cost, has_positive_batches)`. With no positive-qty batch it falls
+    back to the drug master's cost price (feature §2.3 — opening at cost excl.
+    VAT); `has_positive_batches=False` lets the caller refuse a correction that
+    has NO cost basis at all (no batches AND no master cost).
+    """
     rows = (
         await session.execute(
             select(StockBatch)
@@ -167,9 +206,10 @@ async def _weighted_avg_cost(
     ).scalars().all()
     total_qty = sum((money.dec(b.qty) for b in rows), Decimal("0"))
     if total_qty == 0:
-        return money.round4(money.dec(fallback_cost) if fallback_cost is not None else 0)
+        cost = money.round4(money.dec(fallback_cost) if fallback_cost is not None else 0)
+        return cost, False
     total_value = sum((money.dec(b.qty) * money.dec(b.cost) for b in rows), Decimal("0"))
-    return money.round4(total_value / total_qty)
+    return money.round4(total_value / total_qty), True
 
 
 async def _audit_batch(
@@ -208,8 +248,9 @@ async def _apply_deficit(
     request: StockCorrectionRequest,
     deficit: Decimal,
     barcode: str,
-) -> None:
-    """Decrement batches FIFO by expiry until `deficit` is met (plan/02 §4.1)."""
+) -> Decimal:
+    """Decrement batches FIFO by expiry until `deficit` is met (plan/02 §4.1);
+    returns the total COST VALUE of the units actually removed."""
     batches = (
         await session.execute(
             select(StockBatch)
@@ -224,6 +265,7 @@ async def _apply_deficit(
     ).scalars().all()
 
     remaining = deficit
+    moved_value = Decimal("0")
     for batch in batches:
         if remaining <= 0:
             break
@@ -244,9 +286,11 @@ async def _apply_deficit(
             barcode=barcode,
             request_id=request.id,
         )
+        moved_value += take * money.dec(batch.cost)
         remaining -= take
     if remaining > 0:
         raise STALE_REQUEST
+    return moved_value
 
 
 async def _apply_overage(
@@ -373,21 +417,35 @@ async def approve_count_request(
 
         barcode = await _primary_barcode(session, request.drug_id)
         delta = money.dec(request.delta)
-        # value the correction at the CURRENT weighted-avg cost so the inventory
-        # ledger re-books consistently with the balance after the change
-        unit_cost = await _weighted_avg_cost(
-            session, branch_id, request.drug_id, fallback_cost=drug.price_cost
-        )
+        counted = money.dec(request.counted) if request.counted is not None else None
 
-        if delta > 0:
-            if request.batch_id is not None:
-                batch = await session.get(StockBatch, request.batch_id)
-                if (
-                    batch is None
-                    or batch.branch_id != branch_id
-                    or batch.drug_id != request.drug_id
-                ):
-                    raise BATCH_NOT_FOUND
+        if request.batch_id is not None:
+            batch = (
+                await session.execute(
+                    select(StockBatch)
+                    .where(StockBatch.id == request.batch_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if (
+                batch is None
+                or batch.branch_id != branch_id
+                or batch.drug_id != request.drug_id
+            ):
+                raise BATCH_NOT_FOUND
+            # staleness is judged on the drug TOTAL (the observed `counted` is
+            # the drug's physical qty; the named batch absorbs the delta)
+            system = await _system_qty(session, branch_id, request.drug_id)
+            if counted is not None and system + delta != counted:
+                raise STALE_REQUEST
+            deficit = -delta if delta < 0 else Decimal("0")
+            if deficit and money.dec(batch.qty) < deficit:
+                raise STALE_REQUEST
+
+            # batch-scoped: value at the TARGET batch's cost (the units really move)
+            price = money.dec(batch.cost)
+            value = money.round2(abs(delta) * price)
+            if delta > 0:
                 old = money.dec(batch.qty)
                 batch.qty = old + delta
                 batch.oldstock = old
@@ -404,30 +462,6 @@ async def approve_count_request(
                     request_id=request.id,
                 )
             else:
-                await _apply_overage(
-                    session,
-                    branch_id=branch_id,
-                    user_id=user_id,
-                    request=request,
-                    overage=delta,
-                    unit_cost=unit_cost,
-                    barcode=barcode,
-                )
-        else:
-            deficit = -delta
-            system = await _system_qty(session, branch_id, request.drug_id)
-            if system < deficit:
-                raise STALE_REQUEST
-            if request.batch_id is not None:
-                batch = await session.get(StockBatch, request.batch_id)
-                if (
-                    batch is None
-                    or batch.branch_id != branch_id
-                    or batch.drug_id != request.drug_id
-                ):
-                    raise BATCH_NOT_FOUND
-                if money.dec(batch.qty) < deficit:
-                    raise STALE_REQUEST
                 old = money.dec(batch.qty)
                 new = old - deficit
                 batch.qty = new
@@ -444,8 +478,35 @@ async def approve_count_request(
                     barcode=barcode,
                     request_id=request.id,
                 )
+        else:
+            system = await _system_qty(session, branch_id, request.drug_id)
+            if counted is not None and system + delta != counted:
+                raise STALE_REQUEST
+            if delta < 0 and system < -delta:
+                raise STALE_REQUEST  # NULL-counted legacy rows still safe
+
+            if delta > 0:
+                unit_cost, has_positive = await _weighted_avg_cost(
+                    session, branch_id, request.drug_id, fallback_cost=drug.price_cost
+                )
+                # a brand-new overage with NO cost basis (no batches and no
+                # master cost) cannot be put on the books at any value
+                if not has_positive and not money.dec(drug.price_cost):
+                    raise NO_COST
+                price = unit_cost
+                value = money.round2(delta * unit_cost)
+                await _apply_overage(
+                    session,
+                    branch_id=branch_id,
+                    user_id=user_id,
+                    request=request,
+                    overage=delta,
+                    unit_cost=unit_cost,
+                    barcode=barcode,
+                )
             else:
-                await _apply_deficit(
+                deficit = -delta
+                moved_value = await _apply_deficit(
                     session,
                     branch_id=branch_id,
                     user_id=user_id,
@@ -453,6 +514,9 @@ async def approve_count_request(
                     deficit=deficit,
                     barcode=barcode,
                 )
+                # value by what actually LEFT inventory (Σ take x cost)
+                value = money.round2(moved_value)
+                price = money.round4(moved_value / deficit) if deficit else Decimal("0")
 
         await _upsert_branch_stock(
             session,
@@ -469,7 +533,7 @@ async def approve_count_request(
         request.decided_at = datetime.now(timezone.utc)
         session.add(request)
 
-        value = money.round2(abs(delta) * unit_cost)
+        datee = business_date(request.decided_at)
         if value > 0:
             await _post_correction_journal(
                 session,
@@ -477,14 +541,16 @@ async def approve_count_request(
                 user_id=user_id,
                 request=request,
                 value=value,
+                datee=datee,
             )
         await _log_price_change(
             session,
             branch_id=branch_id,
             user_id=user_id,
             request=request,
-            unit_cost=unit_cost,
+            unit_cost=price,
             barcode=barcode,
+            datee=datee,
         )
         await audit(
             session,
@@ -509,9 +575,21 @@ async def reject_count_request(
     user_id: Optional[int],
     request_id: int,
 ) -> StockCorrectionRequest:
-    """Mark a pending request rejected; no stock is touched."""
+    """Mark a pending request rejected; no stock is touched.
+
+    Takes the branch advisory lock and row-locks FOR UPDATE, so a concurrent
+    approval can never have its decision overwritten by this rejection (or
+    vice-versa): whichever grabs the lock first decides, the other sees a
+    non-pending request and 409s."""
     async with atomic(session):
-        request = await session.get(StockCorrectionRequest, request_id)
+        await acquire_branch_lock(session, branch_id)
+        request = (
+            await session.execute(
+                select(StockCorrectionRequest)
+                .where(StockCorrectionRequest.id == request_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
         if request is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "request not found")
         if request.branch_id != branch_id:
@@ -519,7 +597,7 @@ async def reject_count_request(
         if request.status != "pending":
             raise NOT_PENDING
         request.status = "rejected"
-        request.approved_by = user_id
+        request.rejected_by = user_id
         request.decided_at = datetime.now(timezone.utc)
         session.add(request)
         await audit(
@@ -544,9 +622,13 @@ async def _post_correction_journal(
     user_id: Optional[int],
     request: StockCorrectionRequest,
     value: Decimal,
+    datee,
 ) -> None:
-    """Balanced correction journal: Dr/Cr 1200 stock vs 5900 corrections."""
-    datee = request.decided_at.date()
+    """Balanced correction journal: Dr/Cr 1200 stock vs 5900 corrections.
+
+    5900 is an expense: a DEFICIT debits it (stock loss hits the P&L as a cost);
+    an OVERAGE credits it (a count gain nets down the expense contra). The
+    balance is always zero-sum on each side."""
     entry_no = await next_journal_entry_no(session, branch_id, datee)
     entries = [
         ("1200", money.dec(value), money.dec("0")),
@@ -577,17 +659,18 @@ async def _log_price_change(
     request: StockCorrectionRequest,
     unit_cost: Decimal,
     barcode: str,
+    datee,
 ) -> None:
     """One price_change_log row per approved correction (ticket #13 AC): the
-    corrected units at unit cost — the value history the legacy kept in
-    storediscount (quant + price + tips)."""
+    corrected units at the unit cost that actually moved — the value history
+    the legacy kept in storediscount (quant + price + tips)."""
     row = PriceChangeLog(
         branch_id=branch_id,
         drug_id=request.drug_id,
         barcode=barcode,
         price=unit_cost,
         quant=request.delta,
-        datee=request.decided_at.date(),
+        datee=datee,
         tips=f"stock count correction #{request.id}",
         changed_by=user_id,
     )

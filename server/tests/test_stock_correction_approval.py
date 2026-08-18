@@ -45,6 +45,13 @@ async def _approve(client, token, request_id):
     )
 
 
+async def _reject(client, token, request_id):
+    return await client.post(
+        f"/api/v1/stock/count-requests/{request_id}/reject",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+
 async def _latest_correction_journal() -> dict[str, tuple[Decimal, Decimal]]:
     """account_code -> (debit, credit) of the highest-id correction journal."""
     async with SessionLocal() as session:
@@ -181,10 +188,23 @@ async def test_approve_deficit_fifo(client):
         assert batches[0].qty == Decimal("0.0000")  # 3 taken fully (exp 2025)
         assert batches[1].qty == Decimal("6.0000")  # 1 taken from 7 (exp 2026)
 
-        # avg cost = (3*5 + 7*8) / 10 = 7.10; value = 4 x 7.10 = 28.40
+        # journal values the ACTUAL units removed: 3 x 5.00 + 1 x 8.00 = 23.00
+        # (not the weighted-avg 7.10 x 4 = 28.40 — the ledger must equal the
+        # batch cost that actually left inventory, edge pass #1)
         lines = await _latest_correction_journal()
-        assert lines["5900"] == (Decimal("28.40"), Decimal("0"))
-        assert lines["1200"] == (Decimal("0"), Decimal("28.40"))
+        assert lines["5900"] == (Decimal("23.00"), Decimal("0"))
+        assert lines["1200"] == (Decimal("0"), Decimal("23.00"))
+
+        # price_change_log records the effective unit cost 23.00 / 4 = 5.75
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(PriceChangeLog).where(PriceChangeLog.drug_id == drug_id)
+                )
+            ).scalars().all()
+            assert len(rows) == 1
+            assert rows[0].quant == Decimal("-4.0000")
+            assert rows[0].price == Decimal("5.7500")
     finally:
         await _cleanup([drug_id], request_ids)
 
@@ -369,5 +389,155 @@ async def test_approve_audits_and_outbox_single_transaction(client):
             assert len(mine) == 1
             assert mine[0].payload["qty"] == "12.0000"
             assert mine[0].action == "correction"
+    finally:
+        await _cleanup([drug_id], request_ids)
+
+async def test_approve_batch_scoped_uses_batch_cost(client):
+    """batch_id-scoped overage is valued at THAT batch's cost, not the weighted
+    average across the drug (edge pass #1: journal == qty x batch cost)."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        batches=[("10.0000", "5.0000", None), ("10.0000", "8.0000", None)],
+        stock_qty="20.0000",
+    )
+    request_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        batches = await _batches(drug_id)
+        batch_id = batches[0].id  # cost 5.0000
+        r = await client.post(
+            "/api/v1/stock/count-requests",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"drug_id": drug_id, "counted": "23", "batch_id": batch_id},
+        )
+        assert r.status_code == 201, r.text
+        request_ids.append(r.json()["id"])
+        assert r.json()["delta"] == "3.0000"
+
+        g = await _approve(client, token, request_ids[0])
+        assert g.status_code == 200, g.text
+        assert await _stock_qty(drug_id) == Decimal("23.0000")
+
+        lines = await _latest_correction_journal()
+        assert lines["1200"] == (Decimal("15.00"), Decimal("0"))  # 3 x 5.00
+        assert lines["5900"] == (Decimal("0"), Decimal("15.00"))
+    finally:
+        await _cleanup([drug_id], request_ids)
+
+
+async def test_approve_batch_scoped_deficit_uses_batch_cost(client):
+    """batch_id-scoped deficit is valued at that batch's cost."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        batches=[("10.0000", "5.0000", None), ("10.0000", "8.0000", None)],
+        stock_qty="20.0000",
+    )
+    request_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        batches = await _batches(drug_id)
+        batch_id = batches[1].id  # cost 8.0000
+        r = await client.post(
+            "/api/v1/stock/count-requests",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"drug_id": drug_id, "counted": "17", "batch_id": batch_id},
+        )
+        assert r.status_code == 201, r.text
+        request_ids.append(r.json()["id"])
+        assert r.json()["delta"] == "-3.0000"
+
+        g = await _approve(client, token, request_ids[0])
+        assert g.status_code == 200, g.text
+        assert await _stock_qty(drug_id) == Decimal("17.0000")
+
+        lines = await _latest_correction_journal()
+        assert lines["5900"] == (Decimal("24.00"), Decimal("0"))  # 3 x 8.00
+        assert lines["1200"] == (Decimal("0"), Decimal("24.00"))
+    finally:
+        await _cleanup([drug_id], request_ids)
+
+
+async def test_approve_overage_without_cost_basis_409(client):
+    """A from-zero overage on a drug with NO cost basis (no batches, master cost
+    0) cannot be valued — approval is refused atomically (legacy §2.3 'cannot
+    correct before balances')."""
+    drug_id = await _make_drug_and_stock(tax_type="14%", cost_price="0")
+    request_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        request_id = await _submit(client, token, drug_id, "5")
+        request_ids.append(request_id)
+        before_journals = await _correction_journal_count()
+        r = await _approve(client, token, request_id)
+        assert r.status_code == 409
+        assert "cost" in r.json()["detail"]
+        row = await _request(request_id)
+        assert row.status == "pending"
+        assert await _stock_qty(drug_id) == Decimal("0")
+        assert await _correction_journal_count() == before_journals  # no journal
+    finally:
+        await _cleanup([drug_id], request_ids)
+
+
+async def test_approve_overage_stale_rejected(client):
+    """Stock moved UP after an overage request: applying the frozen delta would
+    over-correct (feature §2.4 'cannot accept after change'), so it's 409."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        batches=[("10.0000", "5.0000", None)],
+        stock_qty="10.0000",
+    )
+    request_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        request_id = await _submit(client, token, drug_id, "25")  # delta +15
+        request_ids.append(request_id)
+
+        async with SessionLocal() as session:
+            row = (
+                await session.execute(
+                    select(BranchStock).where(
+                        BranchStock.branch_id == 1, BranchStock.drug_id == drug_id
+                    )
+                )
+            ).scalar_one()
+            row.qty = Decimal("8.0000")  # a sale moved stock before approval
+            await session.commit()
+
+        r = await _approve(client, token, request_id)
+        assert r.status_code == 409
+        assert "changed since" in r.json()["detail"]
+        assert (await _request(request_id)).status == "pending"
+        assert await _stock_qty(drug_id) == Decimal("8.0000")
+    finally:
+        await _cleanup([drug_id], request_ids)
+
+
+async def test_approve_reject_race_one_wins(client):
+    """Concurrent approve + reject of the same request: the branch lock
+    serializes them; exactly one decides, and the stock is consistent with the
+    winner (approved -> applied; rejected -> untouched)."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        batches=[("10.0000", "5.0000", None)],
+        stock_qty="10.0000",
+    )
+    request_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        request_id = await _submit(client, token, drug_id, "15")
+        request_ids.append(request_id)
+
+        codes = await asyncio.gather(
+            _approve(client, token, request_id),
+            _reject(client, token, request_id),
+        )
+        assert sorted(r.status_code for r in codes) == [200, 409]
+        row = await _request(request_id)
+        if row.status == "approved":
+            assert await _stock_qty(drug_id) == Decimal("15.0000")
+        else:
+            assert row.status == "rejected"
+            assert await _stock_qty(drug_id) == Decimal("10.0000")
     finally:
         await _cleanup([drug_id], request_ids)

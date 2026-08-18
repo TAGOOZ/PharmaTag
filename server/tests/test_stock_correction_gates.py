@@ -202,3 +202,29 @@ async def test_reject_already_decided_409(client):
 async def test_approve_unauthenticated_401(client):
     r = await _decide(client, "", 1, "approve")
     assert r.status_code == 401
+
+async def test_reject_sets_rejected_by_not_approved_by(client):
+    """A rejection records WHO rejected (rejected_by); approved_by must stay
+    empty — the shared column is for approvals only (edge pass #7)."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        batches=[("10.0000", "5.0000", None)],
+        stock_qty="10.0000",
+    )
+    mgr = await _make_user(_uniq("rejector"), permission_level=9, branch_id=1)
+    request_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        request_id = await _submit(client, token, drug_id, "15")
+        request_ids.append(request_id)
+        r = await _decide(client, _token_for(mgr, 1), request_id, "reject")
+        assert r.status_code == 200, r.text
+        assert r.json()["rejected_by"] == mgr
+        assert r.json()["approved_by"] is None
+
+        row = await _request(request_id)
+        assert row.rejected_by == mgr
+        assert row.approved_by is None
+    finally:
+        await _cleanup([drug_id], request_ids)
+        await _drop_user(mgr)

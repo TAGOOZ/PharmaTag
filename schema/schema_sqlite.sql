@@ -434,10 +434,12 @@ CREATE TABLE stock_correction_requests (
     drug_id      INTEGER NOT NULL REFERENCES drugs(id),
     batch_id     INTEGER REFERENCES stock_batches(id),
     delta        INTEGER NOT NULL,                               -- ×10000
+    counted      INTEGER,                                        -- ×10000
     reason       TEXT DEFAULT '',
     requested_by INTEGER NOT NULL REFERENCES users(id),
     status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
     approved_by  INTEGER REFERENCES users(id),
+    rejected_by  INTEGER REFERENCES users(id),
     decided_at   TEXT,
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     CHECK ((status = 'pending') = (decided_at IS NULL))

@@ -80,10 +80,12 @@ class StockCorrectionRequest(Base):
     drug_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("drugs.id"), nullable=False)
     batch_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("stock_batches.id"))
     delta: Mapped[object] = mapped_column(Numeric(18, 4), nullable=False)
+    counted: Mapped[Optional[object]] = mapped_column(Numeric(18, 4))
     reason: Mapped[str] = mapped_column(String(200), server_default="")
     requested_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
     status: Mapped[str] = mapped_column(correction_status_enum, nullable=False, server_default="pending")
     approved_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
+    rejected_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
     decided_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")

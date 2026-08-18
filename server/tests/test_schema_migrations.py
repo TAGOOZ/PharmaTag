@@ -192,3 +192,40 @@ def test_full_migration_lifecycle_on_throwaway_db():
     finally:
         with _conn(BASE_URL) as conn:
             conn.execute(f"DROP DATABASE IF EXISTS {dbname} WITH (FORCE)")
+
+def test_007_seeds_correction_account_for_every_existing_branch():
+    """Migration 007 must give EVERY branch that exists at migration time the
+    5900 corrections contra (edge pass #9 — a branch-2 approval must not
+    silently fall back to branch 1's chart)."""
+    dbname = f"pharmatag_edge_{uuid.uuid4().hex[:12]}"
+    db_url = BASE_URL.rsplit("/", 1)[0] + "/" + dbname
+    alembic_url = ALEMBIC_URL.rsplit("/", 1)[0] + "/" + dbname
+    try:
+        with _conn(BASE_URL) as conn:
+            conn.execute(f"DROP DATABASE IF EXISTS {dbname} WITH (FORCE)")
+            conn.execute(f"CREATE DATABASE {dbname} TEMPLATE template0")
+
+        # migrate only up to 006, then add a second branch
+        r = _alembic(["upgrade", "006_sale_returns"], alembic_url)
+        assert r.returncode == 0, r.stdout + r.stderr
+        with _conn(db_url) as conn:
+            (branch2,) = conn.execute(
+                "INSERT INTO branches (pharmacyid, mobile, pharname) "
+                "VALUES ('EDGE2', '01111111111', 'Edge Two') RETURNING id"
+            ).fetchone()
+
+        # 007 seeds 5900 for BOTH existing branches
+        r = _alembic(["upgrade", "007_stock_corrections"], alembic_url)
+        assert r.returncode == 0, r.stdout + r.stderr
+        with _conn(db_url) as conn:
+            rows = conn.execute(
+                "SELECT branch_id, code FROM accounts WHERE code = '5900'"
+            ).fetchall()
+            assert sorted(branch_id for branch_id, _ in rows) == [1, branch2]
+
+        # 008 carries on cleanly to head
+        r = _alembic(["upgrade", "head"], alembic_url)
+        assert r.returncode == 0, r.stdout + r.stderr
+    finally:
+        with _conn(BASE_URL) as conn:
+            conn.execute(f"DROP DATABASE IF EXISTS {dbname} WITH (FORCE)")

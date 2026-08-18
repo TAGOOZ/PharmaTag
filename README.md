@@ -159,8 +159,12 @@ invoice_no, offline outbox replay; gated by legacy level ≥ 2), parties
 (supplier/customer create/list, branch-scoped; gated by legacy level ≥ 4),
 stock counting (submit a physical count, manager approve/reject — approval
 applies the signed correction to stock_batches + branch_stock atomically with a
-balanced 1200↔5900 journal, audit + sync outbox + price_change_log (G12); a
-count-sheet `GET /stock/current` lists every branch drug with its system qty and
+balanced 1200↔5900 journal, audit + sync outbox + price_change_log (G12); the
+journal is valued at the cost of the units ACTUALLY moved (FIFO take × cost, or
+the target batch's cost), the ledger date is the business date in the configured
+timezone (`PHARMATAG_TIMEZONE`, default `Africa/Cairo`), and 5900 is an expense
+so a deficit debits it while an overage credits it; a count-sheet
+`GET /stock/current` lists every branch drug with its system qty and
 expiry batches; gated by legacy level ≥ 7 to decide),
 `/healthz` — and the web + desktop **الأدوية** screens, the web forced-reset
 (first-login) and voluntary change-password flows (ticket #37).

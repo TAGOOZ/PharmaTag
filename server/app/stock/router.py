@@ -62,7 +62,6 @@ def _serialize(
     request: StockCorrectionRequest,
     *,
     system_qty: str,
-    counted: Optional[str] = None,
 ) -> CountRequestOut:
     return CountRequestOut(
         id=request.id,
@@ -70,11 +69,13 @@ def _serialize(
         drug_id=request.drug_id,
         batch_id=request.batch_id,
         delta=_qty(request.delta),
-        counted=counted,
+        counted=_qty(request.counted) if request.counted is not None else None,
         system_qty=system_qty,
         reason=request.reason or "",
         status=request.status,
         requested_by=request.requested_by,
+        approved_by=request.approved_by,
+        rejected_by=request.rejected_by,
         decided_at=request.decided_at.isoformat() if request.decided_at else None,
         created_at=request.created_at.isoformat() if request.created_at else None,
     )
@@ -196,11 +197,7 @@ async def create_count_request(
         batch_id=body.batch_id,
     )
     system_qty = await _live_system_qty(session, branch_id, request.drug_id)
-    return _serialize(
-        request,
-        system_qty=system_qty,
-        counted=_qty(money.dec(system_qty) + money.dec(request.delta)),
-    )
+    return _serialize(request, system_qty=system_qty)
 
 
 @router.post("/count-requests/{request_id}/approve")

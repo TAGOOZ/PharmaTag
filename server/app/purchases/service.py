@@ -13,6 +13,8 @@ from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import business_date
+
 from app.core.db import atomic
 from app.models import Invoice
 from app.purchases.builder import _build_full_purchase
@@ -33,7 +35,7 @@ async def save_purchase(
 ) -> Invoice:
     """Save a purchase: new batches + stock-up + supplier payable + journal +
     audit + outbox, all in one transaction."""
-    datee = datee or date.today()
+    datee = datee or business_date()
     async with atomic(session):
         await acquire_branch_lock(session, branch_id)
         if invoice_no is None:

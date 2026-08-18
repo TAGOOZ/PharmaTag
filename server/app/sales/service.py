@@ -22,6 +22,8 @@ from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import business_date
+
 from app.core.audit import ACTION_INSERT, audit
 from app.core.db import atomic
 from app.core.events import (
@@ -89,7 +91,7 @@ async def save_sale(
     invoice). With lines it runs the full money/stock/journal write. The branch
     advisory lock serializes numbering; the whole write is one transaction.
     """
-    datee = datee or date.today()
+    datee = datee or business_date()
     async with atomic(session) as committed:
         await acquire_branch_lock(session, branch_id)
         if invoice_no is None:

@@ -7,7 +7,7 @@ branch. Totals are exact decimal strings (plan/02 §2).
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -18,6 +18,7 @@ from app.auth.dependencies import get_current_user
 from app.auth.rbac import require_level
 from app.core import money
 from app.core.db import get_session
+from app.core.time import business_date
 from app.models import Drug, Invoice, InvoiceLine, Journal, JournalLine, PaymentSplit, User
 from app.purchases.returns.schemas import ReturnCreateRequest
 from app.purchases.returns.service import save_purchase_return
@@ -159,7 +160,7 @@ async def list_purchases(
     if datee is not None:
         q = q.where(Invoice.datee == datee)
     else:
-        q = q.where(Invoice.datee == datetime.now().date())
+        q = q.where(Invoice.datee == business_date())
     q = q.order_by(Invoice.id.desc()).limit(limit)
     invoices = (await session.execute(q)).scalars().all()
     return {
@@ -217,7 +218,7 @@ async def list_purchases_returns(
     if datee is not None:
         q = q.where(Invoice.datee == datee)
     else:
-        q = q.where(Invoice.datee == datetime.now().date())
+        q = q.where(Invoice.datee == business_date())
     q = q.order_by(Invoice.id.desc()).limit(limit)
     invoices = (await session.execute(q)).scalars().all()
     return {

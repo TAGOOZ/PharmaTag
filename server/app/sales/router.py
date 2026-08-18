@@ -8,7 +8,7 @@ view is the 80mm/A5 brand receipt (plan/09 P06).
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -20,6 +20,7 @@ from app.auth.dependencies import get_current_user
 from app.auth.rbac import require_permission
 from app.core import money
 from app.core.db import get_session
+from app.core.time import business_date
 from app.models import Branch, Drug, Invoice, InvoiceLine, Journal, JournalLine, PaymentSplit, User
 from app.sales import print_html
 from app.sales.returns.schemas import ReturnCreateRequest
@@ -160,7 +161,7 @@ async def list_sales(
     if datee is not None:
         q = q.where(Invoice.datee == datee)
     else:
-        q = q.where(Invoice.datee == datetime.now().date())
+        q = q.where(Invoice.datee == business_date())
     q = q.order_by(Invoice.id.desc()).limit(limit)
     invoices = (await session.execute(q)).scalars().all()
     return {
@@ -216,7 +217,7 @@ async def list_sales_returns(
     if datee is not None:
         q = q.where(Invoice.datee == datee)
     else:
-        q = q.where(Invoice.datee == datetime.now().date())
+        q = q.where(Invoice.datee == business_date())
     q = q.order_by(Invoice.id.desc()).limit(limit)
     invoices = (await session.execute(q)).scalars().all()
     return {

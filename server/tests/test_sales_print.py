@@ -16,6 +16,7 @@ from app.models import (
     Balance,
     Branch,
     BranchStock,
+    DrawerMovement,
     Drug,
     Invoice,
     InvoiceLine,
@@ -97,6 +98,9 @@ async def _cleanup(drug_ids: list[int], invoice_ids: list[int]) -> None:
             await session.execute(delete(Balance).where(Balance.branch_id == BRANCH_ID))
             await session.execute(
                 delete(PaymentSplit).where(PaymentSplit.invoice_id == iid)
+            )
+            await session.execute(
+                delete(DrawerMovement).where(DrawerMovement.ref_invoice_id == iid)
             )
             await session.execute(
                 delete(InvoiceLine).where(InvoiceLine.invoice_id == iid)

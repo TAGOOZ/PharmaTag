@@ -14,6 +14,7 @@ from app.core.audit import enqueue_sync
 from app.models import (
     AuditLog,
     BranchStock,
+    DrawerMovement,
     Drug,
     Invoice,
     InvoiceLine,
@@ -204,6 +205,9 @@ async def _cleanup(drug_ids: list[int], invoice_ids: list[int], party_ids: list[
                 await session.execute(delete(Journal).where(Journal.id.in_(jids)))
             await session.execute(
                 delete(PaymentSplit).where(PaymentSplit.invoice_id == iid)
+            )
+            await session.execute(
+                delete(DrawerMovement).where(DrawerMovement.ref_invoice_id == iid)
             )
             await session.execute(delete(InvoiceLine).where(InvoiceLine.invoice_id == iid))
             await session.execute(

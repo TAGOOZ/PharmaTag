@@ -14,6 +14,7 @@ from sqlalchemy import text
 from app.auth.router import router as auth_router
 from app.core.config import settings
 from app.core.db import SessionLocal, engine
+from app.drawer.router import router as drawer_router
 from app.drugs.router import router as drugs_router
 from app.parties.router import router as parties_router
 from app.plugins.registry import registry
@@ -67,6 +68,9 @@ def create_app() -> FastAPI:
     )
     application.include_router(
         stock_router, prefix="/api/v1/stock", tags=["stock"]
+    )
+    application.include_router(
+        drawer_router, prefix="/api/v1/drawer", tags=["drawer"]
     )
 
     # plan/02 §3: validation failures surface as 400 (not FastAPI's 422).

@@ -45,6 +45,7 @@ from app.core.money import (
     split_vat,
     tax_rate,
 )
+from app.drawer.movements import SUPPLIER_PAY, record_payment_splits
 from app.models import Branch, Invoice, InvoiceLine, InvoiceVersion, PaymentSplit
 from app.money.journal import post_journal
 from app.purchases.returns.payload import _purchase_return_payload
@@ -426,6 +427,17 @@ async def _build_full_purchase_return(
                 user_id=user_id,
             )
         )
+
+    await record_payment_splits(
+        session,
+        branch_id=branch_id,
+        user_id=user_id,
+        datee=datee,
+        direction="in",
+        reason=SUPPLIER_PAY,
+        splits=splits,
+        ref_invoice_id=invoice.id,
+    )
 
     entry_no = await next_journal_entry_no(session, branch_id, datee)
     entries: list[tuple[str, Decimal, Decimal]] = []

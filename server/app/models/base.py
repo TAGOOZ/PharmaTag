@@ -48,6 +48,14 @@ payment_method_enum = ENUM(
     "cash", "card", "credit", "manual_cash", "manual_card", name="payment_method",
     create_type=False,
 )
+drawer_direction_enum = ENUM("in", "out", name="drawer_direction", create_type=False)
+drawer_method_enum = ENUM("cash", "network", name="drawer_method", create_type=False)
+drawer_reason_enum = ENUM(
+    "cash_sale", "cash_return", "supplier_pay", "customer_settlement",
+    "expense", "transfer", "opening", "correction", name="drawer_reason",
+    create_type=False,
+)
+close_status_enum = ENUM("open", "closed", "reopened", name="close_status", create_type=False)
 
 user_roles_table = Table(
     "user_roles",

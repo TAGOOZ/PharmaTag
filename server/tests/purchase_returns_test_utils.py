@@ -15,6 +15,7 @@ from app.models import (
     AuditLog,
     Balance,
     BranchStock,
+    DrawerMovement,
     Drug,
     Invoice,
     InvoiceLine,
@@ -56,7 +57,7 @@ __all__ = [
 
 
 async def _purchase(
-    client, token: str, supplier_id: int, lines: list[dict], payments=None, disc_percent=None
+    client, token: str, supplier_id: int, lines: list[dict], payments=None, disc_percent=None, datee=None
 ) -> dict:
     """Create a purchase via the API and return its response body."""
     body = {"supplier_id": supplier_id, "lines": lines}
@@ -64,6 +65,8 @@ async def _purchase(
         body["payments"] = payments
     if disc_percent is not None:
         body["disc_percent"] = disc_percent
+    if datee is not None:
+        body["datee"] = datee
     r = await client.post(
         "/api/v1/purchases",
         headers={"Authorization": f"Bearer {token}"},
@@ -73,11 +76,13 @@ async def _purchase(
     return r.json()
 
 
-async def _return(client, token: str, purchase: dict, lines: list[dict], payments=None) -> dict:
+async def _return(client, token: str, purchase: dict, lines: list[dict], payments=None, datee=None) -> dict:
     """Record a purchase return via the API and return its response body."""
     body = {"lines": lines}
     if payments is not None:
         body["payments"] = payments
+    if datee is not None:
+        body["datee"] = datee
     r = await client.post(
         f"/api/v1/purchases/{purchase['id']}/return",
         headers={"Authorization": f"Bearer {token}"},
@@ -147,6 +152,9 @@ async def _cleanup(drug_ids: list[int], invoice_ids: list[int], party_ids: list[
                     await session.execute(delete(Journal).where(Journal.id.in_(jids)))
                 await session.execute(
                     delete(PaymentSplit).where(PaymentSplit.invoice_id == iid)
+                )
+                await session.execute(
+                    delete(DrawerMovement).where(DrawerMovement.ref_invoice_id == iid)
                 )
                 await session.execute(
                     delete(InvoiceVersion).where(InvoiceVersion.invoice_id == iid)

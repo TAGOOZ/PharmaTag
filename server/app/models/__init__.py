@@ -15,7 +15,11 @@ from app.models.base import (
     Base,
     account_type_enum,
     batch_type_enum,
+    close_status_enum,
     correction_status_enum,
+    drawer_direction_enum,
+    drawer_method_enum,
+    drawer_reason_enum,
     invoice_kind_enum,
     invoice_status_enum,
     journal_source_enum,
@@ -26,6 +30,7 @@ from app.models.base import (
     user_roles_table,
 )
 from app.models.core import AppConfig, AuditLog, Branch, SyncLog
+from app.models.drawer import DailyClose, DrawerMovement, Shift, WorkPeriod
 from app.models.drugs import Drug, DrugBarcode, PriceChangeLog
 from app.models.plugins import AppPlugin, PluginBranchGrant, PluginDependencyRow, PluginSettings
 from app.models.sales import Invoice, InvoiceLine, InvoiceVersion, PaymentSplit
@@ -40,6 +45,8 @@ __all__ = [
     "Base",
     "Branch",
     "BranchStock",
+    "DailyClose",
+    "DrawerMovement",
     "Drug",
     "DrugBarcode",
     "Invoice",
@@ -55,13 +62,19 @@ __all__ = [
     "PluginSettings",
     "PriceChangeLog",
     "Role",
+    "Shift",
     "StockBatch",
     "StockCorrectionRequest",
     "SyncLog",
     "User",
+    "WorkPeriod",
     "account_type_enum",
     "batch_type_enum",
+    "close_status_enum",
     "correction_status_enum",
+    "drawer_direction_enum",
+    "drawer_method_enum",
+    "drawer_reason_enum",
     "invoice_kind_enum",
     "invoice_status_enum",
     "journal_source_enum",

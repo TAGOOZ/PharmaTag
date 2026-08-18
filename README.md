@@ -137,7 +137,7 @@ the ticket ships.
 | web `/` | dashboard (home) | stub — static shell, today-summary not wired | #38 |
 | desktop | module screens (`App.tsx` STUBS) | stubs — same as web | #38 |
 | desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly | #39 |
-| API | money, reports endpoints | not implemented | #14, #15 (S2/S3 slices later) |
+| API | money, reports endpoints | drawer + day close are real (`/api/v1/drawer/*`, ticket #14); reports + the rest of the money API remain stubs | #14 (S2/S3 slices later), #15 |
 | API | settings endpoints | not implemented — no branch-settings API exists | #38 |
 | data | CC0 drug catalog download | documented, not bundled — the importer (`server/app/drugs/importer.py`, CLI `python -m app.drugs.importer <file>`) is real and de-dupes/idempotent, but the 24k-medicine source (CC0 `karem505/egyptian-drug-database`) is fetched at import time, not shipped. A sample fixture lives in `server/tests/fixtures/cc0_catalog_sample.csv`. | #8 (shipped) |
 
@@ -166,7 +166,15 @@ timezone (`PHARMATAG_TIMEZONE`, default `Africa/Cairo`), and 5900 is an expense
 so a deficit debits it while an overage credits it; a count-sheet
 `GET /stock/current` lists every branch drug with its system qty and
 expiry batches; gated by legacy level ≥ 7 to decide),
-`/healthz` — and the web + desktop **الأدوية** screens, the web forced-reset
+`/healthz`, cash drawer + day close (`/api/v1/drawer/movements` + `/day-close`:
+every sale / sale-return / purchase / purchase-return payment split lands as a
+`drawer_movements` row in the same transaction, manual movements gated by
+`drawer.manage` (legacy floor 3), day close computes the drawer equation
+`expected = drawer_start + Σcash_in − Σcash_out` and snapshots the day totals
+(net cash/network, manual cash/card, purchases, expenses, COGS, net profit,
+VAT, discounts) into `daily_close` per (branch, datee), gated by `day.close`;
+reopen is legacy level ≥ 7 with a reversal + audit, and a closed day rejects
+new movements until reopened) — and the web + desktop **الأدوية** screens, the web forced-reset
 (first-login) and voluntary change-password flows (ticket #37).
 
 ## 7. CI

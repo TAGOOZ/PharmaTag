@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import ACTION_INSERT, audit, enqueue_sync
 from app.core.money import add, dec, format2, line_money, round2, round4, tax_rate
+from app.drawer.movements import SALE, record_payment_splits
 from app.models import Branch, Drug, DrugBarcode, Invoice, InvoiceLine, PaymentSplit
 from app.sales.journal import post_sale_journal
 from app.sales.numbering import next_journal_entry_no
@@ -165,6 +166,17 @@ async def _build_full_sale(
                 user_id=user_id,
             )
         )
+
+    await record_payment_splits(
+        session,
+        branch_id=branch_id,
+        user_id=user_id,
+        datee=datee,
+        direction="in",
+        reason=SALE,
+        splits=splits,
+        ref_invoice_id=invoice.id,
+    )
 
     entry_no = await next_journal_entry_no(session, branch_id, datee)
     entries: list[tuple[str, Decimal, Decimal]] = []

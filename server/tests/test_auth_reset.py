@@ -185,3 +185,123 @@ async def test_reset_requires_authentication(client):
         json={"old_password": "x", "new_password": NEW_PASS},
     )
     assert r.status_code == 401
+
+
+async def test_reset_rejects_new_password_equal_to_old(client):
+    user_id = await _make_user(
+        "__t7_same_new__", pass_hash=security.hash_password_force_reset("TempPass123")
+    )
+    try:
+        token = create_access_token(
+            str(user_id), branch_id=1, roles=[], permission_level=1
+        )
+        r = await client.post(
+            "/api/v1/auth/reset-password",
+            json={"old_password": "TempPass123", "new_password": "TempPass123"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 400
+        # nothing changed: the flagged hash is still flagged
+        async with SessionLocal() as session:
+            row = (
+                await session.execute(
+                    select(User).where(User.username == "__t7_same_new__")
+                )
+            ).scalar_one()
+            assert security.is_force_reset(row.pass_hash) is True
+    finally:
+        await _cleanup("__t7_same_new__")
+
+
+async def _assert_still_flagged(username: str) -> None:
+    async with SessionLocal() as session:
+        row = (
+            await session.execute(select(User).where(User.username == username))
+        ).scalar_one()
+        assert security.is_force_reset(row.pass_hash) is True
+
+
+async def test_reset_rejects_empty_new_password(client):
+    user_id = await _make_user(
+        "__t7_empty_new__", pass_hash=security.hash_password_force_reset("TempPass123")
+    )
+    try:
+        token = create_access_token(
+            str(user_id), branch_id=1, roles=[], permission_level=1
+        )
+        r = await client.post(
+            "/api/v1/auth/reset-password",
+            json={"old_password": "TempPass123", "new_password": ""},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 400
+        await _assert_still_flagged("__t7_empty_new__")
+    finally:
+        await _cleanup("__t7_empty_new__")
+
+
+async def test_reset_rejects_whitespace_only_new_password(client):
+    user_id = await _make_user(
+        "__t7_blank_new__", pass_hash=security.hash_password_force_reset("TempPass123")
+    )
+    try:
+        token = create_access_token(
+            str(user_id), branch_id=1, roles=[], permission_level=1
+        )
+        r = await client.post(
+            "/api/v1/auth/reset-password",
+            json={"old_password": "TempPass123", "new_password": "   \t  "},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 400
+        await _assert_still_flagged("__t7_blank_new__")
+    finally:
+        await _cleanup("__t7_blank_new__")
+
+
+async def test_reset_rejects_overlong_new_password_beyond_bcrypt_limit(client):
+    """bcrypt silently ignores bytes past 72, so an over-long password is
+    truncated — two different 73-byte passwords would both verify. The endpoint
+    must reject rather than store a truncated hash."""
+    user_id = await _make_user(
+        "__t7_long_new__", pass_hash=security.hash_password_force_reset("TempPass123")
+    )
+    try:
+        token = create_access_token(
+            str(user_id), branch_id=1, roles=[], permission_level=1
+        )
+        r = await client.post(
+            "/api/v1/auth/reset-password",
+            json={"old_password": "TempPass123", "new_password": "a" * 73},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 400
+        await _assert_still_flagged("__t7_long_new__")
+    finally:
+        await _cleanup("__t7_long_new__")
+
+
+async def test_reset_accepts_new_password_exactly_at_bcrypt_limit(client):
+    user_id = await _make_user(
+        "__t7_72_new__", pass_hash=security.hash_password_force_reset("TempPass123")
+    )
+    try:
+        token = create_access_token(
+            str(user_id), branch_id=1, roles=[], permission_level=1
+        )
+        r = await client.post(
+            "/api/v1/auth/reset-password",
+            json={"old_password": "TempPass123", "new_password": "a" * 72},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        async with SessionLocal() as session:
+            row = (
+                await session.execute(
+                    select(User).where(User.username == "__t7_72_new__")
+                )
+            ).scalar_one()
+            assert security.is_force_reset(row.pass_hash) is False
+            assert security.verify_password("a" * 72, row.pass_hash) == (True, False)
+    finally:
+        await _cleanup("__t7_72_new__")

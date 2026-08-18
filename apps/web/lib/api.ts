@@ -67,6 +67,26 @@ export async function login(
   return (await res.json()) as LoginResponse;
 }
 
+/** Self-service password change (ticket #37): proves the current password,
+ * sets a new one. 401 = wrong old password, 400 = rejected new password. */
+export async function resetPassword(
+  token: string,
+  oldPassword: string,
+  newPassword: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${API_URL}/api/v1/auth/reset-password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    signal,
+  });
+  await throwForStatus(res);
+}
+
 export interface Drug {
   id: number;
   drugname: string;

@@ -8,10 +8,13 @@ import {
   clearToken,
   type DrugListResponse,
   fetchDrugs,
+  type LoginResponse,
   loadToken,
   login,
+  resetPassword,
   saveToken,
 } from '@/lib/api';
+import { RESET_ERROR_TEXT, type ResetError, validateNewPassword } from '@/lib/change-password';
 
 type ViewState = 'boot' | 'login' | 'ready' | 'error';
 type LoginError = 'invalid' | 'network' | null;
@@ -22,7 +25,9 @@ export default function DrugsPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState<LoginError>(null);
-  const [mustReset, setMustReset] = useState(false);
+  const [pendingAuth, setPendingAuth] = useState<LoginResponse | null>(null);
+  const [resetForm, setResetForm] = useState({ oldPassword: '', newPassword: '', confirm: '' });
+  const [resetError, setResetError] = useState<ResetError>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -60,11 +65,12 @@ export default function DrugsPage() {
     e.preventDefault();
     setSubmitting(true);
     setLoginError(null);
-    setMustReset(false);
     try {
       const auth = await login(username, password);
       if (auth.must_reset_password) {
-        setMustReset(true);
+        setPendingAuth(auth);
+        setResetForm({ oldPassword: password, newPassword: '', confirm: '' });
+        setResetError(null);
         setSubmitting(false);
         return;
       }
@@ -79,6 +85,49 @@ export default function DrugsPage() {
       } else {
         setLoginError('network');
       }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function submitReset(e: FormEvent) {
+    e.preventDefault();
+    const auth = pendingAuth;
+    if (!auth) return;
+    const clientError = validateNewPassword(
+      resetForm.oldPassword,
+      resetForm.newPassword,
+      resetForm.confirm,
+    );
+    if (clientError) {
+      setResetError(clientError);
+      return;
+    }
+    setSubmitting(true);
+    setResetError(null);
+    try {
+      await resetPassword(auth.access_token, resetForm.oldPassword, resetForm.newPassword);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setResetError('wrong-old');
+      } else if (err instanceof ApiError && err.status === 400) {
+        setResetError('rejected');
+      } else {
+        setResetError('network');
+      }
+      setSubmitting(false);
+      return;
+    }
+    // Password changed: the login token becomes the session token. Never
+    // return to the reset form afterwards — the old password is already dead.
+    saveToken(auth.access_token);
+    setPendingAuth(null);
+    setResetForm({ oldPassword: '', newPassword: '', confirm: '' });
+    try {
+      setData(await fetchDrugs(auth.access_token));
+      setView('ready');
+    } catch {
+      setView('error');
     } finally {
       setSubmitting(false);
     }
@@ -118,6 +167,58 @@ export default function DrugsPage() {
 
         {view === 'boot' ? (
           <p className="pt-caption">جارٍ التحميل…</p>
+        ) : pendingAuth ? (
+          <div className="pt-card w-full max-w-sm">
+            <form className="flex flex-col gap-3" onSubmit={submitReset}>
+              <p className="pt-title text-lg">تغيير كلمة المرور</p>
+              <p className="pt-caption">
+                يجب تغيير كلمة المرور الافتراضية قبل الدخول. أدخل كلمة مرور جديدة قوية.
+              </p>
+              <label className="pt-caption flex flex-col gap-1">
+                كلمة المرور الحالية
+                <input
+                  className="rounded-md border border-border px-3 py-2"
+                  type="password"
+                  value={resetForm.oldPassword}
+                  autoComplete="current-password"
+                  onChange={(e) => setResetForm((f) => ({ ...f, oldPassword: e.target.value }))}
+                  required
+                />
+              </label>
+              <label className="pt-caption flex flex-col gap-1">
+                كلمة المرور الجديدة
+                <input
+                  className="rounded-md border border-border px-3 py-2"
+                  type="password"
+                  value={resetForm.newPassword}
+                  autoComplete="new-password"
+                  onChange={(e) => setResetForm((f) => ({ ...f, newPassword: e.target.value }))}
+                  required
+                />
+              </label>
+              <label className="pt-caption flex flex-col gap-1">
+                تأكيد كلمة المرور الجديدة
+                <input
+                  className="rounded-md border border-border px-3 py-2"
+                  type="password"
+                  value={resetForm.confirm}
+                  autoComplete="new-password"
+                  onChange={(e) => setResetForm((f) => ({ ...f, confirm: e.target.value }))}
+                  required
+                />
+              </label>
+              {resetError && (
+                <p className="pt-caption text-red-600">{RESET_ERROR_TEXT[resetError]}</p>
+              )}
+              <button
+                type="submit"
+                disabled={submitting}
+                className="pt-caption cursor-pointer rounded-md bg-surface-elevated px-4 py-2 disabled:opacity-50"
+              >
+                {submitting ? 'جارٍ الحفظ…' : 'تغيير وحفظ'}
+              </button>
+            </form>
+          </div>
         ) : view === 'login' ? (
           <div className="pt-card w-full max-w-sm">
             <form className="flex flex-col gap-3" onSubmit={submit}>
@@ -143,11 +244,6 @@ export default function DrugsPage() {
                   required
                 />
               </label>
-              {mustReset && (
-                <p className="pt-caption text-red-600">
-                  يجب تغيير كلمة المرور الافتراضية قبل الدخول.
-                </p>
-              )}
               {loginError === 'invalid' && (
                 <p className="pt-caption text-red-600">بيانات الدخول غير صحيحة — أعد المحاولة.</p>
               )}

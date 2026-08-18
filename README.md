@@ -132,9 +132,9 @@ the ticket ships.
 
 | Area | Item | Status | Ticket |
 | --- | --- | --- | --- |
+| web `/pos` `/purchases` `/stock` `/money` `/reports` `/employees` | module screens | stubs — show "built in the corresponding slice" | #38 |
+| web `/settings` | module screen | change-password form works (ticket #37); the rest of the settings module is a stub | #38 |
 | web `/` | dashboard (home) | stub — static shell, today-summary not wired | #38 |
-| web `/pos` `/purchases` `/stock` `/money` `/reports` `/employees` `/settings` | module screens | stubs — show "built in the corresponding slice" | #38 |
-| web | change-password / `must_reset_password` flow | missing — login gates but there is no form (the API is shipped) | #37 |
 | desktop | module screens (`App.tsx` STUBS) | stubs — same as web | #38 |
 | desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly | #39 |
 | API | stock (write), money, reports endpoints | not implemented | #13, #14, #15 (S2/S3 slices later) |
@@ -157,7 +157,8 @@ batch + branch_stock, reverses money/AP/payments at the original prices with a
 proportional refund split, snapshots the original into `invoice_versions`, new
 invoice_no, offline outbox replay; gated by legacy level ≥ 2), parties
 (supplier/customer create/list, branch-scoped; gated by legacy level ≥ 4),
-`/healthz` — and the web + desktop **الأدوية** screens.
+`/healthz` — and the web + desktop **الأدوية** screens, the web forced-reset
+(first-login) and voluntary change-password flows (ticket #37).
 
 ## 7. CI
 

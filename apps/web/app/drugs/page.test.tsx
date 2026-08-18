@@ -100,6 +100,16 @@ function setCredentials(username: string, password: string) {
   setInputValue(passField, password);
 }
 
+function setResetPasswords(newPass: string, confirm: string, oldPass?: string) {
+  const inputs = [...host.querySelectorAll('input')];
+  if (inputs.length !== 3) throw new Error(`expected 3 reset-form inputs, got ${inputs.length}`);
+  const [oldField, newField, confirmField] = inputs;
+  if (!oldField || !newField || !confirmField) throw new Error('reset-form inputs missing');
+  if (oldPass !== undefined) setInputValue(oldField, oldPass);
+  setInputValue(newField, newPass);
+  setInputValue(confirmField, confirm);
+}
+
 async function click(text: string) {
   await act(async () => {
     buttonByText(text).click();
@@ -160,7 +170,7 @@ describe('DrugsPage', () => {
     expect(textOf()).toContain('بانادول إكسترا');
   });
 
-  it('blocks navigation and explains when the password must be reset', async () => {
+  it('blocks navigation and shows the forced password-reset form when the password must be reset', async () => {
     await render(<DrugsPage />);
     setCredentials('admin', 'changeme');
     vi.stubGlobal(
@@ -172,6 +182,128 @@ describe('DrugsPage', () => {
     await click('دخول');
     expect(textOf()).toContain('يجب تغيير كلمة المرور الافتراضية');
     expect(textOf()).not.toContain('بانادول إكسترا');
+    expect(window.localStorage.getItem('pharmatag:token')).toBeNull();
+    expect(host.querySelectorAll('input')).toHaveLength(3);
+  });
+
+  it('completes login after a forced reset sets a new password', async () => {
+    await render(<DrugsPage />);
+    setCredentials('admin', 'changeme');
+    const login = jsonResponse({ ...LOGIN_OK, must_reset_password: true, access_token: 'tok-x' });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(login)
+        .mockResolvedValueOnce(jsonResponse({ ok: true }))
+        .mockResolvedValueOnce(jsonResponse(LIST)),
+    );
+    await click('دخول');
+    setResetPasswords('NewPass123!', 'NewPass123!');
+    await click('تغيير وحفظ');
+    expect(textOf()).toContain('بانادول إكسترا');
+    expect(window.localStorage.getItem('pharmatag:token')).toBe('tok-x');
+  });
+
+  it('surfaces a wrong old password as 401 on the forced-reset form', async () => {
+    await render(<DrugsPage />);
+    setCredentials('admin', 'changeme');
+    const login = jsonResponse({ ...LOGIN_OK, must_reset_password: true, access_token: 'tok-x' });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(login)
+        .mockResolvedValueOnce(jsonResponse({ detail: 'Old password is incorrect' }, 401)),
+    );
+    await click('دخول');
+    setResetPasswords('NewPass123!', 'NewPass123!', 'wrong');
+    await click('تغيير وحفظ');
+    expect(textOf()).toContain('كلمة المرور الحالية غير صحيحة');
+    expect(window.localStorage.getItem('pharmatag:token')).toBeNull();
+    expect(textOf()).not.toContain('بانادول إكسترا');
+  });
+
+  it('surfaces a rejected new password as 400 on the forced-reset form', async () => {
+    await render(<DrugsPage />);
+    setCredentials('admin', 'changeme');
+    const login = jsonResponse({ ...LOGIN_OK, must_reset_password: true, access_token: 'tok-x' });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(login)
+        .mockResolvedValueOnce(jsonResponse({ detail: 'must differ' }, 400)),
+    );
+    await click('دخول');
+    setResetPasswords('NewPass123!', 'NewPass123!', 'OldPass123');
+    await click('تغيير وحفظ');
+    expect(textOf()).toContain('كلمة المرور الجديدة مرفوضة');
+    expect(window.localStorage.getItem('pharmatag:token')).toBeNull();
+  });
+
+  it('surfaces a connectivity failure on the forced-reset form', async () => {
+    await render(<DrugsPage />);
+    setCredentials('admin', 'changeme');
+    const login = jsonResponse({ ...LOGIN_OK, must_reset_password: true, access_token: 'tok-x' });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(login)
+        .mockRejectedValueOnce(new TypeError('fetch failed')),
+    );
+    await click('دخول');
+    setResetPasswords('NewPass123!', 'NewPass123!');
+    await click('تغيير وحفظ');
+    expect(textOf()).toContain('تعذّر الاتصال بالـ API');
+    expect(window.localStorage.getItem('pharmatag:token')).toBeNull();
+  });
+
+  it('does not strand the user on the reset form when the post-reset drug fetch fails', async () => {
+    await render(<DrugsPage />);
+    setCredentials('admin', 'changeme');
+    const login = jsonResponse({ ...LOGIN_OK, must_reset_password: true, access_token: 'tok-x' });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(login)
+        .mockResolvedValueOnce(jsonResponse({ ok: true }))
+        .mockRejectedValueOnce(new TypeError('fetch failed')),
+    );
+    await click('دخول');
+    setResetPasswords('NewPass123!', 'NewPass123!');
+    await click('تغيير وحفظ');
+    // password changed + token saved: not stuck on the reset form, and the
+    // form's old password is no longer offered as a retry target.
+    expect(window.localStorage.getItem('pharmatag:token')).toBe('tok-x');
+    expect(host.querySelectorAll('input')).toHaveLength(0);
+    expect(textOf()).toContain('تعذّر جلب قائمة الأدوية');
+  });
+
+  it('validates the new password client-side before calling the API', async () => {
+    await render(<DrugsPage />);
+    setCredentials('admin', 'changeme');
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ ...LOGIN_OK, must_reset_password: true, access_token: 'tok-x' }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await click('دخول');
+
+    setResetPasswords('Short1!', 'Short1!');
+    await click('تغيير وحفظ');
+    expect(textOf()).toContain('8 أحرف على الأقل');
+
+    setResetPasswords('changeme', 'changeme');
+    await click('تغيير وحفظ');
+    expect(textOf()).toContain('لا تُقبل ككلمة مرور جديدة');
+
+    setResetPasswords('NewPass123!', 'Mismatch456!');
+    await click('تغيير وحفظ');
+    expect(textOf()).toContain('غير متطابقتين');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(window.localStorage.getItem('pharmatag:token')).toBeNull();
   });
 

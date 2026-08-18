@@ -85,6 +85,22 @@ async def reset_password(
             status.HTTP_400_BAD_REQUEST,
             "New password must differ from the weak default",
         )
+    if body.new_password == body.old_password:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "New password must differ from the current password",
+        )
+    if not body.new_password.strip():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "New password must not be empty"
+        )
+    # bcrypt ignores bytes past 72, silently truncating — refuse over-long
+    # inputs instead of storing a hash that verifies two different passwords.
+    if len(body.new_password.encode("utf-8")) > 72:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "New password must be at most 72 bytes",
+        )
     user.pass_hash = security.hash_password(body.new_password)
     session.add(user)
     await session.commit()

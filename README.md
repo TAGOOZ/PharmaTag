@@ -137,7 +137,7 @@ the ticket ships.
 | web `/` | dashboard (home) | stub — static shell, today-summary not wired | #38 |
 | desktop | module screens (`App.tsx` STUBS) | stubs — same as web | #38 |
 | desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly | #39 |
-| API | stock (write), money, reports endpoints | not implemented | #13, #14, #15 (S2/S3 slices later) |
+| API | money, reports endpoints | not implemented | #14, #15 (S2/S3 slices later) |
 | API | settings endpoints | not implemented — no branch-settings API exists | #38 |
 | data | CC0 drug catalog download | documented, not bundled — the importer (`server/app/drugs/importer.py`, CLI `python -m app.drugs.importer <file>`) is real and de-dupes/idempotent, but the 24k-medicine source (CC0 `karem505/egyptian-drug-database`) is fetched at import time, not shipped. A sample fixture lives in `server/tests/fixtures/cc0_catalog_sample.csv`. | #8 (shipped) |
 
@@ -157,6 +157,11 @@ batch + branch_stock, reverses money/AP/payments at the original prices with a
 proportional refund split, snapshots the original into `invoice_versions`, new
 invoice_no, offline outbox replay; gated by legacy level ≥ 2), parties
 (supplier/customer create/list, branch-scoped; gated by legacy level ≥ 4),
+stock counting (submit a physical count, manager approve/reject — approval
+applies the signed correction to stock_batches + branch_stock atomically with a
+balanced 1200↔5900 journal, audit + sync outbox + price_change_log (G12); a
+count-sheet `GET /stock/current` lists every branch drug with its system qty and
+expiry batches; gated by legacy level ≥ 7 to decide),
 `/healthz` — and the web + desktop **الأدوية** screens, the web forced-reset
 (first-login) and voluntary change-password flows (ticket #37).
 

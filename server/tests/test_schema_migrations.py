@@ -63,7 +63,7 @@ EXPECTED_COUNTS = {
     "role_permissions": 27,      # admin->all 16 + manager 6 + accountant 2 +
                                  # pharmacist 1 + cashier 1 + 005 admin grant
     "user_roles": 1,
-    "accounts": 11,
+    "accounts": 12,
     "app_plugins": 2,
     "plugin_branch_grants": 2,
     "app_config": 6,

@@ -15,6 +15,7 @@ from app.models.base import (
     Base,
     account_type_enum,
     batch_type_enum,
+    correction_status_enum,
     invoice_kind_enum,
     invoice_status_enum,
     journal_source_enum,
@@ -28,7 +29,7 @@ from app.models.core import AppConfig, AuditLog, Branch, SyncLog
 from app.models.drugs import Drug, DrugBarcode, PriceChangeLog
 from app.models.plugins import AppPlugin, PluginBranchGrant, PluginDependencyRow, PluginSettings
 from app.models.sales import Invoice, InvoiceLine, InvoiceVersion, PaymentSplit
-from app.models.stock import BranchStock, StockBatch
+from app.models.stock import BranchStock, StockBatch, StockCorrectionRequest
 
 __all__ = [
     "Account",
@@ -55,10 +56,12 @@ __all__ = [
     "PriceChangeLog",
     "Role",
     "StockBatch",
+    "StockCorrectionRequest",
     "SyncLog",
     "User",
     "account_type_enum",
     "batch_type_enum",
+    "correction_status_enum",
     "invoice_kind_enum",
     "invoice_status_enum",
     "journal_source_enum",

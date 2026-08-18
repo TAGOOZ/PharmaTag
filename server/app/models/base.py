@@ -41,6 +41,9 @@ journal_source_enum = ENUM(
     "transfer", "opening", "settlement", "correction", name="journal_source",
     create_type=False,
 )
+correction_status_enum = ENUM(
+    "pending", "approved", "rejected", name="correction_status", create_type=False,
+)
 payment_method_enum = ENUM(
     "cash", "card", "credit", "manual_cash", "manual_card", name="payment_method",
     create_type=False,

@@ -18,7 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, batch_type_enum
+from app.models.base import Base, batch_type_enum, correction_status_enum
 
 
 class StockBatch(Base):
@@ -65,3 +65,26 @@ class BranchStock(Base):
     price: Mapped[Optional[object]] = mapped_column(Numeric(18, 4), server_default="0")
     barcode: Mapped[Optional[str]] = mapped_column(String(16), server_default="")
     lastedit: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+
+
+class StockCorrectionRequest(Base):
+    """`stock_correction_requests` (plan/01 §1.7, RasidCorrect.phy) — a staff
+    count submission awaiting manager approval. `delta` is the signed correction
+    (+overage / -deficit) the approval applies to `stock_batches` +
+    `branch_stock`; CHECK keeps `status='pending'` iff `decided_at IS NULL`."""
+
+    __tablename__ = "stock_correction_requests"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=False)
+    drug_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("drugs.id"), nullable=False)
+    batch_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("stock_batches.id"))
+    delta: Mapped[object] = mapped_column(Numeric(18, 4), nullable=False)
+    reason: Mapped[str] = mapped_column(String(200), server_default="")
+    requested_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
+    status: Mapped[str] = mapped_column(correction_status_enum, nullable=False, server_default="pending")
+    approved_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
+    decided_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )

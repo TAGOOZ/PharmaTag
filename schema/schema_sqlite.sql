@@ -640,6 +640,7 @@ INSERT INTO accounts (branch_id, code, name_ar, type, is_active) VALUES
     (1, '3000', 'حقوق ملكية.راس المال', 'equity', 1),
     (1, '4000', 'ايرادات.مبيعات', 'income', 1),
     (1, '5000', 'مصروفات', 'expense', 1),
+    (1, '5900', 'مصروفات.جرد وتعديل الارصدة', 'expense', 1),
     (1, '6000', 'تكلفة المبيعات', 'expense', 1);
 
 -- pilot plugins registered (A10), disabled until the plugin ships

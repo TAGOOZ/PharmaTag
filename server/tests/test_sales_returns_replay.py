@@ -292,3 +292,81 @@ async def test_return_replay_missing_original_fails_recorded(client):
             if sync_ids:
                 await session.execute(delete(SyncLog).where(SyncLog.id.in_(sync_ids)))
             await session.commit()
+
+
+async def test_return_replay_recreates_credit_split(client):
+    """A return whose original was paid 100% credit replays with the credit
+    split: the target store recreates the AR refund (agel), not the drawer."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%", price="10.0000",
+        batches=[("10.0000", "5.0000", None)], stock_qty="10.0000",
+    )
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        sale = await _sale(
+            client, token,
+            [{"drug_id": drug_id, "qty": "10"}],
+            payments=[{"method": "credit", "amount": "100.00"}],
+        )
+        invoice_ids.append(sale["id"])
+        ret = await _return(client, token, sale, qty="4")
+        invoice_ids.append(ret["id"])
+        assert ret["payed"] == "0.00"
+        assert ret["agel"] == "40.00"
+        sale_id, ret_id = sale["id"], ret["id"]
+
+        async with SessionLocal() as session:
+            row = (
+                await session.execute(
+                    select(SyncLog).where(
+                        SyncLog.entity == "invoice", SyncLog.entity_id == ret_id
+                    )
+                )
+            ).scalar_one()
+            payload = dict(row.payload)
+            await _remove_return(session, invoice_id=ret_id, drug_id=drug_id)
+            await enqueue_sync(
+                session,
+                branch_id=BRANCH_ID,
+                entity="invoice",
+                entity_id=ret_id,
+                action="insert",
+                payload=payload,
+            )
+            await session.commit()
+
+        async with SessionLocal() as session:
+            summary = await replay_pending(session, branch_id=BRANCH_ID)
+        assert summary["applied"] == 1, summary
+
+        async with SessionLocal() as session:
+            replayed = (
+                await session.execute(
+                    select(Invoice).where(
+                        Invoice.branch_id == BRANCH_ID,
+                        Invoice.invoice_no == payload["invoice_no"],
+                        Invoice.kind == "sale_return",
+                    )
+                )
+            ).scalars().first()
+            assert replayed is not None
+            new_id = replayed.id
+            invoice_ids.append(new_id)
+            assert replayed.ref_invoice_id == sale_id
+            assert replayed.payed == Decimal("0")
+            assert replayed.agel == Decimal("40.00")
+            splits = (
+                await session.execute(
+                    select(PaymentSplit).where(
+                        PaymentSplit.invoice_id == new_id
+                    )
+                )
+            ).scalars().all()
+            assert [(p.method, p.amount) for p in splits] == [
+                ("credit", Decimal("40.00"))
+            ]
+        debit, credit = await _journal_totals(new_id)
+        assert debit == credit == Decimal("60.00")
+    finally:
+        await _cleanup([drug_id], invoice_ids)

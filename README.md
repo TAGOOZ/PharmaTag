@@ -137,7 +137,7 @@ the ticket ships.
 | web `/` | dashboard (home) | stub — static shell, today-summary not wired | #38 |
 | desktop | module screens (`App.tsx` STUBS) | stubs — same as web | #38 |
 | desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly | #39 |
-| API | money, reports endpoints | drawer + day close are real (`/api/v1/drawer/*`, ticket #14); reports + the rest of the money API remain stubs | #14 (S2/S3 slices later), #15 |
+| API | money, reports endpoints | drawer + day close are real (`/api/v1/drawer/*`, ticket #14), except `vat_expenses`, which snapshots 0 — no expense-VAT data source exists yet (documented in `app/drawer/movements.py`); reports + the rest of the money API remain stubs | #14 (S2/S3 slices later), #15 |
 | API | settings endpoints | not implemented — no branch-settings API exists | #38 |
 | data | CC0 drug catalog download | documented, not bundled — the importer (`server/app/drugs/importer.py`, CLI `python -m app.drugs.importer <file>`) is real and de-dupes/idempotent, but the 24k-medicine source (CC0 `karem505/egyptian-drug-database`) is fetched at import time, not shipped. A sample fixture lives in `server/tests/fixtures/cc0_catalog_sample.csv`. | #8 (shipped) |
 

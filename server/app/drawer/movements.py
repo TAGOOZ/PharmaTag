@@ -94,6 +94,7 @@ async def record_movement(
             status.HTTP_400_BAD_REQUEST, "amount must be positive"
         )
     await acquire_branch_lock(session, branch_id)
+    await guard_open_day(session, branch_id=branch_id, datee=datee)
     if ref_invoice_id is not None:
         ref = (
             await session.execute(
@@ -128,7 +129,6 @@ async def record_movement(
                 status.HTTP_400_BAD_REQUEST,
                 "opening already recorded for this day",
             )
-    await guard_open_day(session, branch_id=branch_id, datee=datee)
     row = DrawerMovement(
         branch_id=branch_id,
         datee=datee,
@@ -278,8 +278,10 @@ async def day_ledger(
     network_in = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", method="network")
     network_out = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", method="network")
 
-    drawer_start = await _sum_movements(
-        session, branch_id=branch_id, datee=datee, direction="in", reason="opening", method="cash"
+    drawer_start = round2(
+        await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", reason="opening", method="cash")
+        + await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", reason="correction", method="cash")
+        - await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", reason="correction", method="cash")
     )
     cash_sales = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", reason=SALE, method="cash")
     cash_returns = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", reason=SALE_RETURN, method="cash")
@@ -312,8 +314,9 @@ async def day_ledger(
 
     net_cash = round2(cash_sales - cash_returns)
     net_network = round2(network_sales - network_returns)
-    # expected counts the opening float once: the day's OTHER cash receipts
-    # (cash_in minus the opening that drawer_start already holds) minus cash out.
+    # expected counts the opening float once: drawer_start already holds the
+    # opening (+ net corrections), so the day's OTHER cash receipts are
+    # (cash_in − drawer_start), minus cash out.
     expected_cash = round2(drawer_start + (cash_in - drawer_start) - cash_out)
     net_profit = round2(sales_net - cogs - expenses)
 

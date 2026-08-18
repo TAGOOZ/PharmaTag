@@ -1,16 +1,16 @@
 """S1.8 drawer + day close (ticket #14): the drawer equation
-(`expected = drawer_start + cash_in − cash_out`, `difference = counted − expected`)
+(`expected = drawer_start + (cash_in − drawer_start) − cash_out`, opening float
+counted once, `difference = counted − expected`)
 is snapshotted into `daily_close` per (branch, datee); reopening is manager-only
 (perm ≥ 7) and always writes a reversal + audit; a closed (branch, date) never
 silently receives new movements. Tests drive the public API only (A07, plan/02
 §4.5, idx 9883)."""
-from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import select
 
 from app.core.db import SessionLocal
-from app.models import AuditLog, DrawerMovement
+from app.models import AuditLog
 from tests.drawer_test_utils import (
     _cleanup_drawer,
     _close_day,
@@ -348,8 +348,9 @@ async def test_drawer_is_scoped_per_branch(client):
 
 async def test_reclose_resnapshots_drawer_start(client):
     """Re-closing a reopened day re-computes drawer_start from the fresh
-    ledger instead of trusting the stored snapshot: after the reopen a new
-    opening float (e.g. a corrected start) is reflected in the re-close."""
+    ledger instead of trusting the stored snapshot. The corrected float is
+    entered through the API as an opening + a cash correction (drawer_start =
+    opening + net corrections), and the re-close reflects it."""
     _mark_closed("2026-01-27")
     admin = await _login_token(client)
     manager = await _make_user(client, "drw_mgr_27", 7)
@@ -365,33 +366,68 @@ async def test_reclose_resnapshots_drawer_start(client):
         )
         assert rr.status_code == 200, rr.text
 
-        # the corrected float is entered after the reopen (API forbids a second
-        # opening, so it is seeded directly — the point is the re-close must
-        # reflect the ledger, not the stored drawer_start)
-        async with SessionLocal() as s:
-            s.add(
-                DrawerMovement(
-                    branch_id=1,
-                    datee=date.fromisoformat("2026-01-27"),
-                    direction="in",
-                    reason="opening",
-                    method="cash",
-                    amount=Decimal("50.00"),
-                )
+        for body in [
+            {"direction": "in", "reason": "opening", "method": "cash", "amount": "50.00"},
+            {"direction": "in", "reason": "correction", "method": "cash", "amount": "10.00"},
+        ]:
+            r = await client.post(
+                "/api/v1/drawer/movements",
+                headers={"Authorization": f"Bearer {admin}"},
+                json={**body, "datee": "2026-01-27"},
             )
-            await s.commit()
+            assert r.status_code == 201, r.text
 
-        rc2 = await _close_day(client, admin, datee="2026-01-27", counted_cash="50")
+        rc2 = await _close_day(client, admin, datee="2026-01-27", counted_cash="60")
         assert rc2.status_code == 200, rc2.text
         body = rc2.json()
         assert body["id"] == close_id
-        assert body["drawer_start"] == "50.00"
-        assert body["expected_cash"] == "50.00"
-        assert body["manual_cash"] == "50.00"
+        assert body["drawer_start"] == "60.00"
+        assert body["expected_cash"] == "60.00"
+        assert body["manual_cash"] == "60.00"
         assert body["difference"] == "0.00"
     finally:
         await _cleanup_drawer()
         await _delete_users(["drw_mgr_27"])
+
+
+async def test_duplicate_opening_on_a_closed_day_is_409(client):
+    """A closed day rejects ANY movement with 409 — even a duplicate opening,
+    which (with no existing opening) previously slipped past the opening guard
+    to the duplicate check and returned 400. Closed always wins."""
+    _mark_closed("2026-02-06")
+    admin = await _login_token(client)
+    try:
+        first = await client.post(
+            "/api/v1/drawer/movements",
+            headers={"Authorization": f"Bearer {admin}"},
+            json={
+                "direction": "in",
+                "reason": "opening",
+                "method": "cash",
+                "amount": "50.00",
+                "datee": "2026-02-06",
+            },
+        )
+        assert first.status_code == 201, first.text
+
+        rc = await _close_day(client, admin, datee="2026-02-06", counted_cash="50")
+        assert rc.status_code == 200, rc.text
+
+        dup = await client.post(
+            "/api/v1/drawer/movements",
+            headers={"Authorization": f"Bearer {admin}"},
+            json={
+                "direction": "in",
+                "reason": "opening",
+                "method": "cash",
+                "amount": "20.00",
+                "datee": "2026-02-06",
+            },
+        )
+        assert dup.status_code == 409
+        assert "closed" in dup.text
+    finally:
+        await _cleanup_drawer()
 
 
 async def test_opening_float_counts_once_in_expected_cash(client):

@@ -23,7 +23,7 @@ from app.core.time import business_date
 from app.drawer import schemas
 from app.drawer.close import close_day, reopen_day
 from app.drawer.movements import record_movement
-from app.models import DailyClose, DrawerMovement, Invoice, User
+from app.models import DailyClose, DrawerMovement, User
 
 router = APIRouter()
 
@@ -111,22 +111,10 @@ async def create_movement(
     session: AsyncSession = Depends(get_session),
 ):
     """Record one manual drawer movement (opening/expense/transfer/correction/
-    supplier pay/customer settlement) with its audit; rejects a closed day."""
+    supplier pay/customer settlement) with its audit; rejects a closed day and
+    a ref_invoice_id from another branch (both checked under the branch lock
+    inside `record_movement`)."""
     branch_id = _caller_branch_id(caller)
-    if body.ref_invoice_id is not None:
-        ref_in_branch = (
-            await session.execute(
-                select(Invoice.id).where(
-                    Invoice.id == body.ref_invoice_id,
-                    Invoice.branch_id == branch_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if ref_in_branch is None:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "ref_invoice_id must reference a document of your branch",
-            )
     async with atomic(session):
         row = await record_movement(
             session,

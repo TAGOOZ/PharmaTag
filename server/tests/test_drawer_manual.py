@@ -178,6 +178,58 @@ async def test_only_one_opening_per_day(client):
         await _cleanup_drawer()
 
 
+async def test_opening_must_be_an_incoming_cash_movement(client):
+    """An opening float is cash handed INTO the drawer at the start of the day.
+    A mis-entered opening (direction out, or method network/card) would never
+    land in drawer_start (which reads in/cash/opening) yet still block the
+    single corrective opening — so it is refused up front (400)."""
+    _mark_closed("2026-01-28")
+    admin = await _login_token(client)
+    try:
+        out = await client.post(
+            "/api/v1/drawer/movements",
+            headers={"Authorization": f"Bearer {admin}"},
+            json={
+                "direction": "out",
+                "reason": "opening",
+                "method": "cash",
+                "amount": "50.00",
+                "datee": "2026-01-28",
+            },
+        )
+        assert out.status_code == 400
+        assert "opening" in out.text
+
+        network = await client.post(
+            "/api/v1/drawer/movements",
+            headers={"Authorization": f"Bearer {admin}"},
+            json={
+                "direction": "in",
+                "reason": "opening",
+                "method": "network",
+                "amount": "50.00",
+                "datee": "2026-01-28",
+            },
+        )
+        assert network.status_code == 400
+        assert "opening" in network.text
+
+        good = await client.post(
+            "/api/v1/drawer/movements",
+            headers={"Authorization": f"Bearer {admin}"},
+            json={
+                "direction": "in",
+                "reason": "opening",
+                "method": "cash",
+                "amount": "50.00",
+                "datee": "2026-01-28",
+            },
+        )
+        assert good.status_code == 201, good.text
+    finally:
+        await _cleanup_drawer()
+
+
 async def test_movement_blocks_until_the_branch_lock_is_free(client):
     """AC3 under concurrency: while another transaction holds the branch
     advisory lock, a manual movement cannot proceed (its guard must not read

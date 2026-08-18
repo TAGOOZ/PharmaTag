@@ -170,7 +170,8 @@ expiry batches; gated by legacy level ≥ 7 to decide),
 every sale / sale-return / purchase / purchase-return payment split lands as a
 `drawer_movements` row in the same transaction, manual movements gated by
 `drawer.manage` (legacy floor 3), day close computes the drawer equation
-`expected = drawer_start + Σcash_in − Σcash_out` and snapshots the day totals
+`expected = drawer_start + (Σcash_in − drawer_start) − Σcash_out` — the opening
+float counts once, via `drawer_start`, never twice — and snapshots the day totals
 (net cash/network, manual cash/card, purchases, expenses, COGS, net profit,
 VAT, discounts) into `daily_close` per (branch, datee), gated by `day.close`;
 `vat_expenses` is snapshotted as 0 — the schema has no expense-VAT source yet

@@ -94,7 +94,26 @@ async def record_movement(
             status.HTTP_400_BAD_REQUEST, "amount must be positive"
         )
     await acquire_branch_lock(session, branch_id)
+    if ref_invoice_id is not None:
+        ref = (
+            await session.execute(
+                select(Invoice.id).where(
+                    Invoice.id == ref_invoice_id,
+                    Invoice.branch_id == branch_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if ref is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "ref_invoice_id must reference a document of your branch",
+            )
     if reason == "opening":
+        if direction != "in" or method != "cash":
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "opening must be an incoming cash movement",
+            )
         existing_opening = (
             await session.execute(
                 select(DrawerMovement.id).where(

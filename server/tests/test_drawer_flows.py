@@ -5,8 +5,13 @@ drawer equation: each payment split becomes a `drawer_movements` row in the
 SAME transaction as the invoice (G12), attributed to the cashier (user_id) and
 the document (ref_invoice_id). Credit never touches the drawer.
 """
+from app.core.db import SessionLocal
+from app.models import Invoice
+from sqlalchemy import select
+
 from tests.drawer_test_utils import (
     _cleanup_drawer,
+    _close_day,
     _mark_closed,
     _movements,
     _login_token,
@@ -19,6 +24,14 @@ from tests.purchase_returns_test_utils import (
 from tests.purchase_test_utils import _make_drug, _make_supplier
 from tests.returns_test_utils import _cleanup as _return_cleanup
 from tests.sales_test_utils import _cleanup, _make_drug_and_stock
+from tests.test_sales_replay import (
+    _batch_ids as _replay_batch_ids,
+    _cleanup as _replay_cleanup,
+    _enqueue,
+    _make_drug as _make_replay_drug,
+    _payload,
+    _replay,
+)
 
 
 async def test_cash_and_card_sale_write_drawer_movements(client):
@@ -204,3 +217,45 @@ async def test_purchase_return_refunds_cash_in(client):
     finally:
         await _cleanup_drawer()
         await _purchase_cleanup([drug_id], invoice_ids, [supplier_id])
+
+
+async def test_replayed_sale_writes_drawer_movement(client):
+    """A sale applied through the offline replay path lands in the drawer too:
+    its payment split becomes a cash_sale movement tied to the replayed invoice
+    (G10 parity), and a day close counts it in net_cash."""
+    _mark_closed("2026-08-17")
+    drug_id = await _make_replay_drug([("10.0000", "5.0000", None)])
+    batch_ids = await _replay_batch_ids(drug_id)
+    sync_ids: list[int] = []
+    invoice_ids: list[int] = []
+    try:
+        key = list(batch_ids)[0]
+        payload = _payload("70006", drug_id, batch_ids[key], key)
+        await _enqueue(payload)
+        summary = await _replay()
+        assert summary["applied"] == 1
+
+        async with SessionLocal() as session:
+            invoice = (
+                await session.execute(select(Invoice).where(Invoice.invoice_no == "70006"))
+            ).scalar_one()
+            invoice_ids.append(invoice.id)
+
+        token = await _login_token(client)
+        movements = await _movements(client, token, datee="2026-08-17")
+        assert len(movements) == 1
+        mv = movements[0]
+        assert mv["reason"] == "cash_sale"
+        assert mv["direction"] == "in"
+        assert mv["method"] == "cash"
+        assert mv["amount"] == "40.00"
+        assert mv["ref_invoice_id"] == invoice_ids[0]
+
+        rc = await _close_day(
+            client, token, datee="2026-08-17", counted_cash="40"
+        )
+        assert rc.status_code == 200, rc.text
+        assert rc.json()["net_cash"] == "40.00"
+    finally:
+        await _cleanup_drawer()
+        await _replay_cleanup([drug_id], invoice_ids, sync_ids)

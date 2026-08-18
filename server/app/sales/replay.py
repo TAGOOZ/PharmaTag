@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import ACTION_INSERT, audit
 from app.core.money import dec, format2, round2, tax_rate
+from app.drawer.movements import SALE, record_payment_splits
 from app.models import Invoice, InvoiceLine, PaymentSplit, StockBatch
 from app.sales.journal import post_sale_journal
 from app.sales.numbering import acquire_branch_lock, next_journal_entry_no
@@ -153,6 +154,19 @@ async def apply_sale_payload(
             )
         )
     await session.flush()
+
+    payments = [(p["method"], p["amount"]) for p in payload.get("payments", [])]
+    if payments:
+        await record_payment_splits(
+            session,
+            branch_id=branch_id,
+            user_id=user_id,
+            datee=datee,
+            direction="in",
+            reason=SALE,
+            splits=payments,
+            ref_invoice_id=invoice.id,
+        )
 
     net = dec(payload.get("net", dec(payload["totalvalue"]) - dec(payload["vat"])))
     entries: list[tuple[str, Decimal, Decimal]] = []

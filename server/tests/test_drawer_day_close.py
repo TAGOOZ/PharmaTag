@@ -4,12 +4,13 @@ is snapshotted into `daily_close` per (branch, datee); reopening is manager-only
 (perm ≥ 7) and always writes a reversal + audit; a closed (branch, date) never
 silently receives new movements. Tests drive the public API only (A07, plan/02
 §4.5, idx 9883)."""
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import select
 
 from app.core.db import SessionLocal
-from app.models import AuditLog
+from app.models import AuditLog, DrawerMovement
 from tests.drawer_test_utils import (
     _cleanup_drawer,
     _close_day,
@@ -19,7 +20,8 @@ from tests.drawer_test_utils import (
     _make_user,
     _mark_closed,
 )
-from tests.purchase_test_utils import _delete_other_branch, _make_other_branch
+from tests.purchase_returns_test_utils import _cleanup as _purchase_cleanup, _purchase
+from tests.purchase_test_utils import _delete_other_branch, _make_drug, _make_other_branch, _make_supplier
 from tests.sales_test_utils import _cleanup, _make_drug_and_stock
 
 
@@ -271,6 +273,7 @@ async def test_reopened_day_accepts_new_movements_and_reclose_recomputes(client)
 async def test_difference_is_surplus_or_deficit(client):
     """counted above expected shows a surplus difference; below shows deficit."""
     _mark_closed("2026-01-17")
+    _mark_closed("2026-01-18")
     admin = await _login_token(client)
     try:
         surplus = await _close_day(client, admin, datee="2026-01-17", counted_cash="150")
@@ -340,4 +343,209 @@ async def test_drawer_is_scoped_per_branch(client):
     finally:
         await _cleanup_drawer()
         await _delete_users(["drw_b2_user"])
+        await _delete_other_branch(other_branch)
+
+
+async def test_reclose_resnapshots_drawer_start(client):
+    """Re-closing a reopened day re-computes drawer_start from the fresh
+    ledger instead of trusting the stored snapshot: after the reopen a new
+    opening float (e.g. a corrected start) is reflected in the re-close."""
+    _mark_closed("2026-01-27")
+    admin = await _login_token(client)
+    manager = await _make_user(client, "drw_mgr_27", 7)
+    try:
+        rc = await _close_day(client, admin, datee="2026-01-27", counted_cash="0")
+        assert rc.status_code == 200, rc.text
+        close_id = rc.json()["id"]
+        assert rc.json()["drawer_start"] == "0.00"
+
+        rr = await client.post(
+            f"/api/v1/drawer/day-close/{close_id}/reopen",
+            headers={"Authorization": f"Bearer {manager}"},
+        )
+        assert rr.status_code == 200, rr.text
+
+        # the corrected float is entered after the reopen (API forbids a second
+        # opening, so it is seeded directly — the point is the re-close must
+        # reflect the ledger, not the stored drawer_start)
+        async with SessionLocal() as s:
+            s.add(
+                DrawerMovement(
+                    branch_id=1,
+                    datee=date.fromisoformat("2026-01-27"),
+                    direction="in",
+                    reason="opening",
+                    method="cash",
+                    amount=Decimal("50.00"),
+                )
+            )
+            await s.commit()
+
+        rc2 = await _close_day(client, admin, datee="2026-01-27", counted_cash="50")
+        assert rc2.status_code == 200, rc2.text
+        body = rc2.json()
+        assert body["id"] == close_id
+        assert body["drawer_start"] == "50.00"
+        assert body["expected_cash"] == "50.00"
+        assert body["manual_cash"] == "50.00"
+        assert body["difference"] == "0.00"
+    finally:
+        await _cleanup_drawer()
+        await _delete_users(["drw_mgr_27"])
+
+
+async def test_opening_float_counts_once_in_expected_cash(client):
+    """An opening movement is the drawer_start; it must NOT also count as a
+    cash_in — expected = drawer_start + cash_in − cash_out would double it.
+    The opening is also manual cash (net manual = opening − manual out)."""
+    _mark_closed("2026-01-22")
+    admin = await _login_token(client)
+    try:
+        r = await client.post(
+            "/api/v1/drawer/movements",
+            headers={"Authorization": f"Bearer {admin}"},
+            json={
+                "direction": "in",
+                "reason": "opening",
+                "method": "cash",
+                "amount": "40.00",
+                "datee": "2026-01-22",
+            },
+        )
+        assert r.status_code == 201, r.text
+
+        rc = await _close_day(client, admin, datee="2026-01-22", counted_cash="40")
+        assert rc.status_code == 200, rc.text
+        body = rc.json()
+        assert body["drawer_start"] == "40.00"
+        assert body["expected_cash"] == "40.00"
+        assert body["difference"] == "0.00"
+        assert body["manual_cash"] == "40.00"
+    finally:
+        await _cleanup_drawer()
+
+
+async def test_purchase_payment_is_not_manual_cash(client):
+    """A cash purchase (supplier_pay) is a purchase outflow, not a manual cash
+    movement: manual_cash stays 0, purchases carries the total, and the drawer
+    equation drops by the cash paid out."""
+    _mark_closed("2026-01-23")
+    drug_id = await _make_drug(tax_type="14%")
+    supplier_id = await _make_supplier()
+    invoice_ids: list[int] = []
+    try:
+        admin = await _login_token(client)
+        pur = await _purchase(
+            client,
+            admin,
+            supplier_id,
+            [{"drug_id": drug_id, "qty": "10", "unit_cost": "10.0000"}],
+            payments=[{"method": "cash", "amount": "100.00"}],
+            datee="2026-01-23",
+        )
+        invoice_ids.append(pur["id"])
+
+        rc = await _close_day(client, admin, datee="2026-01-23", counted_cash="0")
+        assert rc.status_code == 200, rc.text
+        body = rc.json()
+        assert body["manual_cash"] == "0.00"
+        assert body["purchases"] == "100.00"
+        assert body["expected_cash"] == "-100.00"
+    finally:
+        await _cleanup_drawer()
+        await _purchase_cleanup([drug_id], invoice_ids, [supplier_id])
+
+
+async def test_manual_cash_and_card_are_net_manual_movements(client):
+    """manual_cash = net of the manual cash movements (opening in − expense
+    out); manual_card = net of the manual network movements (customer
+    settlement in); neither counts sale/purchase flows."""
+    _mark_closed("2026-01-24")
+    admin = await _login_token(client)
+    try:
+        for body in [
+            {"direction": "in", "reason": "opening", "method": "cash", "amount": "50.00"},
+            {"direction": "out", "reason": "expense", "method": "cash", "amount": "12.50"},
+            {"direction": "in", "reason": "customer_settlement", "method": "network", "amount": "30.00"},
+        ]:
+            r = await client.post(
+                "/api/v1/drawer/movements",
+                headers={"Authorization": f"Bearer {admin}"},
+                json={**body, "datee": "2026-01-24"},
+            )
+            assert r.status_code == 201, r.text
+
+        rc = await _close_day(client, admin, datee="2026-01-24", counted_cash="37.50")
+        assert rc.status_code == 200, rc.text
+        body = rc.json()
+        assert body["drawer_start"] == "50.00"
+        assert body["manual_cash"] == "37.50"
+        assert body["manual_card"] == "30.00"
+        assert body["expected_cash"] == "37.50"
+        assert body["difference"] == "0.00"
+    finally:
+        await _cleanup_drawer()
+
+
+async def test_card_only_day_close_reports_net_network(client):
+    """A card sale is a network split: it never enters the cash drawer equation
+    (expected_cash stays 0) but is snapshotted into net_network — manual_card
+    stays 0 because card sales are not manual movements."""
+    _mark_closed("2026-01-25")
+    drug_id = await _make_drug_and_stock(
+        price="10.0000", batches=[("20.0000", "5.0000", "2026-06-01")]
+    )
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        r = await client.post(
+            "/api/v1/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "lines": [{"drug_id": drug_id, "qty": "12"}],
+                "payments": [{"method": "card", "amount": "120.00"}],
+                "datee": "2026-01-25",
+            },
+        )
+        assert r.status_code == 201, r.text
+        invoice_ids.append(r.json()["id"])
+
+        rc = await _close_day(client, token, datee="2026-01-25", counted_cash="0")
+        assert rc.status_code == 200, rc.text
+        body = rc.json()
+        assert body["drawer_start"] == "0.00"
+        assert body["expected_cash"] == "0.00"
+        assert body["net_cash"] == "0.00"
+        assert body["net_network"] == "120.00"
+        assert body["manual_cash"] == "0.00"
+        assert body["manual_card"] == "0.00"
+        assert body["difference"] == "0.00"
+    finally:
+        await _cleanup_drawer()
+        await _cleanup([drug_id], invoice_ids)
+
+
+async def test_reopen_of_another_branch_close_is_404(client):
+    """A manager of branch 2 cannot reopen branch 1's day close — the row is
+    scoped to its branch and the reopen must 404, never touch it."""
+    _mark_closed("2026-01-26")
+    admin = await _login_token(client)
+    other_branch = await _make_other_branch()
+    try:
+        rc = await _close_day(client, admin, datee="2026-01-26", counted_cash="10")
+        assert rc.status_code == 200
+        close_id = rc.json()["id"]
+
+        b2 = await _make_user(client, "drw_b2_mgr", 7, branch_id=other_branch)
+        rr = await client.post(
+            f"/api/v1/drawer/day-close/{close_id}/reopen",
+            headers={"Authorization": f"Bearer {b2}"},
+        )
+        assert rr.status_code == 404
+
+        rows = await _day_rows("2026-01-26")
+        assert rows[0].status == "closed"
+    finally:
+        await _cleanup_drawer()
+        await _delete_users(["drw_b2_mgr"])
         await _delete_other_branch(other_branch)

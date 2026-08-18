@@ -14,7 +14,6 @@ from app.core.audit import enqueue_sync
 from app.models import (
     AuditLog,
     BranchStock,
-    DrawerMovement,
     Invoice,
     InvoiceLine,
     InvoiceVersion,
@@ -25,6 +24,7 @@ from app.models import (
     SyncLog,
 )
 from app.sync.service import replay_pending
+from tests.drawer_test_utils import _cleanup_movements_for_invoice
 from tests.purchase_returns_test_utils import (
     _cleanup,
     _login_token,
@@ -86,7 +86,7 @@ async def _remove_return(session, *, invoice_id: int, drug_id: int, restore_qty:
         await session.execute(delete(JournalLine).where(JournalLine.journal_id.in_(jids)))
         await session.execute(delete(Journal).where(Journal.id.in_(jids)))
     await session.execute(delete(PaymentSplit).where(PaymentSplit.invoice_id == invoice_id))
-    await session.execute(delete(DrawerMovement).where(DrawerMovement.ref_invoice_id == invoice_id))
+    await _cleanup_movements_for_invoice(session, invoice_id=invoice_id)
     await session.execute(delete(InvoiceLine).where(InvoiceLine.invoice_id == invoice_id))
     await session.execute(delete(SyncLog).where(SyncLog.entity_id == invoice_id))
     await session.execute(delete(AuditLog).where(AuditLog.entity_id == invoice_id))
@@ -271,7 +271,7 @@ async def test_return_replay_missing_original_fails_recorded(client):
                 await session.execute(delete(JournalLine).where(JournalLine.journal_id.in_(jids)))
                 await session.execute(delete(Journal).where(Journal.id.in_(jids)))
             await session.execute(delete(PaymentSplit).where(PaymentSplit.invoice_id == purchase_id))
-            await session.execute(delete(DrawerMovement).where(DrawerMovement.ref_invoice_id == purchase_id))
+            await _cleanup_movements_for_invoice(session, invoice_id=purchase_id)
             await session.execute(delete(InvoiceLine).where(InvoiceLine.invoice_id == purchase_id))
             await session.execute(delete(SyncLog).where(SyncLog.entity_id == purchase_id))
             await session.execute(delete(AuditLog).where(AuditLog.entity_id == purchase_id))

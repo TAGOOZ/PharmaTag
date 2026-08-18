@@ -85,6 +85,27 @@ async def _movement_rows(datee: str) -> list[DrawerMovement]:
 async def _cleanup_drawer() -> None:
     async with SessionLocal() as session:
         for d in _CLOSED_DATES:
+            mv_ids = (
+                await session.execute(
+                    select(DrawerMovement.id).where(
+                        DrawerMovement.branch_id == BRANCH_ID,
+                        DrawerMovement.datee == d,
+                    )
+                )
+            ).scalars().all()
+            if mv_ids:
+                await session.execute(
+                    delete(AuditLog).where(
+                        AuditLog.entity == "drawer_movements",
+                        AuditLog.entity_id.in_(mv_ids),
+                    )
+                )
+                await session.execute(
+                    delete(AuditLog).where(
+                        AuditLog.entity == "daily_close",
+                        AuditLog.branch_id == BRANCH_ID,
+                    )
+                )
             await session.execute(
                 delete(DrawerMovement).where(
                     DrawerMovement.branch_id == BRANCH_ID, DrawerMovement.datee == d
@@ -97,6 +118,26 @@ async def _cleanup_drawer() -> None:
             )
         await session.commit()
     _CLOSED_DATES.clear()
+
+
+async def _cleanup_movements_for_invoice(session, *, invoice_id: int) -> None:
+    """Delete an invoice's drawer movements AND their audit rows (the movement
+    audit references the movement id, not the invoice id, so it would leak)."""
+    mv_ids = (
+        await session.execute(
+            select(DrawerMovement.id).where(DrawerMovement.ref_invoice_id == invoice_id)
+        )
+    ).scalars().all()
+    if mv_ids:
+        await session.execute(
+            delete(AuditLog).where(
+                AuditLog.entity == "drawer_movements",
+                AuditLog.entity_id.in_(mv_ids),
+            )
+        )
+    await session.execute(
+        delete(DrawerMovement).where(DrawerMovement.ref_invoice_id == invoice_id)
+    )
 
 
 async def _delete_users(usernames: list[str]) -> None:

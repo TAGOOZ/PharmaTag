@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import ACTION_INSERT, audit
 from app.core.money import format2
+from app.drawer.movements import SUPPLIER_PAY, record_payment_splits
 from app.models import (
     BranchStock,
     Invoice,
@@ -216,6 +217,19 @@ async def apply_purchase_payload(
                 amount=Decimal(pm["amount"]),
                 user_id=user_id,
             )
+        )
+
+    payments = [(pm["method"], pm["amount"]) for pm in payload.get("payments", [])]
+    if payments:
+        await record_payment_splits(
+            session,
+            branch_id=branch_id,
+            user_id=user_id,
+            datee=datee,
+            direction="out",
+            reason=SUPPLIER_PAY,
+            splits=payments,
+            ref_invoice_id=invoice.id,
         )
 
     net = Decimal(payload["net"])

@@ -25,11 +25,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import ACTION_INSERT, audit
 from app.core.money import dec, format2, round2
 from app.models import Account, DailyClose, DrawerMovement, Invoice, JournalLine
+from app.sales.numbering import acquire_branch_lock
 
 # cash/net sale flows recorded automatically from money documents
 SALE = "cash_sale"            # direction in
 SALE_RETURN = "cash_return"   # direction out
 SUPPLIER_PAY = "supplier_pay" # out on purchase, in on purchase-return
+
+# reasons that are MANUAL drawer operations (not a money document): the day's
+# manual_cash/manual_card totals are their net in−out; supplier_pay counts as a
+# purchase (its own column), never as manual money.
+_MANUAL_REASONS = ("opening", "customer_settlement", "expense", "transfer", "correction")
 
 # payment methods that touch the drawer (credit never does)
 _CASH_METHODS = {"cash", "manual_cash"}
@@ -77,12 +83,32 @@ async def record_movement(
     amount,
     ref_invoice_id: Optional[int] = None,
 ) -> DrawerMovement:
-    """Append one drawer movement + its audit row (G12, caller's transaction)."""
+    """Append one drawer movement + its audit row (G12, caller's transaction).
+
+    Serializes on the branch advisory lock (the same lock `close_day` takes),
+    so the open-day guard can never read "open" and then land after a close.
+    """
     amount = dec(amount)
     if amount <= 0:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "amount must be positive"
         )
+    await acquire_branch_lock(session, branch_id)
+    if reason == "opening":
+        existing_opening = (
+            await session.execute(
+                select(DrawerMovement.id).where(
+                    DrawerMovement.branch_id == branch_id,
+                    DrawerMovement.datee == datee,
+                    DrawerMovement.reason == "opening",
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_opening is not None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "opening already recorded for this day",
+            )
     await guard_open_day(session, branch_id=branch_id, datee=datee)
     row = DrawerMovement(
         branch_id=branch_id,
@@ -150,6 +176,7 @@ async def _sum_movements(
     datee: date,
     direction: Optional[str] = None,
     reason: Optional[str] = None,
+    reasons: Optional[tuple[str, ...]] = None,
     method: Optional[str] = None,
 ) -> Decimal:
     q = select(func.coalesce(func.sum(DrawerMovement.amount), 0)).where(
@@ -160,6 +187,8 @@ async def _sum_movements(
         q = q.where(DrawerMovement.direction == direction)
     if reason is not None:
         q = q.where(DrawerMovement.reason == reason)
+    if reasons is not None:
+        q = q.where(DrawerMovement.reason.in_(reasons))
     if method is not None:
         q = q.where(DrawerMovement.method == method)
     return dec((await session.execute(q)).scalar_one())
@@ -181,21 +210,19 @@ async def _invoice_sums(
                 func.coalesce(func.sum(Invoice.totalvalue), 0),
                 func.coalesce(func.sum(Invoice.vat), 0),
                 func.coalesce(func.sum(Invoice.discount), 0),
-                func.coalesce(func.sum(Invoice.payed), 0),
             )
             .where(Invoice.branch_id == branch_id, Invoice.datee == datee)
             .group_by(Invoice.kind)
         )
     ).all()
-    by = {kind: {"total": Decimal("0"), "vat": Decimal("0"), "discount": Decimal("0"), "payed": Decimal("0")} for kind in kinds}
-    for kind, total, vat, discount, payed in rows:
+    by = {kind: {"total": Decimal("0"), "vat": Decimal("0"), "discount": Decimal("0")} for kind in kinds}
+    for kind, total, vat, discount in rows:
         if kind not in by:
             continue
         by[kind] = {
             "total": dec(total),
             "vat": dec(vat),
             "discount": dec(discount),
-            "payed": dec(payed),
         }
     return by
 
@@ -242,6 +269,14 @@ async def day_ledger(
     expenses = round2(
         await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", reason="expense")
     )
+    manual_cash = round2(
+        await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", method="cash", reasons=_MANUAL_REASONS)
+        - await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", method="cash", reasons=_MANUAL_REASONS)
+    )
+    manual_card = round2(
+        await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", method="network", reasons=_MANUAL_REASONS)
+        - await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", method="network", reasons=_MANUAL_REASONS)
+    )
 
     inv = await _invoice_sums(session, branch_id=branch_id, datee=datee)
     sales = inv["sale"]
@@ -258,9 +293,9 @@ async def day_ledger(
 
     net_cash = round2(cash_sales - cash_returns)
     net_network = round2(network_sales - network_returns)
-    manual_cash = round2(cash_out - cash_returns)
-    manual_card = round2(network_out - network_returns)
-    expected_cash = round2(drawer_start + cash_in - cash_out)
+    # expected counts the opening float once: the day's OTHER cash receipts
+    # (cash_in minus the opening that drawer_start already holds) minus cash out.
+    expected_cash = round2(drawer_start + (cash_in - drawer_start) - cash_out)
     net_profit = round2(sales_net - cogs - expenses)
 
     return {
@@ -277,5 +312,9 @@ async def day_ledger(
         "discounts": discounts,
         "vat_sales": vat_sales,
         "vat_purchases": vat_purchases,
+        # Expenses are recorded gross (a manual expense movement is one cash
+        # figure, no VAT rate is stored) and no expense journal posts VAT in
+        # this slice, so there is no data source for vat_expenses — it stays 0
+        # until an expense-VAT path exists (see README §6 money row).
         "vat_expenses": Decimal("0"),
     }

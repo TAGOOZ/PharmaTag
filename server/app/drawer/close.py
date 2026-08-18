@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import audit
 from app.core.db import atomic
-from app.core.money import dec, format2
+from app.core.money import dec, format2, round2
 from app.drawer.movements import day_ledger
 from app.models import DailyClose
 from app.sales.numbering import acquire_branch_lock
@@ -65,7 +65,7 @@ async def close_day(
             raise ALREADY_CLOSED
 
         ledger = await day_ledger(session, branch_id=branch_id, datee=datee)
-        difference = round(dec(counted) - dec(ledger["expected_cash"]), 2)
+        difference = round2(dec(counted) - dec(ledger["expected_cash"]))
         if existing is not None:
             row = existing  # reopened -> close again
         else:
@@ -73,6 +73,7 @@ async def close_day(
                 branch_id=branch_id, datee=datee, drawer_start=ledger["drawer_start"]
             )
             session.add(row)
+        row.drawer_start = ledger["drawer_start"]
         row.expected_cash = ledger["expected_cash"]
         row.counted_cash = counted
         row.difference = difference

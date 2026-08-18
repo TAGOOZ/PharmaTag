@@ -1,8 +1,10 @@
-"""Drawer & day-close models: work_periods, shifts, drawer_movements, daily_close.
+"""Drawer & day-close models: drawer_movements, daily_close.
 
 Mirror `alembic/versions/001_core_schema.py` sections 8 + 12 exactly — no
 invented columns (ticket #2 constraint). The drawer equation lives in
 `app/drawer/close.py`; these rows are the ledger the close snapshots.
+(`work_periods`/`shifts` exist in the schema but are not ORM-mapped — no slice
+drives them yet, ticket #14 keeps the drawer per-cashier via `user_id`.)
 """
 from __future__ import annotations
 
@@ -16,11 +18,10 @@ from sqlalchemy import (
     ForeignKey,
     Identity,
     Numeric,
-    String,
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import ENUM, TIMESTAMP
+from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import (
@@ -30,42 +31,6 @@ from app.models.base import (
     drawer_method_enum,
     drawer_reason_enum,
 )
-
-
-class WorkPeriod(Base):
-    """`work_periods` (workperiod.phy) — an open working period for a branch."""
-
-    __tablename__ = "work_periods"
-
-    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
-    branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=False)
-    name: Mapped[str] = mapped_column(String(50), server_default="")
-    opened_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
-    opened_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
-    )
-    closed_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
-
-
-class Shift(Base):
-    """`shifts` (workperiod.phy) — a cashier's shift with its starting cash."""
-
-    __tablename__ = "shifts"
-    __table_args__ = (
-        CheckConstraint(
-            "closed_at IS NULL OR closed_at >= opened_at", name="ck_shifts_times"
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
-    branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=False)
-    work_period_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("work_periods.id"))
-    opened_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
-    opened_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
-    )
-    closed_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
-    cash_start: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
 
 
 class DrawerMovement(Base):
@@ -94,7 +59,6 @@ class DrawerMovement(Base):
         drawer_method_enum, nullable=False, server_default="cash"
     )
     amount: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
-    shift_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("shifts.id"))
     ref_invoice_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("invoices.id"))
     user_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(
@@ -121,8 +85,6 @@ class DailyClose(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=False)
     datee: Mapped[date] = mapped_column(Date, nullable=False)
-    shift_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("shifts.id"))
-    work_period_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("work_periods.id"))
     drawer_start: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
     expected_cash: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
     counted_cash: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")

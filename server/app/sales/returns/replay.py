@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import ACTION_INSERT, audit
 from app.core.money import dec, format2, round2, tax_rate
+from app.drawer.movements import SALE_RETURN, record_payment_splits
 from app.models import BranchStock, Invoice, InvoiceLine, InvoiceVersion, PaymentSplit, StockBatch
 from app.money.journal import post_journal
 from app.sales.numbering import acquire_branch_lock, next_journal_entry_no
@@ -252,6 +253,19 @@ async def apply_sale_return_payload(
                 amount=Decimal(pm["amount"]),
                 user_id=user_id,
             )
+        )
+
+    payments = [(pm["method"], pm["amount"]) for pm in payload.get("payments", [])]
+    if payments:
+        await record_payment_splits(
+            session,
+            branch_id=branch_id,
+            user_id=user_id,
+            datee=datee,
+            direction="out",
+            reason=SALE_RETURN,
+            splits=payments,
+            ref_invoice_id=invoice.id,
         )
 
     net = Decimal(payload["net"])

@@ -15,7 +15,6 @@ from app.models import (
     AuditLog,
     Balance,
     BranchStock,
-    DrawerMovement,
     Drug,
     Invoice,
     InvoiceLine,
@@ -26,6 +25,7 @@ from app.models import (
     SyncLog,
 )
 from app.sync.service import replay_pending
+from tests.drawer_test_utils import _cleanup_movements_for_invoice
 
 BRANCH_ID = 1
 
@@ -197,9 +197,7 @@ async def _cleanup(drug_ids: list[int], invoice_ids: list[int], sync_ids: list[i
             await session.execute(
                 delete(PaymentSplit).where(PaymentSplit.invoice_id == iid)
             )
-            await session.execute(
-                delete(DrawerMovement).where(DrawerMovement.ref_invoice_id == iid)
-            )
+            await _cleanup_movements_for_invoice(session, invoice_id=iid)
             await session.execute(delete(InvoiceLine).where(InvoiceLine.invoice_id == iid))
             await session.execute(
                 delete(SyncLog).where(SyncLog.entity_id == iid)

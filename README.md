@@ -173,7 +173,9 @@ every sale / sale-return / purchase / purchase-return payment split lands as a
 `expected = drawer_start + Σcash_in − Σcash_out` and snapshots the day totals
 (net cash/network, manual cash/card, purchases, expenses, COGS, net profit,
 VAT, discounts) into `daily_close` per (branch, datee), gated by `day.close`;
-reopen is legacy level ≥ 7 with a reversal + audit, and a closed day rejects
+`vat_expenses` is snapshotted as 0 — the schema has no expense-VAT source yet
+(the expense ledger exists, but the slice writes no expense VAT); reopen is
+legacy level ≥ 7 with a reversal + audit, and a closed day rejects
 new movements until reopened) — and the web + desktop **الأدوية** screens, the web forced-reset
 (first-login) and voluntary change-password flows (ticket #37).
 

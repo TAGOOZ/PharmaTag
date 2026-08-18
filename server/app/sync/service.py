@@ -38,6 +38,12 @@ async def _apply_row(
         await apply_sale_return_payload(
             session, branch_id=branch_id, payload=payload, user_id=user_id
         )
+    elif kind == "purchase_return":
+        from app.purchases.returns.replay import apply_purchase_return_payload
+
+        await apply_purchase_return_payload(
+            session, branch_id=branch_id, payload=payload, user_id=user_id
+        )
     else:
         from app.sales.replay import apply_sale_payload
 

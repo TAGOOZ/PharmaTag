@@ -147,7 +147,11 @@ reverses money/journal/balances at the original prices with a proportional
 refund split, snapshots the original into `invoice_versions`, new invoice_no,
 offline outbox replay; gated by `sale.create`), purchases (supplier invoice +
 new stock batches at net cost, supplier payable + payment splits, balanced
-journal + offline outbox replay; gated by legacy level ≥ 2), parties
+journal + offline outbox replay; gated by legacy level ≥ 2), purchase returns
+(partial/full return of a saved purchase — decrements the original purchase
+batch + branch_stock, reverses money/AP/payments at the original prices with a
+proportional refund split, snapshots the original into `invoice_versions`, new
+invoice_no, offline outbox replay; gated by legacy level ≥ 2), parties
 (supplier/customer create/list, branch-scoped; gated by legacy level ≥ 4),
 `/healthz` — and the web + desktop **الأدوية** screens.
 

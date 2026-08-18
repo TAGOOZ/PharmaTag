@@ -43,6 +43,7 @@ class PurchaseLineOut(BaseModel):
     drugname: str
     drugnamear: str = ""
     batch_id: Optional[int] = None
+    ref_invoice_line_id: Optional[int] = None
     qty: str
     unit: str = "pack"
     unit_price: str
@@ -67,6 +68,7 @@ class PurchaseOut(BaseModel):
     silsilaid: str = ""
     status: str
     party_id: Optional[int] = None
+    ref_invoice_id: Optional[int] = None
     subtotal: str
     discount: str
     vat: str

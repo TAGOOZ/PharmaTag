@@ -106,8 +106,15 @@ async def post_journal(
     entries: list[tuple[str, Decimal, Decimal]],
     ref_invoice_id: Optional[int] = None,
     contra_party_id: Optional[int] = None,
+    contra_party_by_code: Optional[dict[str, int]] = None,
 ) -> Journal:
-    """Post one balanced journal entry (entries = (account_code, debit, credit))."""
+    """Post one balanced journal entry (entries = (account_code, debit, credit)).
+
+    `contra_party_id` labels every credit line's contra party (the sale/purchase
+    pattern). `contra_party_by_code` overrides it per account code for documents
+    whose contra lands on a DEBIT line (e.g. a purchase return's AP debit), so a
+    party-ledger always carries the party regardless of the side.
+    """
     journal = Journal(
         branch_id=branch_id,
         datee=datee,
@@ -125,13 +132,17 @@ async def post_journal(
         debit = dec(debit)
         credit = dec(credit)
         account_id = await _account_id(session, branch_id, code)
+        if contra_party_by_code and code in contra_party_by_code:
+            contra_party = contra_party_by_code[code]
+        else:
+            contra_party = contra_party_id if credit else None
         line = JournalLine(
             journal_id=journal.id,
             branch_id=branch_id,
             account_id=account_id,
             debit=debit,
             credit=credit,
-            contra_party_id=contra_party_id if credit else None,
+            contra_party_id=contra_party,
             datee=datee,
             month=datee.month,
             year=datee.year,

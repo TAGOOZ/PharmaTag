@@ -19,6 +19,8 @@ from app.auth.rbac import require_level
 from app.core import money
 from app.core.db import get_session
 from app.models import Drug, Invoice, InvoiceLine, Journal, JournalLine, PaymentSplit, User
+from app.purchases.returns.schemas import ReturnCreateRequest
+from app.purchases.returns.service import save_purchase_return
 from app.purchases.schemas import PurchaseCreateRequest, PurchaseOut
 from app.purchases.service import save_purchase
 
@@ -108,6 +110,7 @@ async def _serialize_purchase(
         silsilaid=invoice.silsilaid or "",
         status=invoice.status,
         party_id=invoice.party_id,
+        ref_invoice_id=invoice.ref_invoice_id,
         subtotal=_money(invoice.subtotal),
         discount=_money(invoice.discount),
         vat=_money(invoice.vat),
@@ -123,6 +126,7 @@ async def _serialize_purchase(
                 "drugname": drug.drugname,
                 "drugnamear": drug.drugnamear,
                 "batch_id": line.batch_id,
+                "ref_invoice_line_id": line.ref_invoice_line_id,
                 "qty": _qty(line.qty),
                 "unit": line.unit or "pack",
                 "unit_price": _money(line.unit_price),
@@ -193,6 +197,66 @@ async def create_purchase(
         lines=body.lines,
         disc_percent=body.disc_percent,
         payments=body.payments,
+    )
+    return await _serialize_purchase(session, invoice, caller)
+
+
+@router.get("/returns")
+async def list_purchases_returns(
+    datee: Optional[date] = None,
+    limit: int = 50,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Recent purchase returns for the caller's branch (today by default)."""
+    branch_id = _caller_branch_id(user)
+    limit = max(1, min(limit, 200))
+    q = select(Invoice).where(
+        Invoice.branch_id == branch_id, Invoice.kind == "purchase_return"
+    )
+    if datee is not None:
+        q = q.where(Invoice.datee == datee)
+    else:
+        q = q.where(Invoice.datee == datetime.now().date())
+    q = q.order_by(Invoice.id.desc()).limit(limit)
+    invoices = (await session.execute(q)).scalars().all()
+    return {
+        "returns": [
+            {
+                "id": inv.id,
+                "invoice_no": inv.invoice_no,
+                "ref_invoice_id": inv.ref_invoice_id,
+                "datee": inv.datee.isoformat(),
+                "totalvalue": _money(inv.totalvalue),
+                "payed": _money(inv.payed),
+                "agel": _money(inv.agel),
+                "status": inv.status,
+                "party_id": inv.party_id,
+            }
+            for inv in invoices
+        ]
+    }
+
+
+@router.post("/{purchase_id}/return", status_code=status.HTTP_201_CREATED, response_model=PurchaseOut)
+async def create_purchase_return(
+    purchase_id: int,
+    body: ReturnCreateRequest,
+    caller: User = Depends(CREATE_PURCHASE),
+    session: AsyncSession = Depends(get_session),
+):
+    """Record a purchase return: reverses the original purchase's stock +
+    balances + money into a new purchase_return invoice (server-computed totals,
+    balanced journal, audit + outbox + invoice_versions in one transaction)."""
+    branch_id = _caller_branch_id(caller)
+    invoice = await save_purchase_return(
+        session,
+        branch_id=branch_id,
+        user_id=caller.id,
+        original_invoice_id=purchase_id,
+        lines=body.lines,
+        payments=body.payments,
+        datee=body.datee,
     )
     return await _serialize_purchase(session, invoice, caller)
 

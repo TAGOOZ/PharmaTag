@@ -76,7 +76,9 @@ async def _build_full_purchase(
     branch = await session.get(Branch, branch_id)
     if branch is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "branch not found")
-    inclusive = bool(branch.vat_inclusive_prices)
+    # Egypt B2B supplier invoices itemize net + VAT (the ETA regime): a purchase
+    # is ALWAYS VAT-exclusive regardless of the branch's RETAIL inclusive flag.
+    inclusive = False
     supplier = await _supplier_or_404(session, branch_id, supplier_id)
 
     resolved: list[dict] = []
@@ -93,6 +95,15 @@ async def _build_full_purchase(
             disc_percent=getattr(line, "disc_percent", None),
             inclusive=inclusive,
         )
+        resolved.append({"drug": drug, "lm": lm, "idx": idx})
+
+    # totals apportion any invoice-level discount into each line and re-split
+    # the VAT on the discounted net; the batch must be created AFTER this so its
+    # cost is the discounted net unit cost (finding: header discount ignored).
+    totals = _invoice_totals(resolved, disc_percent, inclusive=inclusive)
+    for item in resolved:
+        drug = item["drug"]
+        lm = item["lm"]
         net_unit = round4(lm.net / lm.qty)
         batch = await create_purchase_batch(
             session,
@@ -100,14 +111,14 @@ async def _build_full_purchase(
             user_id=user_id,
             invoice_no=invoice_no,
             drug_id=drug.id,
-            randomid=f"p-{invoice_no}-{idx}",
+            randomid=f"p-{invoice_no}-{item['idx']}",
             qty=lm.qty,
             cost=net_unit,
             price=lm.unit_price,
             vat_rate=round2(tax_rate(lm.tax_type) * Decimal("100")),
             vat_amount=lm.vat,
-            total_with_vat=lm.line_total,
-            expire=getattr(line, "expire", None),
+            total_with_vat=round2(lm.line_total + lm.vat),
+            expire=getattr(lines[item["idx"]], "expire", None),
             barcode=await _primary_barcode(session, drug.id),
         )
         await upsert_branch_stock(
@@ -119,9 +130,8 @@ async def _build_full_purchase(
             qty_delta=lm.qty,
             barcode=await _primary_barcode(session, drug.id),
         )
-        resolved.append({"drug": drug, "lm": lm, "batch": batch})
+        item["batch"] = batch
 
-    totals = _invoice_totals(resolved, disc_percent, inclusive=inclusive)
     payed, agel, splits = _resolve_payments(payments, totals["total"])
 
     invoice = Invoice(

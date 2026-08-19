@@ -29,9 +29,9 @@ from tests.purchase_returns_test_utils import (
 
 
 async def test_purchase_return_happy_path_money_invariants(client):
-    """Return 4 of 10 × 10.00 (14%): net 35.09 / vat 4.91, batch decremented to
-    6.0000, branch_stock down to 6.0000, journal balanced, audit + outbox + the
-    original's version snapshot written."""
+    """Return 4 of 10 × 10.00 (14%, B2B exclusive): net 40.00 / vat 5.60,
+    batch decremented to 6.0000, branch_stock down to 6.0000, journal balanced,
+    audit + outbox + the original's version snapshot written."""
     drug_id = await _make_drug(tax_type="14%")
     supplier_id = await _make_supplier()
     invoice_ids: list[int] = []
@@ -48,21 +48,21 @@ async def test_purchase_return_happy_path_money_invariants(client):
         )
         invoice_ids.append(ret["id"])
 
-        # money at the original prices: 4 × 10.00, 14% split
+        # money at the original prices: 4 × 10.00, 14% exclusive split
         assert ret["subtotal"] == "40.00"
         assert ret["discount"] == "0.00"
-        assert ret["vat"] == "4.91"
-        assert ret["totalvalue"] == "40.00"
-        assert ret["net"] == "35.09"
-        assert ret["payed"] == "40.00"
+        assert ret["vat"] == "5.60"
+        assert ret["totalvalue"] == "45.60"
+        assert ret["net"] == "40.00"
+        assert ret["payed"] == "45.60"
         assert ret["agel"] == "0.00"
         assert ret["party_id"] == supplier_id
 
         line = ret["lines"][0]
         assert line["qty"] == "4.0000"
         assert line["unit_price"] == "10.00"
-        assert line["cost"] == "8.7720"  # the original batch's net unit cost
-        assert line["vat_amount"] == "4.91"
+        assert line["cost"] == "10.0000"  # the original batch's net unit cost
+        assert line["vat_amount"] == "5.60"
         assert line["line_total"] == "40.00"
 
         # stock reversed: batch qty down, branch_stock down
@@ -71,10 +71,10 @@ async def test_purchase_return_happy_path_money_invariants(client):
         assert batches[0].qty == Decimal("6.0000")
         assert await _stock_qty(drug_id) == Decimal("6.0000")
 
-        # balanced reversal journal: Dr drawer 40 vs Cr stock 35.09 + VAT 4.91
+        # balanced reversal journal: Dr drawer 45.60 vs Cr stock 40.00 + VAT 5.60
         debit, credit = await _journal_totals(ret["id"])
-        assert debit == Decimal("40.00")
-        assert credit == Decimal("40.00")
+        assert debit == Decimal("45.60")
+        assert credit == Decimal("45.60")
         assert debit == credit, "SUM(debit) must equal SUM(credit)"
         assert await _journal_source(ret["id"]) == "purchase_return"
 
@@ -232,25 +232,26 @@ async def test_purchase_return_full_reverses_exactly(client):
         )
         invoice_ids.append(ret["id"])
         assert ret["subtotal"] == "100.00"
-        assert ret["vat"] == "12.28"
-        assert ret["totalvalue"] == "100.00"
-        assert ret["net"] == "87.72"
-        assert ret["payed"] == "100.00"
+        assert ret["vat"] == "14.00"
+        assert ret["totalvalue"] == "114.00"
+        assert ret["net"] == "100.00"
+        assert ret["payed"] == "114.00"
         batches = await _batches(drug_id)
         assert batches[0].qty == Decimal("0.0000")
         assert await _stock_qty(drug_id) == Decimal("0.0000")
         debit, credit = await _journal_totals(ret["id"])
-        assert debit == Decimal("100.00")
-        assert credit == Decimal("100.00")
+        assert debit == Decimal("114.00")
+        assert credit == Decimal("114.00")
         assert debit == credit
     finally:
         await _cleanup([drug_id], invoice_ids, [supplier_id])
 
 
 async def test_purchase_return_reverses_header_discount_proportionally(client):
-    """Original: 10 × 10.00 with 10% header discount (total 90.00). Returning 4
-    keeps the SAME per-line split; the header discount reverses at the same
-    proportion (round2(10 × 40/100) = 4.00)."""
+    """Original: 10 × 10.00 (14% exclusive) with 10% header discount
+    (total 102.60). Returning 4 keeps the SAME per-line split; the header
+    discount reverses at the same proportion (round2(10 × 40/100) = 4.00) and
+    the input VAT re-splits on the discounted net, mirroring the purchase."""
     drug_id = await _make_drug(tax_type="14%")
     supplier_id = await _make_supplier()
     invoice_ids: list[int] = []
@@ -262,7 +263,7 @@ async def test_purchase_return_reverses_header_discount_proportionally(client):
             disc_percent="10",
         )
         assert pur["discount"] == "10.00"
-        assert pur["totalvalue"] == "90.00"
+        assert pur["totalvalue"] == "102.60"
         invoice_ids.append(pur["id"])
         ret = await _return(
             client, token, pur, [{"ref_invoice_line_id": pur["lines"][0]["id"], "qty": "4"}]
@@ -270,12 +271,12 @@ async def test_purchase_return_reverses_header_discount_proportionally(client):
         invoice_ids.append(ret["id"])
         assert ret["subtotal"] == "40.00"
         assert ret["discount"] == "4.00"
-        assert ret["vat"] == "4.91"
-        assert ret["totalvalue"] == "36.00"
-        assert ret["net"] == "31.09"
-        assert ret["payed"] == "36.00"
+        assert ret["vat"] == "5.04"  # 14% on the discounted net 36.00
+        assert ret["totalvalue"] == "41.04"
+        assert ret["net"] == "36.00"
+        assert ret["payed"] == "41.04"
         debit, credit = await _journal_totals(ret["id"])
-        assert debit == credit == Decimal("36.00")
+        assert debit == credit == Decimal("41.04")
     finally:
         await _cleanup([drug_id], invoice_ids, [supplier_id])
 

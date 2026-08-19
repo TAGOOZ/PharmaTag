@@ -272,13 +272,16 @@ async def test_sale_invoice_level_discount(client):
         assert r.status_code == 201, r.text
         body = r.json()
         invoice_ids.append(body["id"])
-        # VAT is per-line on the gross (100 → 12.28); the invoice-level 10%
-        # discount is a straight deduction from the inclusive total.
+        # the invoice-level 10% is apportioned to the line, so the VAT base is
+        # the discounted price: split_vat(90, 14%) = 78.95 / 11.05 (Egypt law:
+        # taxable base = price actually paid).
         assert body["subtotal"] == "100.00"
         assert body["discount"] == "10.00"
         assert body["totalvalue"] == "90.00"
-        assert body["vat"] == "12.28"
-        assert body["net"] == "77.72"
+        assert body["vat"] == "11.05"
+        assert body["net"] == "78.95"
+        assert body["lines"][0]["line_total"] == "90.00"
+        assert body["lines"][0]["vat_amount"] == "11.05"
         debit, credit = await _journal_totals(body["id"])
         assert debit == credit
     finally:
@@ -329,3 +332,91 @@ async def test_sale_zero_price_giveaway_balanced(client):
         assert debit == credit == Decimal("0")
     finally:
         await _cleanup([drug_id], invoice_ids)
+
+
+async def test_sale_deep_discount_keeps_journal_balanced(client):
+    """A 95% discount takes the taxable line almost to zero: because the VAT
+    re-splits on the discounted total, net stays non-negative and the journal
+    balances (the old engine split VAT on the gross 100 → net went negative,
+    the 4000 leg was skipped and the journal went out of balance)."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%", price="100.0000",
+        batches=[("10.0000", "50.0000", None)], stock_qty="10.0000",
+    )
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        r = await client.post(
+            "/api/v1/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"lines": [{"drug_id": drug_id, "qty": "1"}], "disc_percent": "95"},
+        )
+        assert r.status_code == 201, r.text
+        body = r.json()
+        invoice_ids.append(body["id"])
+        assert body["totalvalue"] == "5.00"
+        assert body["vat"] == "0.61"  # split_vat(5.00, 14%) — the discounted base
+        assert body["net"] == "4.39"
+        assert Decimal(body["net"]) >= 0
+        # the journal is balanced even though the discount ate 95% of the line:
+        # Dr drawer 5.00 + Dr cogs 50.00 vs Cr sales 4.39 + Cr VAT 0.61 + Cr stock 50.00
+        debit, credit = await _journal_totals(body["id"])
+        assert debit == credit == Decimal("55.00")
+    finally:
+        await _cleanup([drug_id], invoice_ids)
+
+
+async def test_sale_discount_over_subtotal_rejected_atomically(client):
+    """A 100%+ discount (10.00 line + 95% header) exceeds the subtotal → 400
+    DISCOUNT_OVERFLOW and NOTHING is written: no invoice, no stock movement,
+    no outbox row (the apportionment must never produce a negative line)."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%", price="10.0000",
+        batches=[("10.0000", "5.0000", None)], stock_qty="10.0000",
+    )
+    try:
+        token = await _login_token(client)
+        async with SessionLocal() as session:
+            from app.models import Invoice, SyncLog
+            before_inv = set(
+                (
+                    await session.execute(
+                        select(Invoice.id).where(Invoice.branch_id == BRANCH_ID)
+                    )
+                ).scalars()
+            )
+            before_outbox = set(
+                (
+                    await session.execute(
+                        select(SyncLog.id).where(SyncLog.entity == "invoice")
+                    )
+                ).scalars()
+            )
+        r = await client.post(
+            "/api/v1/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"lines": [{"drug_id": drug_id, "qty": "1", "disc_percent": "10"}], "disc_percent": "95"},
+        )
+        assert r.status_code == 400, r.text
+        assert "discount exceeds" in r.json()["detail"]
+        assert await _stock_qty(drug_id) == Decimal("10.0000")
+        async with SessionLocal() as session:
+            from app.models import Invoice, SyncLog
+            n_inv = set(
+                (
+                    await session.execute(
+                        select(Invoice.id).where(Invoice.branch_id == BRANCH_ID)
+                    )
+                ).scalars()
+            )
+            assert n_inv == before_inv  # no new invoice written
+            n_outbox = set(
+                (
+                    await session.execute(
+                        select(SyncLog.id).where(SyncLog.entity == "invoice")
+                    )
+                ).scalars()
+            )
+            assert n_outbox == before_outbox  # no new outbox row enqueued
+    finally:
+        await _cleanup([drug_id], [])

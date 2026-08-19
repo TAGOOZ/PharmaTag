@@ -103,6 +103,16 @@ async def _cleanup(drug_ids: list[int], request_ids: list[int] | None = None) ->
                     StockCorrectionRequest.id.in_(request_ids)
                 )
             )
+        jids = (
+            await session.execute(
+                select(Journal.id).where(Journal.source == "correction")
+            )
+        ).scalars().all()
+        if jids:
+            await session.execute(
+                delete(JournalLine).where(JournalLine.journal_id.in_(jids))
+            )
+            await session.execute(delete(Journal).where(Journal.id.in_(jids)))
         for drug_id in drug_ids:
             await session.execute(
                 delete(StockBatch).where(StockBatch.drug_id == drug_id)

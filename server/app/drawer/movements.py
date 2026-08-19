@@ -292,6 +292,34 @@ async def _cogs(session: AsyncSession, *, branch_id: int, datee: date) -> Decima
     return round2(dec(debit.scalar_one()) - dec(credit.scalar_one()))
 
 
+async def _corrections_net(session: AsyncSession, *, branch_id: int, datee: date) -> Decimal:
+    """Net stock-correction value for the day from journal_lines (account 5900).
+
+    The count-correction journal debits 5900 on a deficit (a stock loss hits
+    the P&L as a cost) and credits it on an overage (a count gain nets down the
+    expense contra), so net = Σdebit − Σcredit feeds the P&L as a cost below.
+    """
+    debit = await session.execute(
+        select(func.coalesce(func.sum(JournalLine.debit), 0))
+        .join(Account, Account.id == JournalLine.account_id)
+        .where(
+            Account.code == "5900",
+            JournalLine.branch_id == branch_id,
+            JournalLine.datee == datee,
+        )
+    )
+    credit = await session.execute(
+        select(func.coalesce(func.sum(JournalLine.credit), 0))
+        .join(Account, Account.id == JournalLine.account_id)
+        .where(
+            Account.code == "5900",
+            JournalLine.branch_id == branch_id,
+            JournalLine.datee == datee,
+        )
+    )
+    return round2(dec(debit.scalar_one()) - dec(credit.scalar_one()))
+
+
 async def day_ledger(
     session: AsyncSession, *, branch_id: int, datee: date
 ) -> dict[str, Decimal]:
@@ -330,6 +358,7 @@ async def day_ledger(
     discounts = round2(sales["discount"] - sale_returns["discount"])
     purchases_total = round2(purchases["total"] - purchase_returns["total"])
     cogs = await _cogs(session, branch_id=branch_id, datee=datee)
+    corrections = await _corrections_net(session, branch_id=branch_id, datee=datee)
 
     net_cash = round2(cash_sales - cash_returns)
     net_network = round2(network_sales - network_returns)
@@ -340,7 +369,9 @@ async def day_ledger(
     # manual_cash as a manual movement) but the identity simplifies to
     # (cash_in − cash_out), so the equation still counts it exactly once.
     expected_cash = round2(drawer_start + (cash_in - drawer_start) - cash_out)
-    net_profit = round2(sales_net - cogs - expenses)
+    # stock-count corrections (account 5900) are a P&L cost: a deficit nets
+    # down profit, an overage (contra) nets it back up.
+    net_profit = round2(sales_net - cogs - expenses - corrections)
 
     return {
         "drawer_start": drawer_start,

@@ -63,7 +63,7 @@ async def test_period_totals_aggregate_sales_and_purchases(client):
         )
         assert p.status_code == 201, p.text
         invoice_ids.append(p.json()["id"])
-        assert p.json()["totalvalue"] == "40.00"
+        assert p.json()["totalvalue"] == "45.60"
 
         today = business_date().isoformat()
         rep = await client.get(
@@ -79,11 +79,11 @@ async def test_period_totals_aggregate_sales_and_purchases(client):
         }
         assert kinds["sale_return"]["count"] == 0
         assert kinds["purchase"] == {
-            "count": 1, "total": "40.00", "vat": "4.91", "discount": "0.00"
+            "count": 1, "total": "45.60", "vat": "5.60", "discount": "0.00"
         }
         assert kinds["purchase_return"]["count"] == 0
         assert body["net_sales"] == "120.00"
-        assert body["net_purchases"] == "40.00"
+        assert body["net_purchases"] == "45.60"
         assert body["net_vat_sales"] == "14.74"
     finally:
         await _cleanup([drug_id], invoice_ids)

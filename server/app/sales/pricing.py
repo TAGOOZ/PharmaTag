@@ -9,7 +9,7 @@ from decimal import Decimal
 
 from fastapi import HTTPException, status
 
-from app.core.money import add, dec, round2
+from app.core.money import add, apportion_discount, dec, round2
 from app.models import Drug
 
 DISCOUNT_OVERFLOW = HTTPException(
@@ -33,7 +33,14 @@ def _price_for(drug: Drug, price_level: str) -> Decimal:
 def _sale_totals(resolved, disc_percent, *, inclusive: bool) -> dict:
     """Header totals from per-line canonical money (mirrors money.invoice_money:
     subtotal = Σ gross, discount = line discounts + invoice-level percent,
-    vat = Σ per-line VAT, total/net per the inclusive flag)."""
+    vat = Σ per-line VAT split on the DISCOUNTED totals, total/net per the
+    inclusive flag).
+
+    The invoice-level discount is apportioned to each line (item["lm"] is
+    replaced with the apportioned LineMoney) before the VAT split, so the
+    taxable base is the discounted price actually paid (Egypt Law 67/2016 arts.
+    10-11). Callers MUST read item["lm"] after calling this.
+    """
     subtotal = add(item["lm"].gross for item in resolved)
     line_disc = add(item["lm"].discount for item in resolved)
     invoice_disc = (
@@ -42,6 +49,15 @@ def _sale_totals(resolved, disc_percent, *, inclusive: bool) -> dict:
         else Decimal("0")
     )
     discount = line_disc + invoice_disc
+    if discount > subtotal:
+        raise DISCOUNT_OVERFLOW
+    for item, lm in zip(
+        resolved,
+        apportion_discount(
+            [item["lm"] for item in resolved], invoice_disc, inclusive=inclusive
+        ),
+    ):
+        item["lm"] = lm
     vat = add(item["lm"].vat for item in resolved)
     total = round2(subtotal - discount + (vat if not inclusive else Decimal("0")))
     if total < 0:

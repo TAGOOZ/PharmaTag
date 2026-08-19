@@ -146,10 +146,14 @@ def test_invoice_money_inclusive_with_discount():
         disc_percent=D("10"),
         inclusive=True,
     )
+    # the invoice discount is apportioned per line (21/121 → 2.10, remainder
+    # 10.00), and each line's VAT re-splits on the discounted total, so VAT
+    # reflects the price actually paid.
     assert inv.subtotal == D("121.00")
     assert inv.discount == D("12.10")
     assert inv.total == D("108.90")
-    assert inv.net == D("106.32")
+    assert inv.net == D("106.58")
+    assert inv.vat == D("2.32")
 
 
 def test_invoice_money_invariant_total_minus_discount_and_net_minus_vat():
@@ -160,6 +164,7 @@ def test_invoice_money_invariant_total_minus_discount_and_net_minus_vat():
     )
     assert inv.total == inv.subtotal - inv.discount
     assert inv.net == inv.total - inv.vat
+    assert inv.total == inv.net + inv.vat
 
 
 def test_invoice_money_exclusive_totals():
@@ -262,3 +267,67 @@ def test_add_empty_and_iterable():
     assert money.add() == D("0")
     assert money.add([]) == D("0")
     assert money.add(["0.10", "0.20"]) == D("0.30")
+
+
+# --- apportionment: invoice discount reduces the VAT base (Egypt Law arts. 10-11) ---
+
+
+def test_apportion_single_line_takes_whole_discount():
+    lines = [money.line_money(D("1"), D("100.00"), "14%", inclusive=True)]
+    out = money.apportion_discount(lines, D("10.00"), inclusive=True)
+    assert out[0].line_total == D("90.00")
+    assert out[0].net == D("78.95")  # round2(90 / 1.14)
+    assert out[0].vat == D("11.05")  # 90 - 78.95, never 12.28 on the gross
+    assert out[0].discount == D("0.00")  # line-discount field stays line-only
+
+
+def test_apportion_sum_invariant_and_no_negative_lines():
+    lines = [
+        money.line_money(D("2"), D("10.50"), "14%", inclusive=True),
+        money.line_money(D("1"), D("100.00"), "exempt", inclusive=True),
+    ]
+    out = money.apportion_discount(lines, D("12.10"), inclusive=True)
+    assert money.add(l.line_total for l in out) == money.add(
+        l.line_total for l in lines
+    ) - D("12.10")
+    assert money.add(l.vat for l in out) == D("2.32")
+    assert all(l.line_total >= 0 for l in out)
+
+
+def test_apportion_zero_or_empty_returns_lines_unchanged():
+    lines = [money.line_money(D("1"), D("10.00"), "14%", inclusive=True)]
+    assert money.apportion_discount(lines, D("0"), inclusive=True) == lines
+    assert money.apportion_discount(lines, D("5.00"), inclusive=True)[0] is not lines[0]
+
+
+def test_apportion_removes_the_piastre_from_vat():
+    """Canonical (test_invoice_money_vat_is_per_line_never_aggregate) with a
+    discount: the aggregate split on the discounted total still must NOT win."""
+    lines = [(D("1"), D("1.00"), "14%"), (D("1"), D("1.00"), "14%")]
+    inv = money.invoice_money(lines, disc_percent=D("10"), inclusive=True)
+    assert inv.subtotal == D("2.00")
+    assert inv.discount == D("0.20")
+    assert inv.total == D("1.80")
+    assert inv.vat == D("0.22")  # 2 x round2(0.90/1.14) = 2 x 0.11
+    aggregate = money.split_vat(inv.total, "14%", inclusive=True).vat
+    assert aggregate == D("0.22")  # happens to agree here, still per-line below
+    assert inv.net == D("1.58")
+
+
+def test_apportion_exclusive_splits_vat_on_discounted_net():
+    lines = [money.line_money(D("1"), D("100.00"), "14%", inclusive=False)]
+    out = money.apportion_discount(lines, D("10.00"), inclusive=False)
+    assert out[0].line_total == D("90.00")  # discounted net base
+    assert out[0].net == D("90.00")
+    assert out[0].vat == D("12.60")  # 14% on the discounted net
+
+
+def test_apportion_last_line_absorbs_remainder():
+    lines = [
+        money.line_money(D("1"), D("1.00"), "exempt", inclusive=True),
+        money.line_money(D("1"), D("1.00"), "exempt", inclusive=True),
+        money.line_money(D("1"), D("1.00"), "exempt", inclusive=True),
+    ]
+    out = money.apportion_discount(lines, D("1.00"), inclusive=True)
+    assert [l.line_total for l in out] == [D("0.67"), D("0.67"), D("0.66")]
+    assert money.add(l.line_total for l in out) == D("2.00")

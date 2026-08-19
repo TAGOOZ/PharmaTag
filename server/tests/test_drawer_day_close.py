@@ -544,7 +544,7 @@ async def test_purchase_payment_is_not_manual_cash(client):
             admin,
             supplier_id,
             [{"drug_id": drug_id, "qty": "10", "unit_cost": "10.0000"}],
-            payments=[{"method": "cash", "amount": "100.00"}],
+            payments=[{"method": "cash", "amount": "114.00"}],
             datee="2026-01-23",
         )
         invoice_ids.append(pur["id"])
@@ -553,8 +553,8 @@ async def test_purchase_payment_is_not_manual_cash(client):
         assert rc.status_code == 200, rc.text
         body = rc.json()
         assert body["manual_cash"] == "0.00"
-        assert body["purchases"] == "100.00"
-        assert body["expected_cash"] == "-100.00"
+        assert body["purchases"] == "114.00"
+        assert body["expected_cash"] == "-114.00"
     finally:
         await _cleanup_drawer()
         await _purchase_cleanup([drug_id], invoice_ids, [supplier_id])

@@ -191,7 +191,7 @@ async def test_return_replay_applies_and_is_idempotent(client):
             assert versions[0].action == "purchase_return"
         assert await _stock_qty(drug_id) == Decimal("6.0000")
         debit, credit = await _journal_totals(new_id)
-        assert debit == credit == Decimal("40.00")
+        assert debit == credit == Decimal("45.60")
 
         async with SessionLocal() as session:
             summary = await replay_pending(session, branch_id=BRANCH_ID)

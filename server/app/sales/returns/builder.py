@@ -34,7 +34,17 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import ACTION_INSERT, audit, enqueue_sync
-from app.core.money import add, dec, format2, line_money, round2, round4, tax_rate
+from app.core.money import (
+    LineMoney,
+    add,
+    apportion_discount,
+    dec,
+    format2,
+    round2,
+    round4,
+    split_vat,
+    tax_rate,
+)
 from app.drawer.movements import SALE_RETURN, record_payment_splits
 from app.models import Branch, Drug, Invoice, InvoiceLine, InvoiceVersion, PaymentSplit
 from app.money.journal import post_journal
@@ -79,6 +89,32 @@ async def _already_returned(session: AsyncSession, original_line_id: int) -> Dec
         )
     ).scalar_one()
     return dec(total)
+
+
+def _return_line_money(
+    qty, unit_price, tax_type: str, *, line_disc_amount, inclusive: bool
+) -> LineMoney:
+    """Return-line money at the ORIGINAL unit price, with the original line's
+    discount reversed proportionally (as an AMOUNT — the sale stored the line
+    discount as money, not a percent, so feeding it back as a percent would be
+    wrong). The VAT split works on the discounted total, exactly like the sale's
+    per-line engine."""
+    qty_r = round4(dec(qty))
+    price = dec(unit_price)
+    gross = round2(qty_r * price)
+    discount = round2(dec(line_disc_amount))
+    line_total = gross - discount
+    split = split_vat(line_total, tax_type, inclusive=inclusive)
+    return LineMoney(
+        qty=qty_r,
+        unit_price=price,
+        tax_type=tax_type,
+        gross=gross,
+        discount=discount,
+        line_total=line_total,
+        net=split.net,
+        vat=split.vat,
+    )
 
 
 async def _mirror_refund(
@@ -171,18 +207,35 @@ async def _snapshot_invoice(
 
 
 def _return_totals(
-    resolved: list[dict], original: Invoice, *, inclusive: bool
+    resolved: list[dict],
+    original: Invoice,
+    *,
+    header_only_disc: Decimal,
+    inclusive: bool,
 ) -> dict:
     """Return header totals: per-line money at original prices + a PROPORTIONAL
-    share of the original's header discount (so the reversal mirrors the sale)."""
+    share of the original's HEADER-ONLY discount (total discount minus the line
+    discounts, so a line-discounted sale isn't double-counted). The header share
+    is apportioned per returned line and each line's VAT re-splits on the
+    discounted total (item["lm"] is replaced), mirroring the original sale's
+    engine so the reversal nets 1:1."""
     subtotal = add(item["lm"].gross for item in resolved)
     line_disc = add(item["lm"].discount for item in resolved)
     invoice_disc = (
-        round2(dec(original.discount) * subtotal / dec(original.subtotal))
+        round2(header_only_disc * subtotal / dec(original.subtotal))
         if dec(original.subtotal) > 0
         else Decimal("0")
     )
     discount = line_disc + invoice_disc
+    if discount > subtotal:
+        raise DISCOUNT_OVERFLOW
+    for item, lm in zip(
+        resolved,
+        apportion_discount(
+            [item["lm"] for item in resolved], invoice_disc, inclusive=inclusive
+        ),
+    ):
+        item["lm"] = lm
     vat = add(item["lm"].vat for item in resolved)
     total = round2(
         subtotal - discount + (vat if not inclusive else Decimal("0"))
@@ -237,30 +290,19 @@ async def _build_full_return(
         drug = await session.get(Drug, orig_line.drug_id)
         if drug is None:
             raise NOT_FOUND
-        lm = line_money(
+        line_disc = (
+            round2(dec(orig_line.disc) * qty / dec(orig_line.qty))
+            if dec(orig_line.qty) > 0
+            else Decimal("0")
+        )
+        lm = _return_line_money(
             qty,
             orig_line.unit_price,
             orig_line.tax_type,
-            disc_percent=dec(orig_line.disc) or None,
+            line_disc_amount=line_disc,
             inclusive=inclusive,
         )
         barcode = await _primary_barcode(session, orig_line.drug_id)
-        batch = await create_return_batch(
-            session,
-            branch_id=branch_id,
-            user_id=user_id,
-            invoice_no=invoice_no,
-            idx=idx,
-            drug_id=orig_line.drug_id,
-            qty=lm.qty,
-            cost=round4(orig_line.cost),
-            price=orig_line.unit_price,
-            vat_rate=round2(tax_rate(lm.tax_type) * Decimal("100")),
-            vat_amount=lm.vat,
-            total_with_vat=lm.line_total,
-            expire=orig_line.expire,
-            barcode=barcode,
-        )
         await raise_branch_stock(
             session,
             branch_id=branch_id,
@@ -276,13 +318,43 @@ async def _build_full_return(
                 "drug": drug,
                 "orig_line": orig_line,
                 "lm": lm,
-                "batch": batch,
+                "idx": idx,
+                "barcode": barcode,
                 "cogs": line_cogs,
             }
         )
         cogs_total += line_cogs
 
-    totals = _return_totals(resolved, original, inclusive=inclusive)
+    orig_all_lines = (
+        await session.execute(
+            select(InvoiceLine).where(InvoiceLine.invoice_id == original.id)
+        )
+    ).scalars().all()
+    header_only_disc = dec(original.discount) - add(
+        dec(l.disc) for l in orig_all_lines
+    )
+    totals = _return_totals(
+        resolved, original, header_only_disc=header_only_disc, inclusive=inclusive
+    )
+    for item in resolved:
+        orig_line = item["orig_line"]
+        lm = item["lm"]
+        item["batch"] = await create_return_batch(
+            session,
+            branch_id=branch_id,
+            user_id=user_id,
+            invoice_no=invoice_no,
+            idx=item["idx"],
+            drug_id=orig_line.drug_id,
+            qty=lm.qty,
+            cost=round4(orig_line.cost),
+            price=orig_line.unit_price,
+            vat_rate=round2(tax_rate(lm.tax_type) * Decimal("100")),
+            vat_amount=lm.vat,
+            total_with_vat=lm.line_total,
+            expire=orig_line.expire,
+            barcode=item["barcode"],
+        )
     if payments is not None:
         payed, agel, splits = _resolve_payments(payments, totals["total"])
     else:

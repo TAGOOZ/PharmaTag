@@ -48,7 +48,7 @@ async def test_return_combines_line_and_header_discount_without_double_count(cli
             disc_percent="10",
         )
         assert pur["discount"] == "20.00"
-        assert pur["totalvalue"] == "80.00"
+        assert pur["totalvalue"] == "91.20"  # net 80 + vat 11.20 (B2B exclusive)
         invoice_ids.append(pur["id"])
         ret = await _return(
             client, token, pur, [{"ref_invoice_line_id": pur["lines"][0]["id"], "qty": "4"}]
@@ -56,12 +56,12 @@ async def test_return_combines_line_and_header_discount_without_double_count(cli
         invoice_ids.append(ret["id"])
         assert ret["subtotal"] == "40.00"
         assert ret["discount"] == "8.00"
-        assert ret["vat"] == "4.42"
-        assert ret["totalvalue"] == "32.00"
-        assert ret["net"] == "27.58"
-        assert ret["payed"] == "32.00"
+        assert ret["vat"] == "4.48"  # 14% on the discounted net 32.00
+        assert ret["totalvalue"] == "36.48"
+        assert ret["net"] == "32.00"
+        assert ret["payed"] == "36.48"
         debit, credit = await _journal_totals(ret["id"])
-        assert debit == credit == Decimal("32.00")
+        assert debit == credit == Decimal("36.48")
         assert await _stock_qty(drug_id) == Decimal("6.0000")
     finally:
         await _cleanup([drug_id], invoice_ids, [supplier_id])
@@ -235,7 +235,7 @@ async def test_returns_list_endpoint(client):
         assert any(x["id"] == ret["id"] for x in returns)
         match = next(x for x in returns if x["id"] == ret["id"])
         assert match["ref_invoice_id"] == pur["id"]
-        assert match["totalvalue"] == "40.00"
+        assert match["totalvalue"] == "45.60"
         assert match["invoice_no"] == ret["invoice_no"]
         empty = await client.get(
             "/api/v1/purchases/returns?datee=2000-01-01",

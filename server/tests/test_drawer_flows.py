@@ -169,7 +169,7 @@ async def test_purchase_pays_cash_out_of_the_drawer(client):
             token,
             supplier_id,
             [{"drug_id": drug_id, "qty": "10", "unit_cost": "10.0000"}],
-            payments=[{"method": "cash", "amount": "100.00"}],
+            payments=[{"method": "cash", "amount": "114.00"}],
             datee="2026-01-09",
         )
         invoice_ids.append(pur["id"])
@@ -180,7 +180,7 @@ async def test_purchase_pays_cash_out_of_the_drawer(client):
         assert mv["direction"] == "out"
         assert mv["reason"] == "supplier_pay"
         assert mv["method"] == "cash"
-        assert mv["amount"] == "100.00"
+        assert mv["amount"] == "114.00"
         assert mv["ref_invoice_id"] == pur["id"]
     finally:
         await _cleanup_drawer()
@@ -200,7 +200,7 @@ async def test_purchase_return_refunds_cash_in(client):
             token,
             supplier_id,
             [{"drug_id": drug_id, "qty": "10", "unit_cost": "10.0000"}],
-            payments=[{"method": "cash", "amount": "100.00"}],
+            payments=[{"method": "cash", "amount": "114.00"}],
             datee="2026-01-10",
         )
         invoice_ids.append(pur["id"])
@@ -218,7 +218,7 @@ async def test_purchase_return_refunds_cash_in(client):
         assert len(cash_in) == 1
         mv = cash_in[0]
         assert mv["reason"] == "supplier_pay"
-        assert mv["amount"] == "100.00"
+        assert mv["amount"] == "114.00"
         assert mv["ref_invoice_id"] == ret["id"]
     finally:
         await _cleanup_drawer()

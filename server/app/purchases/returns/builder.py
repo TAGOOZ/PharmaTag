@@ -38,6 +38,7 @@ from app.core.audit import ACTION_INSERT, audit, enqueue_sync
 from app.core.money import (
     LineMoney,
     add,
+    apportion_discount,
     dec,
     format2,
     round2,
@@ -217,7 +218,10 @@ def _return_totals(
 ) -> dict:
     """Return header totals: per-line money at original prices + a PROPORTIONAL
     share of the original's HEADER-ONLY discount (total discount minus the
-    line discounts, so a line-discounted purchase isn't double-counted)."""
+    line discounts, so a line-discounted purchase isn't double-counted). The
+    header share is apportioned per returned line and each line's VAT re-splits
+    on the discounted total (item["lm"] is replaced), mirroring the purchase's
+    engine so the reversal nets 1:1."""
     subtotal = add(item["lm"].gross for item in resolved)
     line_disc = add(item["lm"].discount for item in resolved)
     invoice_disc = (
@@ -226,6 +230,15 @@ def _return_totals(
         else Decimal("0")
     )
     discount = line_disc + invoice_disc
+    if discount > subtotal:
+        raise DISCOUNT_OVERFLOW
+    for item, lm in zip(
+        resolved,
+        apportion_discount(
+            [item["lm"] for item in resolved], invoice_disc, inclusive=inclusive
+        ),
+    ):
+        item["lm"] = lm
     vat = add(item["lm"].vat for item in resolved)
     total = round2(
         subtotal - discount + (vat if not inclusive else Decimal("0"))
@@ -265,7 +278,8 @@ async def _build_full_purchase_return(
     branch = await session.get(Branch, branch_id)
     if branch is None:
         raise NOT_FOUND
-    inclusive = bool(branch.vat_inclusive_prices)
+    # Mirrors the purchase: B2B supplier invoices are always VAT-exclusive.
+    inclusive = False
 
     resolved: list[dict] = []
     for idx, line in enumerate(lines):

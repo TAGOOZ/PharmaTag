@@ -73,15 +73,15 @@ async def test_multi_line_return_reverses_both_lines(client):
         ])
         invoice_ids.append(ret["id"])
         assert ret["subtotal"] == "140.00"
-        assert ret["vat"] == "4.91"
-        assert ret["totalvalue"] == "140.00"
-        assert ret["net"] == "135.09"
-        assert ret["payed"] == "140.00"
+        assert ret["vat"] == "5.60"  # only the 14% line carries VAT (B2B exclusive)
+        assert ret["totalvalue"] == "145.60"
+        assert ret["net"] == "140.00"
+        assert ret["payed"] == "145.60"
         assert len(ret["lines"]) == 2
         assert await _stock_qty(drug_a) == Decimal("6.0000")
         assert await _stock_qty(drug_b) == Decimal("5.0000")
         debit, credit = await _journal_totals(ret["id"])
-        assert debit == credit == Decimal("140.00")
+        assert debit == credit == Decimal("145.60")
     finally:
         await _cleanup([drug_a, drug_b], invoice_ids, [supplier_id])
 
@@ -210,9 +210,9 @@ async def test_fractional_qty_and_4dp_boundary(client):
         )
         invoice_ids.append(ret["id"])
         assert ret["lines"][0]["qty"] == "0.5000"
-        assert ret["totalvalue"] == "5.00"
-        assert ret["vat"] == "0.61"
-        assert ret["net"] == "4.39"
+        assert ret["totalvalue"] == "5.70"
+        assert ret["vat"] == "0.70"
+        assert ret["net"] == "5.00"
         assert await _stock_qty(drug_id) == Decimal("9.5000")
         r = await client.post(
             f"/api/v1/purchases/{pur['id']}/return",
@@ -267,8 +267,8 @@ async def test_return_reverses_line_discount_proportionally(client):
             [{"drug_id": drug_id, "qty": "10", "unit_cost": "10.0000", "disc_percent": "10"}],
         )
         assert pur["discount"] == "10.00"
-        assert pur["totalvalue"] == "90.00"
-        assert pur["vat"] == "11.05"  # split on the discounted 90.00
+        assert pur["totalvalue"] == "102.60"
+        assert pur["vat"] == "12.60"  # 14% on the discounted net 90.00
         invoice_ids.append(pur["id"])
         ret = await _return(
             client, token, pur, [{"ref_invoice_line_id": pur["lines"][0]["id"], "qty": "4"}]
@@ -276,10 +276,10 @@ async def test_return_reverses_line_discount_proportionally(client):
         invoice_ids.append(ret["id"])
         assert ret["subtotal"] == "40.00"
         assert ret["discount"] == "4.00"
-        assert ret["vat"] == "4.42"
-        assert ret["totalvalue"] == "36.00"
-        assert ret["net"] == "31.58"
+        assert ret["vat"] == "5.04"
+        assert ret["totalvalue"] == "41.04"
+        assert ret["net"] == "36.00"
         debit, credit = await _journal_totals(ret["id"])
-        assert debit == credit == Decimal("36.00")
+        assert debit == credit == Decimal("41.04")
     finally:
         await _cleanup([drug_id], invoice_ids, [supplier_id])

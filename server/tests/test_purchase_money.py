@@ -29,8 +29,9 @@ from tests.purchase_test_utils import (
 
 
 async def test_purchase_happy_path_money_invariants(client):
-    """A 14% purchase of 10 units at 10.00: net 87.72 / vat 12.28, batch lands
-    at net unit cost 8.7720, journal balanced, audit + outbox written."""
+    """A 14% purchase of 10 units at 10.00: B2B is VAT-EXCLUSIVE — net 100.00 /
+    vat 14.00, total 114.00, batch lands at net unit cost 10.0000, journal
+    balanced, audit + outbox written."""
     drug_id = await _make_drug(tax_type="14%")
     supplier_id = await _make_supplier()
     invoice_ids: list[int] = []
@@ -48,22 +49,22 @@ async def test_purchase_happy_path_money_invariants(client):
         body = r.json()
         invoice_ids.append(body["id"])
 
-        # invoice reconciles to the money engine (per-line VAT, half-up)
+        # invoice reconciles to the money engine (B2B net + VAT itemized)
         assert body["invoice_no"].isdigit()
         assert body["subtotal"] == "100.00"
         assert body["discount"] == "0.00"
-        assert body["vat"] == "12.28"
-        assert body["totalvalue"] == "100.00"
-        assert body["net"] == "87.72"
-        assert body["payed"] == "100.00"
+        assert body["vat"] == "14.00"
+        assert body["totalvalue"] == "114.00"
+        assert body["net"] == "100.00"
+        assert body["payed"] == "114.00"
         assert body["agel"] == "0.00"
 
         line = body["lines"][0]
         assert line["qty"] == "10.0000"
-        assert line["unit_price"] == "10.00"  # gross unit cost as charged
-        assert line["cost"] == "8.7720"  # net (ex-VAT) unit cost on the batch
+        assert line["unit_price"] == "10.00"  # net unit cost as charged
+        assert line["cost"] == "10.0000"  # net (ex-VAT) unit cost on the batch
         assert line["tax_type"] == "14%"
-        assert line["vat_amount"] == "12.28"
+        assert line["vat_amount"] == "14.00"
         assert line["line_total"] == "100.00"
 
         # stock: one NEW purchase batch landed at net unit cost, branch_stock up
@@ -71,18 +72,18 @@ async def test_purchase_happy_path_money_invariants(client):
         assert len(batches) == 1
         batch = batches[0]
         assert batch.qty == Decimal("10.0000")
-        assert batch.cost == Decimal("8.7720")
+        assert batch.cost == Decimal("10.0000")
         assert batch.price == Decimal("10.0000")
         assert batch.vat == Decimal("14.00")
-        assert batch.vatvalue == Decimal("12.28")
-        assert batch.totalwithvat == Decimal("100.00")
+        assert batch.vatvalue == Decimal("14.00")
+        assert batch.totalwithvat == Decimal("114.00")
         assert batch.typee == "purchase"
         assert await _stock_qty(drug_id) == Decimal("10.0000")
 
         # journal is balanced: Dr stock net + Dr input VAT = Cr drawer payed
         debit, credit = await _journal_totals(body["id"])
-        assert debit == Decimal("100.00")  # 87.72 stock + 12.28 input VAT
-        assert credit == Decimal("100.00")  # 100.00 drawer
+        assert debit == Decimal("114.00")  # 100.00 stock + 14.00 input VAT
+        assert credit == Decimal("114.00")  # 114.00 drawer
         assert debit == credit, "SUM(debit) must equal SUM(credit)"
         assert await _journal_source(body["id"]) == "purchase"
 
@@ -114,8 +115,8 @@ async def test_purchase_happy_path_money_invariants(client):
             assert outbox[0].status == "pending"
             assert outbox[0].payload["kind"] == "purchase"
             assert outbox[0].payload["invoice_no"] == body["invoice_no"]
-            assert outbox[0].payload["totalvalue"] == "100.00"
-            assert outbox[0].payload["lines"][0]["unit_cost"] == "8.7720"
+            assert outbox[0].payload["totalvalue"] == "114.00"
+            assert outbox[0].payload["lines"][0]["unit_cost"] == "10.0000"
     finally:
         await _cleanup([drug_id], invoice_ids, [supplier_id])
 
@@ -207,17 +208,18 @@ async def test_purchase_mixed_tax_types_net_split(client):
         assert r.status_code == 201, r.text
         body = r.json()
         invoice_ids.append(body["id"])
-        # exempt: 10.00 net / 0 vat — 5%: 95.24 / 4.76 — 14%: 43.86 / 6.14
+        # B2B exclusive: exempt 10.00 net / 0 vat — 5%: 100.00 / 5.00 — 14%:
+        # 50.00 / 7.00; the total is net + VAT (the supplier's itemized invoice).
         assert body["subtotal"] == "160.00"
-        assert body["vat"] == "10.90"
-        assert body["totalvalue"] == "160.00"
-        assert body["net"] == "149.10"
+        assert body["vat"] == "12.00"
+        assert body["totalvalue"] == "172.00"
+        assert body["net"] == "160.00"
         assert [l["tax_type"] for l in body["lines"]] == ["exempt", "5%", "14%"]
-        assert [l["vat_amount"] for l in body["lines"]] == ["0.00", "4.76", "6.14"]
-        assert [l["cost"] for l in body["lines"]] == ["10.0000", "95.2400", "43.8600"]
+        assert [l["vat_amount"] for l in body["lines"]] == ["0.00", "5.00", "7.00"]
+        assert [l["cost"] for l in body["lines"]] == ["10.0000", "100.0000", "50.0000"]
         debit, credit = await _journal_totals(body["id"])
-        assert debit == Decimal("160.00")
-        assert credit == Decimal("160.00")
+        assert debit == Decimal("172.00")
+        assert credit == Decimal("172.00")
         assert debit == credit
     finally:
         await _cleanup([exempt, five, fourteen], invoice_ids, [supplier_id])
@@ -253,8 +255,9 @@ async def test_purchase_zero_cost_giveaway_balanced(client):
 
 
 async def test_purchase_invoice_level_discount(client):
-    """An invoice-level discount reduces the total; per-line VAT is still
-    computed on the gross (never re-apportioned)."""
+    """An invoice-level discount reduces the total AND the VAT base: the 10%
+    is apportioned to the line (100 → 90) and the input VAT splits on the
+    discounted net, so the batch cost lands at the discounted net unit cost."""
     drug_id = await _make_drug(tax_type="14%")
     supplier_id = await _make_supplier()
     invoice_ids: list[int] = []
@@ -274,12 +277,13 @@ async def test_purchase_invoice_level_discount(client):
         invoice_ids.append(body["id"])
         assert body["subtotal"] == "100.00"
         assert body["discount"] == "10.00"
-        assert body["totalvalue"] == "90.00"
-        assert body["vat"] == "12.28"  # per-line on the gross 100
-        assert body["net"] == "77.72"
+        assert body["totalvalue"] == "102.60"  # net 90 + vat 12.60
+        assert body["vat"] == "12.60"  # 14% on the discounted net 90
+        assert body["net"] == "90.00"
+        assert body["lines"][0]["cost"] == "90.0000"  # discounted net unit cost
         debit, credit = await _journal_totals(body["id"])
-        assert debit == Decimal("90.00")  # 77.72 stock + 12.28 vat
-        assert credit == Decimal("90.00")  # 90.00 drawer
+        assert debit == Decimal("102.60")  # 90.00 stock + 12.60 vat
+        assert credit == Decimal("102.60")  # 102.60 drawer
         assert debit == credit
     finally:
         await _cleanup([drug_id], invoice_ids, [supplier_id])

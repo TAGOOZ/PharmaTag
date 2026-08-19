@@ -16,8 +16,12 @@ Rules locked from plan/00 + plan/02:
   * Per-line tax engine (G06): each line resolves its own tax_type
     (exempt / 5% / 14%). Egypt retail is VAT-INCLUSIVE: for taxable lines the
     net is derived per line as gross / (1 + rate), never double-taxed.
-    Discount is taken off the inclusive gross and does not retroactively
-    re-apportion VAT (the per-line split is computed on the discounted total).
+    A line discount is applied to the line's gross BEFORE the VAT split;
+    an INVOICE-level discount is apportioned to the lines proportionally to
+    their line_total and each line's VAT is re-split on the discounted total,
+    so VAT always reflects the price actually paid (Egypt Law 67/2016 arts.
+    10-11: the taxable base is the discounted price). The last line absorbs
+    the rounding remainder so SUM(line_total) == subtotal - discount exactly.
 """
 from __future__ import annotations
 
@@ -38,6 +42,7 @@ __all__ = [
     "split_vat",
     "line_money",
     "invoice_money",
+    "apportion_discount",
 ]
 
 TAX_RATES: dict[str, Decimal] = {
@@ -165,6 +170,56 @@ def line_money(qty, unit_price, tax_type: str, *, disc_percent=None,
     )
 
 
+def apportion_discount(
+    lines: list[LineMoney], amount, *, inclusive: bool = True
+) -> list[LineMoney]:
+    """Apply an invoice-level discount `amount` across the lines.
+
+    Each line gets a share of the invoice discount proportional to its
+    line_total, then its VAT is RE-SPLIT on the discounted total so the per-line
+    taxable base is the discounted price actually paid (Egypt Law 67/2016 arts.
+    10-11). Shares are round-half-up with the LAST line absorbing the rounding
+    remainder, so SUM(out.line_total) == SUM(in.line_total) - amount exactly and
+    no line_total can ever go negative (amount <= SUM(line_total) by the
+    discount-must-not-exceed-subtotal rule enforced by the callers).
+
+    `discount` on the returned lines keeps ONLY the line discount — the invoice
+    share is folded into line_total, never into the line-discount field, so a
+    later return can recover the header-only discount as
+    (invoice.discount - SUM(line.disc)).
+    """
+    amount = dec(amount)
+    if amount <= 0:
+        return list(lines)
+    base = add(l.line_total for l in lines)
+    if base <= 0:
+        return list(lines)
+    remaining = amount
+    out: list[LineMoney] = []
+    for i, lm in enumerate(lines):
+        share = (
+            remaining
+            if i == len(lines) - 1
+            else round2(amount * lm.line_total / base)
+        )
+        remaining -= share
+        line_total = lm.line_total - share
+        split = split_vat(line_total, lm.tax_type, inclusive=inclusive)
+        out.append(
+            LineMoney(
+                qty=lm.qty,
+                unit_price=lm.unit_price,
+                tax_type=lm.tax_type,
+                gross=lm.gross,
+                discount=lm.discount,
+                line_total=line_total,
+                net=split.net,
+                vat=split.vat,
+            )
+        )
+    return out
+
+
 @dataclass(frozen=True)
 class InvoiceMoney:
     """Header totals for an invoice (plan/02 §16.4).
@@ -184,8 +239,9 @@ def invoice_money(lines, disc_percent=None, *, inclusive: bool = True) -> Invoic
     """Resolve a whole invoice from raw (qty, unit_price, tax_type) lines.
 
     Subtotal sums the per-line gross totals; a single invoice-level percent
-    discount is applied to the subtotal; VAT is the sum of per-line VAT splits
-    (per-line rounding is canonical, G06).
+    discount is applied to the subtotal and apportioned per line; VAT is the
+    sum of the per-line VAT splits on the DISCOUNTED totals (per-line rounding
+    is canonical, G06; the taxable base is the price actually paid).
     """
     resolved = [line_money(qty, price, tax, inclusive=inclusive)
                 for qty, price, tax in lines]
@@ -195,8 +251,11 @@ def invoice_money(lines, disc_percent=None, *, inclusive: bool = True) -> Invoic
         if disc_percent is not None
         else Decimal("0")
     )
-    total = round2(subtotal - discount + (Decimal("0") if inclusive else add(l.vat for l in resolved)))
+    resolved = apportion_discount(resolved, discount, inclusive=inclusive)
     vat = add(l.vat for l in resolved)
+    total = round2(
+        subtotal - discount + (Decimal("0") if inclusive else vat)
+    )
     return InvoiceMoney(
         subtotal=subtotal,
         discount=discount,

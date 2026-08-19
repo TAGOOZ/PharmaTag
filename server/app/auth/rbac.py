@@ -34,6 +34,7 @@ LEGACY_LEVEL_FLOOR = {
     "drugs.manage": 3,  # الأصناف والمخزون (drug master + stock module, plan/02 §3)
     "drawer.manage": 3,  # manual cash-drawer movements (S1.8, ticket #14)
     "accounts.manage": 7,  # chart-of-accounts edits (S2.1, ticket #16 — ledger area, plan/02 §3 ≥7)
+    "journals.manage": 7,  # manual journal entries (S2.2, ticket #17 — ledger area, plan/02 §3 ≥7)
     "approvals": 5,
     "reports": 9,
     "users.manage": 6,

@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.db import SessionLocal, engine
 from app.drawer.router import router as drawer_router
 from app.drugs.router import router as drugs_router
+from app.money.router import router as money_router
 from app.parties.router import router as parties_router
 from app.plugins.registry import registry
 from app.plugins.router import router as plugins_router
@@ -76,6 +77,9 @@ def create_app() -> FastAPI:
     )
     application.include_router(
         drawer_router, prefix="/api/v1/drawer", tags=["drawer"]
+    )
+    application.include_router(
+        money_router, prefix="/api/v1/journals", tags=["journals"]
     )
     application.include_router(
         reports_router, prefix="/api/v1/reports", tags=["reports"]

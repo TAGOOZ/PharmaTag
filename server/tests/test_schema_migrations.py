@@ -59,11 +59,12 @@ EXPECTED_COUNTS = {
     "branches": 1,
     "users": 1,
     "roles": 5,
-    "permissions": 18,           # 16 seeded + drugs.manage (rev 005) +
-                                 # accounts.manage (rev 009)
-    "role_permissions": 29,      # admin->all 16 + manager 6 + accountant 2 +
+    "permissions": 19,           # 16 seeded + drugs.manage (rev 005) +
+                                 # accounts.manage (rev 009) + journals.manage (rev 011)
+    "role_permissions": 32,      # admin->all 16 + manager 6 + accountant 2 +
                                  # pharmacist 1 + cashier 1 + 005 admin grant +
-                                 # 009 admin + accountant accounts.manage grants
+                                 # 009 admin + accountant accounts.manage grants +
+                                 # 011 journals.manage grants to roles 1, 4, 5
     "user_roles": 1,
     "accounts": 23,              # 12 seeded + 11 rev-009 tree nodes
     "app_plugins": 2,

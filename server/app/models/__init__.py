@@ -9,7 +9,14 @@ Split into small focused modules (one domain per file) — keep it that way:
 add new tables to the module that owns their domain, then re-export here so
 `from app.models import X` keeps working across the codebase.
 """
-from app.models.accounting import Account, Balance, Journal, JournalLine, Party
+from app.models.accounting import (
+    Account,
+    Balance,
+    Journal,
+    JournalLine,
+    ManualJournalEntry,
+    Party,
+)
 from app.models.auth import Permission, Role, User
 from app.models.base import (
     Base,
@@ -54,6 +61,7 @@ __all__ = [
     "InvoiceVersion",
     "Journal",
     "JournalLine",
+    "ManualJournalEntry",
     "Party",
     "PaymentSplit",
     "Permission",

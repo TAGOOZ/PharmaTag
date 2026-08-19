@@ -137,7 +137,7 @@ the ticket ships.
 | web `/` | dashboard (home) | stub — static shell, today-summary not wired | #38 |
 | desktop | module screens (`App.tsx` STUBS) | stubs — same as web | #38 |
 | desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly | #39 |
-| API | money endpoints | drawer + day close are real (`/api/v1/drawer/*`, ticket #14), except `vat_expenses`, which snapshots 0 — no expense-VAT data source exists yet (documented in `app/drawer/movements.py`); the rest of the money API (trial balance, receivables, manual journal, month close) remains stubs | #14 (S2/S3 slices later) |
+| API | money endpoints | drawer + day close are real (`/api/v1/drawer/*`, ticket #14), except `vat_expenses`, which snapshots 0 — no expense-VAT data source exists yet (documented in `app/drawer/movements.py`); manual journal entries are real (`/api/v1/journals/manual`, ticket #17); the rest of the money API (trial balance, receivables, month close) remains stubs | #14 (S2/S3 slices later) |
 | API | settings endpoints | not implemented — no branch-settings API exists | #38 |
 | data | CC0 drug catalog download | documented, not bundled — the importer (`server/app/drugs/importer.py`, CLI `python -m app.drugs.importer <file>`) is real and de-dupes/idempotent, but the 24k-medicine source (CC0 `karem505/egyptian-drug-database`) is fetched at import time, not shipped. A sample fixture lives in `server/tests/fixtures/cc0_catalog_sample.csv`. | #8 (shipped) |
 
@@ -191,7 +191,17 @@ sale/return/purchase/return kind over a date range, returns netted),
 per-cashier opening/cash/card/returns/expenses/net over a period); every report
 is branch-scoped to the caller and gated by the `reports` permission (admin
 level-9 or accountant role), answers JSON by default and a black-on-white A4
-page with `format=html` — plus the web + desktop **الأدوية** screens, the web forced-reset
+page with `format=html` — plus manual journal entries (`/api/v1/journals/manual`:
+a `journals.manage` holder (admin, accountant, or manager role — legacy level ≥ 7)
+posts a dated, described, balanced قيد riding the journal engine (journal +
+balanced lines + balances + audit + a `manual_journal_entries` reference,
+atomic under the branch advisory lock, entry numbers monotonic per branch/datee);
+imbalanced entries, single-line, zero, negative, and double-sided lines, blank
+descriptions, and unknown or deactivated accounts are all 400 with nothing
+half-written; list/detail are branch-scoped reads open to any authenticated user;
+`POST /manual/{id}/reverse` posts the opposite-signed balanced reversal journal
+linked via `reverses_entry_id`, A07-style — reversing a reversal is 409) — plus
+the web + desktop **الأدوية** screens, the web forced-reset
 (first-login) and voluntary change-password flows (ticket #37).
 
 ## 7. CI

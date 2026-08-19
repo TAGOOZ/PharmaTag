@@ -530,6 +530,7 @@ CREATE TABLE manual_journal_entries (
     amount      INTEGER NOT NULL DEFAULT 0,                      -- ×100
     source_file TEXT DEFAULT 'daily-manual.phy',
     journal_id  INTEGER REFERENCES journals(id),
+    reverses_entry_id INTEGER REFERENCES manual_journal_entries(id),
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -695,5 +696,11 @@ INSERT INTO permissions (code, name_ar) VALUES ('accounts.manage', 'إدارة �
 INSERT INTO role_permissions (role_id, permission_id)
     SELECT r.id, p.id FROM roles r, permissions p
     WHERE p.code = 'accounts.manage' AND r.id IN (1, 4);
+
+-- rev 011: journals.manage gates manual-journal posting (admin + accountant + manager).
+INSERT INTO permissions (code, name_ar) VALUES ('journals.manage', 'ترحيل قيود يومية');
+INSERT INTO role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM roles r, permissions p
+    WHERE p.code = 'journals.manage' AND r.id IN (1, 4, 5);
 
 COMMIT;

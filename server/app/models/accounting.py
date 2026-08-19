@@ -154,3 +154,26 @@ class Balance(Base):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
+
+
+class ManualJournalEntry(Base):
+    """`manual_journal_entries` (daily-manual.phy) — the ledger's reference row
+    for a posted manual journal (القيود اليدوية). `journal_id` links the
+    balanced `journals` entry this manual entry produced; `reverses_entry_id`
+    links a reversal back to the entry it offset (S2.2, ticket #17)."""
+
+    __tablename__ = "manual_journal_entries"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    branch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=False)
+    record_no: Mapped[Optional[int]] = mapped_column(Integer)
+    datee: Mapped[Optional[date]] = mapped_column(Date)
+    amount: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False, server_default="0")
+    source_file: Mapped[str] = mapped_column(String(50), server_default="daily-manual.phy")
+    journal_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("journals.id"))
+    reverses_entry_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("manual_journal_entries.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )

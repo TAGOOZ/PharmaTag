@@ -109,12 +109,14 @@ async def post_journal(
     entry_no: int,
     description: str,
     source: str,
-    entries: list[tuple[str, Decimal, Decimal]],
+    entries: list[tuple[str, Decimal, Decimal]] | list[tuple[str, Decimal, Decimal, str]],
     ref_invoice_id: Optional[int] = None,
     contra_party_id: Optional[int] = None,
     contra_party_by_code: Optional[dict[str, int]] = None,
 ) -> Journal:
-    """Post one balanced journal entry (entries = (account_code, debit, credit)).
+    """Post one balanced journal entry (entries = (account_code, debit, credit)
+    or (account_code, debit, credit, note) — the optional 4th element lands on
+    the line's `tips` column, used by the manual-journal slice).
 
     `contra_party_id` labels every credit line's contra party (the sale/purchase
     pattern). `contra_party_by_code` overrides it per account code for documents
@@ -134,7 +136,9 @@ async def post_journal(
     session.add(journal)
     await session.flush()
 
-    for code, debit, credit in entries:
+    for entry in entries:
+        code, debit, credit = entry[0], entry[1], entry[2]
+        note = entry[3] if len(entry) > 3 else ""
         debit = dec(debit)
         credit = dec(credit)
         account_id = await _account_id(session, branch_id, code)
@@ -153,6 +157,7 @@ async def post_journal(
             month=datee.month,
             year=datee.year,
             creditdebit="debit" if debit else "credit",
+            tips=note,
         )
         session.add(line)
         await _touch_balance(

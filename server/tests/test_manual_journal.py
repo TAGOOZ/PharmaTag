@@ -13,12 +13,13 @@ from datetime import date
 from decimal import Decimal
 
 import asyncio
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.core.db import SessionLocal
 from app.models import (
     AuditLog,
     Balance,
+    DailyClose,
     Journal,
     JournalLine,
     ManualJournalEntry,
@@ -680,5 +681,194 @@ async def test_reverse_unknown_or_cross_branch_is_404_and_writes_need_permission
             await _delete_users([low])
     finally:
         await _cleanup_journals(tag)
+
+
+async def test_line_note_is_persisted_and_returned(client):
+    """A per-line note survives the round trip: it lands on the journal line's
+    `tips` column and comes back through the detail AND list serializers."""
+    token = await _login_token(client)
+    tag = _uniq("mj")
+    r = await _post(
+        client,
+        token,
+        description=f"with note {tag}",
+        lines=[
+            {"account_code": "5000", "debit": "10.00", "note": "rent for June"},
+            {"account_code": "1000", "credit": "10.00"},
+        ],
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    entry_id = body["id"]
+    try:
+        by_code = {l["account_code"]: l for l in body["lines"]}
+        assert by_code["5000"]["note"] == "rent for June"
+        assert by_code["1000"]["note"] == ""
+
+        d = await client.get(
+            f"/api/v1/journals/manual/{entry_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert d.status_code == 200, d.text
+        d_by_code = {l["account_code"]: l for l in d.json()["lines"]}
+        assert d_by_code["5000"]["note"] == "rent for June"
+
+        g = await client.get(
+            "/api/v1/journals/manual",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert g.status_code == 200, g.text
+        listed = next(e for e in g.json()["entries"] if e["id"] == entry_id)
+        listed_by_code = {l["account_code"]: l for l in listed["lines"]}
+        assert listed_by_code["5000"]["note"] == "rent for June"
+
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(JournalLine).where(JournalLine.journal_id == body["journal_id"])
+                )
+            ).scalars().all()
+        tips = {l.tips for l in rows}
+        assert "rent for June" in tips
+    finally:
+        await _cleanup_journals(tag)
+
+
+async def _cleanup_closed_day(datee: str) -> None:
+    """Delete the daily_close row(s) + their audit for one (branch 1, datee) so
+    a test's close never leaks into other slices."""
+    from datetime import date as _date
+
+    d = _date.fromisoformat(datee)
+    async with SessionLocal() as session:
+        close_rows = (
+            await session.execute(
+                select(DailyClose).where(
+                    DailyClose.branch_id == 1, DailyClose.datee == d
+                )
+            )
+        ).scalars().all()
+        for cr in close_rows:
+            await session.execute(
+                delete(AuditLog).where(
+                    AuditLog.entity == "daily_close", AuditLog.entity_id == cr.id
+                )
+            )
+        await session.execute(
+            delete(DailyClose).where(DailyClose.branch_id == 1, DailyClose.datee == d)
+        )
+        await session.commit()
+
+
+async def test_post_into_a_closed_day_is_409(client):
+    """A closed (branch, datee) refuses new manual journals (409, the same
+    guard as the drawer slice) with nothing half-written; a neighboring open
+    day still accepts posts."""
+    from tests.drawer_test_utils import _close_day
+
+    token = await _login_token(client)
+    tag = _uniq("mj")
+    try:
+        rc = await _close_day(client, token, datee="2026-05-01", counted_cash="0")
+        assert rc.status_code == 200, rc.text
+
+        r = await _post(
+            client,
+            token,
+            datee="2026-05-01",
+            description=f"closed day {tag}",
+            lines=[
+                {"account_code": "5000", "debit": "5.00"},
+                {"account_code": "1000", "credit": "5.00"},
+            ],
+        )
+        assert r.status_code == 409, r.text
+
+        async with SessionLocal() as session:
+            leftover = (
+                await session.execute(
+                    select(Journal.id).where(Journal.description.like(f"%{tag}%"))
+                )
+            ).scalars().all()
+        assert leftover == []
+
+        r2 = await _post(
+            client,
+            token,
+            datee="2026-05-02",
+            description=f"open day {tag}",
+            lines=[
+                {"account_code": "5000", "debit": "3.00"},
+                {"account_code": "1000", "credit": "3.00"},
+            ],
+        )
+        assert r2.status_code == 201, r2.text
+    finally:
+        await _cleanup_journals(tag)
+        await _cleanup_closed_day("2026-05-01")
+
+
+async def test_reverse_into_a_closed_day_is_409(client):
+    """Reversing an entry whose own datee is now closed is 409 (the reversal
+    lands on the original's datee), with no reversal journal written."""
+    from tests.drawer_test_utils import _close_day
+
+    token = await _login_token(client)
+    tag = _uniq("mj")
+    r = await _post(
+        client,
+        token,
+        datee="2026-05-03",
+        description=f"to reverse closed {tag}",
+        lines=[
+            {"account_code": "5000", "debit": "5.00"},
+            {"account_code": "1000", "credit": "5.00"},
+        ],
+    )
+    assert r.status_code == 201, r.text
+    entry_id = r.json()["id"]
+    try:
+        rc = await _close_day(client, token, datee="2026-05-03", counted_cash="0")
+        assert rc.status_code == 200, rc.text
+
+        rv = await client.post(
+            f"/api/v1/journals/manual/{entry_id}/reverse",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert rv.status_code == 409, rv.text
+
+        async with SessionLocal() as session:
+            reversal = (
+                await session.execute(
+                    select(Journal.id).where(
+                        Journal.description == f"reversal of manual entry #{tag}"
+                    )
+                )
+            ).scalars().all()
+        assert reversal == []
+    finally:
+        await _cleanup_journals(tag)
+        await _cleanup_closed_day("2026-05-03")
+
+
+async def test_list_limit_is_validated_and_respected(client):
+    """The list limit is bounded (0 and >200 are 400) and a small limit caps
+    the page."""
+    token = await _login_token(client)
+    for bad in [0, -1, 201]:
+        r = await client.get(
+            "/api/v1/journals/manual",
+            params={"limit": bad},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 400, (bad, r.status_code, r.text)
+
+    r = await client.get(
+        "/api/v1/journals/manual",
+        params={"limit": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    assert len(r.json()["entries"]) <= 1
 
 

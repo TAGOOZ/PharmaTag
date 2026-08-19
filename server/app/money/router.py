@@ -9,7 +9,7 @@ the caller and atomic with its audit row (G12).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.accounts.service import caller_branch_id
@@ -45,7 +45,7 @@ async def post_manual_entry(
 
 @router.get("/manual")
 async def list_manual_entries(
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=200),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):

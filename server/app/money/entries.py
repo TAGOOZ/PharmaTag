@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import atomic
 from app.core.money import dec, format2, round2
+from app.drawer.movements import guard_open_day
 from app.money.journal import post_journal
 from app.models import Account, Journal, JournalLine, ManualJournalEntry
 from app.sales.numbering import acquire_branch_lock, next_journal_entry_no
@@ -68,13 +69,20 @@ async def _resolve_account(
     return account
 
 
-def _validated_entries(lines) -> list[tuple[str, object, object]]:
-    """Round each line, enforce single-sidedness, and return (code, debit,
-    credit) tuples. Zero, negative, and double-sided lines are 400."""
-    entries: list[tuple[str, object, object]] = []
+def _validated_entries(lines) -> list[tuple[str, object, object, str]]:
+    """Round each line, enforce non-negativity + single-sidedness, and return
+    (code, debit, credit, note) tuples. Zero, negative, and double-sided lines
+    are 400 (the negative case is checked here too, not only by the schema's
+    ge=0, so the service stays safe even if the wire schema ever relaxes)."""
+    entries: list[tuple[str, object, object, str]] = []
     for line in lines:
         debit = round2(dec(line.debit or 0))
         credit = round2(dec(line.credit or 0))
+        if debit < 0 or credit < 0:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"line {line.account_code}: amounts cannot be negative",
+            )
         if debit == 0 and credit == 0:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
@@ -85,19 +93,52 @@ def _validated_entries(lines) -> list[tuple[str, object, object]]:
                 status.HTTP_400_BAD_REQUEST,
                 f"line {line.account_code}: a line can be debit OR credit, not both",
             )
-        entries.append((line.account_code.strip(), debit, credit))
-    if sum(dec(d) for _, d, _ in entries) != sum(
-        dec(c) for _, _, c in entries
+        entries.append(
+            (line.account_code.strip(), debit, credit, (line.note or "").strip())
+        )
+    if sum(dec(d) for _, d, _, _ in entries) != sum(
+        dec(c) for _, _, c, _ in entries
     ):
         raise UNBALANCED
     return entries
 
 
-async def serialize_entry(
-    session: AsyncSession, entry: ManualJournalEntry
+def _entry_payload(
+    entry: ManualJournalEntry,
+    journal: Journal,
+    lines: list[JournalLine],
+    account_by_id: dict[int, Account],
 ) -> dict:
     """One entry with its journal lines (account code/name + sides), money as
     exact decimal strings."""
+    return {
+        "id": entry.id,
+        "journal_id": journal.id,
+        "entry_no": journal.entry_no,
+        "branch_id": entry.branch_id,
+        "datee": journal.datee.isoformat(),
+        "description": journal.description,
+        "source": journal.source,
+        "total": format2(entry.amount),
+        "reverses_entry_id": entry.reverses_entry_id,
+        "lines": [
+            {
+                "account_id": line.account_id,
+                "account_code": account_by_id[line.account_id].code,
+                "account_name": account_by_id[line.account_id].name_ar,
+                "debit": format2(line.debit),
+                "credit": format2(line.credit),
+                "note": line.tips,
+            }
+            for line in lines
+        ],
+    }
+
+
+async def serialize_entry(
+    session: AsyncSession, entry: ManualJournalEntry
+) -> dict:
+    """One branch-scoped entry with its journal lines."""
     journal = await session.get(Journal, entry.journal_id)
     lines = (
         await session.execute(
@@ -113,29 +154,7 @@ async def serialize_entry(
             )
         )
     ).scalars().all()
-    by_id = {a.id: a for a in accounts}
-    return {
-        "id": entry.id,
-        "journal_id": journal.id,
-        "entry_no": journal.entry_no,
-        "branch_id": entry.branch_id,
-        "datee": journal.datee.isoformat(),
-        "description": journal.description,
-        "source": journal.source,
-        "total": format2(entry.amount),
-        "reverses_entry_id": entry.reverses_entry_id,
-        "lines": [
-            {
-                "account_id": line.account_id,
-                "account_code": by_id[line.account_id].code,
-                "account_name": by_id[line.account_id].name_ar,
-                "debit": format2(line.debit),
-                "credit": format2(line.credit),
-                "note": line.tips,
-            }
-            for line in lines
-        ],
-    }
+    return _entry_payload(entry, journal, lines, {a.id: a for a in accounts})
 
 
 async def post_manual_entry(
@@ -155,12 +174,13 @@ async def post_manual_entry(
             status.HTTP_400_BAD_REQUEST, "description cannot be blank"
         )
     entries = []
-    for code, debit, credit in _validated_entries(lines):
+    for code, debit, credit, note in _validated_entries(lines):
         await _resolve_account(session, branch_id, code)
-        entries.append((code, debit, credit))
+        entries.append((code, debit, credit, note))
 
     async with atomic(session):
         await acquire_branch_lock(session, branch_id)
+        await guard_open_day(session, branch_id=branch_id, datee=datee)
         entry_no = await next_journal_entry_no(session, branch_id, datee)
         journal = await post_journal(
             session,
@@ -172,7 +192,7 @@ async def post_manual_entry(
             source="manual",
             entries=entries,
         )
-        total = sum(dec(d) for _, d, _ in entries)
+        total = sum(dec(d) for _, d, _, _ in entries)
         entry = ManualJournalEntry(
             branch_id=branch_id,
             datee=datee,
@@ -207,6 +227,7 @@ async def reverse_manual_entry(
             raise HTTPException(
                 status.HTTP_409_CONFLICT, "entry is not posted and cannot be reversed"
             )
+        await guard_open_day(session, branch_id=branch_id, datee=journal.datee)
         lines = (
             await session.execute(
                 select(JournalLine).where(JournalLine.journal_id == journal.id)
@@ -221,7 +242,7 @@ async def reverse_manual_entry(
         ).scalars().all()
         code_by_id = {a.id: a.code for a in accounts}
         reversed_entries = [
-            (code_by_id[l.account_id], l.credit, l.debit) for l in lines
+            (code_by_id[l.account_id], l.credit, l.debit, "") for l in lines
         ]
         entry_no = await next_journal_entry_no(session, branch_id, journal.datee)
         reversal = await post_journal(
@@ -250,18 +271,46 @@ async def reverse_manual_entry(
 async def list_manual_entries(
     session: AsyncSession, *, branch_id: int, limit: int = 50
 ) -> list[dict]:
-    """Branch-scoped manual entries, newest (datee, entry_no) first."""
+    """Branch-scoped manual entries, newest (datee, entry_no) first. Lines and
+    accounts are batch-loaded for all entries (no N+1)."""
     rows = (
         await session.execute(
             select(ManualJournalEntry, Journal)
             .join(Journal, Journal.id == ManualJournalEntry.journal_id)
             .where(ManualJournalEntry.branch_id == branch_id)
             .order_by(Journal.datee.desc(), Journal.entry_no.desc(), ManualJournalEntry.id.desc())
-            .limit(min(limit, 200) if limit > 0 else 0)
+            .limit(limit)
         )
     ).all()
+    if not rows:
+        return []
     entries = [entry for entry, _ in rows]
-    return [await serialize_entry(session, e) for e in entries]
+    journals = {j.id: j for _, j in rows}
+    journal_ids = [j.id for _, j in rows]
+    lines = (
+        await session.execute(
+            select(JournalLine)
+            .where(JournalLine.journal_id.in_(journal_ids))
+            .order_by(JournalLine.journal_id, JournalLine.id)
+        )
+    ).scalars().all()
+    lines_by_journal: dict[int, list[JournalLine]] = {}
+    for line in lines:
+        lines_by_journal.setdefault(line.journal_id, []).append(line)
+    accounts = (
+        await session.execute(
+            select(Account).where(
+                Account.id.in_({l.account_id for l in lines})
+            )
+        )
+    ).scalars().all()
+    by_id = {a.id: a for a in accounts}
+    return [
+        _entry_payload(
+            e, journals[e.journal_id], lines_by_journal.get(e.journal_id, []), by_id
+        )
+        for e in entries
+    ]
 
 
 async def get_manual_entry(

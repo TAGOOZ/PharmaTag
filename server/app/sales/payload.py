@@ -68,6 +68,7 @@ def _sale_payload(
         "kind": invoice.kind,
         "invoice_no": invoice.invoice_no,
         "datee": invoice.datee.isoformat(),
+        "party_id": invoice.party_id,
         "silsilaid": invoice.silsilaid or "",
         "status": invoice.status,
         "subtotal": str(invoice.subtotal),

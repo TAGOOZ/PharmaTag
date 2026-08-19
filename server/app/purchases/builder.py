@@ -258,7 +258,7 @@ async def _build_full_purchase(
         source="purchase",
         entries=entries,
         ref_invoice_id=invoice.id,
-        contra_party_id=supplier.id,
+        contra_party_by_code={"2000": supplier.id},
     )
 
     payload = _purchase_payload(invoice, resolved, splits, entry_no, totals, inclusive)

@@ -18,7 +18,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import ACTION_INSERT, audit, enqueue_sync
 from app.core.money import add, dec, format2, line_money, round2, round4, tax_rate
 from app.drawer.movements import SALE, record_payment_splits
-from app.models import Branch, Drug, DrugBarcode, Invoice, InvoiceLine, PaymentSplit
+from app.models import (
+    Branch,
+    Drug,
+    DrugBarcode,
+    Invoice,
+    InvoiceLine,
+    Party,
+    PaymentSplit,
+)
 from app.sales.journal import post_sale_journal
 from app.sales.numbering import next_journal_entry_no
 from app.sales.payload import _sale_payload
@@ -51,6 +59,7 @@ async def _build_full_sale(
     disc_percent,
     payments,
     price_level: str,
+    party_id: Optional[int] = None,
 ) -> Invoice:
     """The full sale: resolve lines, allocate stock, write header + lines +
     splits + journal + balances, audit everything, enqueue the outbox row."""
@@ -58,6 +67,20 @@ async def _build_full_sale(
     if branch is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "branch not found")
     inclusive = bool(branch.vat_inclusive_prices)
+
+    customer: Optional[Party] = None
+    if party_id is not None:
+        customer = await session.get(Party, party_id)
+        if customer is None or customer.branch_id != branch_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "customer not found")
+        if customer.kind not in ("customer", "both"):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "party is not a customer"
+            )
+        if not customer.active:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "customer is inactive"
+            )
 
     resolved: list[dict] = []
     cogs_total = Decimal("0")
@@ -111,6 +134,7 @@ async def _build_full_sale(
         totalvalue=totals["total"],
         payed=payed,
         agel=agel,
+        party_id=customer.id if customer else None,
         status="saved",
         created_by=user_id,
     )
@@ -200,6 +224,7 @@ async def _build_full_sale(
         description=f"فاتورة بيع {invoice_no}",
         entries=entries,
         ref_invoice_id=invoice.id,
+        contra_party_by_code={"1100": customer.id} if customer else None,
     )
 
     payload = _sale_payload(invoice, resolved, splits, entry_no, totals, inclusive)

@@ -373,6 +373,7 @@ async def _build_full_return(
         totalvalue=totals["total"],
         payed=payed,
         agel=agel,
+        party_id=original.party_id,
         status="saved",
         created_by=user_id,
     )
@@ -487,6 +488,7 @@ async def _build_full_return(
         source="sale_return",
         entries=entries,
         ref_invoice_id=invoice.id,
+        contra_party_by_code={"1100": original.party_id} if original.party_id else None,
     )
 
     await _snapshot_invoice(session, original, action="sale_return", user_id=user_id)

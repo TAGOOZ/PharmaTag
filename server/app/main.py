@@ -24,6 +24,7 @@ from app.plugins.router import router as plugins_router
 from app.purchases.router import router as purchases_router
 from app.reports.router import router as reports_router
 from app.sales.router import router as sales_router
+from app.statements.router import router as statements_router
 from app.stock.router import router as stock_router
 from app.sync.router import router as sync_router
 from app.users.router import router as users_router
@@ -68,6 +69,9 @@ def create_app() -> FastAPI:
     )
     application.include_router(
         parties_router, prefix="/api/v1/parties", tags=["parties"]
+    )
+    application.include_router(
+        statements_router, prefix="/api/v1/parties", tags=["parties"]
     )
     application.include_router(
         sync_router, prefix="/api/v1/sync", tags=["sync"]

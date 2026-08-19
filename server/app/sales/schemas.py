@@ -39,6 +39,7 @@ class SaleCreateRequest(BaseModel):
     )
     payments: Optional[list[PaymentSplitIn]] = None
     datee: Optional[date] = None
+    party_id: Optional[int] = Field(default=None, gt=0)
 
 
 class SaleLineOut(BaseModel):

@@ -197,6 +197,7 @@ async def create_sale(
         lines=body.lines,
         disc_percent=body.disc_percent,
         payments=body.payments,
+        party_id=body.party_id,
     )
     return await _serialize_sale(session, invoice, caller)
 

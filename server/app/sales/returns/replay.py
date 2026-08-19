@@ -189,6 +189,7 @@ async def apply_sale_return_payload(
         datee=datee,
         datetimee=datetime.now(timezone.utc),
         ref_invoice_id=original.id,
+        party_id=original.party_id,
         subtotal=Decimal(payload["subtotal"]),
         discount=Decimal(payload["discount"]),
         vat=Decimal(payload["vat"]),
@@ -292,6 +293,7 @@ async def apply_sale_return_payload(
         source="sale_return",
         entries=entries,
         ref_invoice_id=invoice.id,
+        contra_party_by_code={"1100": original.party_id} if original.party_id else None,
     )
     await _snapshot_original(session, original, action="sale_return", user_id=user_id)
     return invoice

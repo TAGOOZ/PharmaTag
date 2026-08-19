@@ -83,6 +83,7 @@ async def save_sale(
     disc_percent: Optional[Any] = None,
     payments: Optional[list[Any]] = None,
     price_level: str = "public",
+    party_id: Optional[int] = None,
     bus: EventBus = bus,
 ) -> Invoice:
     """Save a sale, emitting `sale.saved` in both phases.
@@ -115,6 +116,7 @@ async def save_sale(
                 disc_percent=disc_percent,
                 payments=payments,
                 price_level=price_level,
+                party_id=party_id,
             )
         await audit(
             session,

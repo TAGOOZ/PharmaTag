@@ -40,6 +40,7 @@ async def post_sale_journal(
     description: str,
     entries: list[tuple[str, Decimal, Decimal]],
     ref_invoice_id: Optional[int] = None,
+    contra_party_by_code: Optional[dict[str, int]] = None,
 ) -> object:
     """Post one balanced journal entry for a sale and touch the balances."""
     return await post_journal(
@@ -52,4 +53,5 @@ async def post_sale_journal(
         source="sale",
         entries=entries,
         ref_invoice_id=ref_invoice_id,
+        contra_party_by_code=contra_party_by_code,
     )

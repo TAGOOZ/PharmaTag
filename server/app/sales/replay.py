@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import ACTION_INSERT, audit
 from app.core.money import dec, format2, round2, tax_rate
 from app.drawer.movements import SALE, record_payment_splits
-from app.models import Invoice, InvoiceLine, PaymentSplit, StockBatch
+from app.models import Invoice, InvoiceLine, Party, PaymentSplit, StockBatch
 from app.sales.journal import post_sale_journal
 from app.sales.numbering import acquire_branch_lock, next_journal_entry_no
 from app.sales.stock import Allocation, decrement_allocations
@@ -41,6 +41,15 @@ async def apply_sale_payload(
     await acquire_branch_lock(session, branch_id)
     invoice_no = payload["invoice_no"]
     datee = date.fromisoformat(payload["datee"])
+    customer: Optional[Party] = None
+    party_id = payload.get("party_id")
+    if party_id is not None:
+        customer = await session.get(Party, party_id)
+        if customer is None or customer.branch_id != branch_id:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"party {party_id} missing on target store",
+            )
 
     resolved: list[tuple[dict, list[Allocation]]] = []
     cogs_total = Decimal("0")
@@ -101,6 +110,7 @@ async def apply_sale_payload(
         totalvalue=dec(payload["totalvalue"]),
         payed=dec(payload["payed"]),
         agel=dec(payload["agel"]),
+        party_id=customer.id if customer else None,
         status=payload.get("status", "saved"),
         created_by=payload.get("created_by") or user_id,
     )
@@ -191,6 +201,7 @@ async def apply_sale_payload(
         description=f"فاتورة بيع {invoice_no}",
         entries=entries,
         ref_invoice_id=invoice.id,
+        contra_party_by_code={"1100": customer.id} if customer else None,
     )
     await audit(
         session,

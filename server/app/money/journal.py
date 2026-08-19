@@ -40,6 +40,41 @@ SALE_ACCOUNT_CODES = (DRAWER, AR, STOCK, VAT_PAYABLE, SALES, COGS)
 PURCHASE_ACCOUNT_CODES = (STOCK, VAT_PAYABLE, DRAWER, AP)
 
 
+async def account_ids_for_code(
+    session: AsyncSession, branch_id: int, code: str
+) -> list[int]:
+    """Resolve every account row a (branch, code) maps to for READS.
+
+    A branch that inherits the MAIN chart from branch 1 can later create its
+    own account with the same code (create_account only checks per-branch
+    duplicates), so `_account_id` (posting) and any by-code read start
+    resolving to the branch's own account while the earlier journal lines stay
+    on the inherited branch-1 account. Reads must aggregate BOTH rows or the
+    party ledger silently loses the historical debt. Own-branch first, so a
+    branch that configured its own account reads it as the primary one."""
+    own = list(
+        (
+            await session.execute(
+                select(Account.id).where(
+                    Account.branch_id == branch_id, Account.code == code
+                )
+            )
+        ).scalars().all()
+    )
+    inherited: list[int] = []
+    if branch_id != 1:
+        inherited = list(
+            (
+                await session.execute(
+                    select(Account.id).where(
+                        Account.branch_id == 1, Account.code == code
+                    )
+                )
+            ).scalars().all()
+        )
+    return own + [i for i in inherited if i not in own]
+
+
 async def _account_id(session: AsyncSession, branch_id: int, code: str) -> int:
     """Resolve the account for posting (own branch, then the branch-1
     inheritance chart). An account that EXISTS but is deactivated is a client
@@ -124,6 +159,7 @@ async def post_journal(
     ref_invoice_id: Optional[int] = None,
     contra_party_id: Optional[int] = None,
     contra_party_by_code: Optional[dict[str, int]] = None,
+    contra_party_by_account_id: Optional[dict[int, int]] = None,
 ) -> Journal:
     """Post one balanced journal entry (entries = (account_code, debit, credit)
     or (account_code, debit, credit, note) — the optional 4th element lands on
@@ -137,6 +173,10 @@ async def post_journal(
     pattern). `contra_party_by_code` overrides it per account code for documents
     whose contra lands on a DEBIT line (e.g. a purchase return's AP debit), so a
     party-ledger always carries the party regardless of the side.
+    `contra_party_by_account_id` overrides BOTH by the exact account row the
+    line touches — used by the settlement reversal so its contra attaches to the
+    pinned account the original touched (never re-derived from a code constant
+    that could mismatch a party's mapped account).
     """
     journal = Journal(
         branch_id=branch_id,
@@ -162,7 +202,9 @@ async def post_journal(
             if pinned_account_id is not None
             else await _account_id(session, branch_id, code)
         )
-        if contra_party_by_code and code in contra_party_by_code:
+        if contra_party_by_account_id and account_id in contra_party_by_account_id:
+            contra_party = contra_party_by_account_id[account_id]
+        elif contra_party_by_code and code in contra_party_by_code:
             contra_party = contra_party_by_code[code]
         else:
             contra_party = contra_party_id if credit else None

@@ -65,6 +65,7 @@ __all__ = [
     "_make_user",
     "_token_for",
     "_uniq",
+    "_uniq_id",
     "_voucher",
 ]
 

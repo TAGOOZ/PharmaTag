@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import money
 from app.core.time import business_date
+from app.money.journal import account_ids_for_code
 from app.models import Account, Journal, JournalLine, Party
 
 DEFAULT_AR_CODE = "1100"
@@ -47,26 +48,30 @@ async def _party_or_404(
     return party
 
 
-async def _account_by_code(
-    session: AsyncSession, branch_id: int, code: str
-) -> Optional[int]:
-    """Resolve an account id by code (own branch, then the branch-1 chart)."""
-    row = (
-        await session.execute(
-            select(Account.id).where(
-                Account.branch_id == branch_id, Account.code == code
-            )
+async def _side_accounts(
+    session: AsyncSession, branch_id: int, party: Party, side: str
+) -> tuple[list[int], int]:
+    """The party's ledger accounts for this side: the (branch, code) resolution
+    — own account plus the inherited branch-1 account so a code shadowed after
+    the branch posted history can't orphan those lines — with the party's own
+    receivable/payable mapping (when set) pinned on top. Returns (account_ids,
+    primary_account_id) where primary is what the posting engine resolves today
+    (the header account)."""
+    if side == "ar":
+        code = DEFAULT_AR_CODE
+        pinned = party.receivable_account_id
+    else:
+        code = DEFAULT_AP_CODE
+        pinned = party.payable_account_id
+    account_ids = await account_ids_for_code(session, branch_id, code)
+    if pinned is not None:
+        account_ids = list(dict.fromkeys([pinned, *account_ids]))
+    if not account_ids:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"no {code} account configured for this branch",
         )
-    ).scalar_one_or_none()
-    if row is None and branch_id != 1:
-        row = (
-            await session.execute(
-                select(Account.id).where(
-                    Account.branch_id == 1, Account.code == code
-                )
-            )
-        ).scalar_one_or_none()
-    return row
+    return account_ids, account_ids[0]
 
 
 def _side_for(party: Party, side: Optional[str]) -> str:
@@ -80,29 +85,6 @@ def _side_for(party: Party, side: Optional[str]) -> str:
     return "ar"
 
 
-async def _side_account(
-    session: AsyncSession, branch_id: int, party: Party, side: str
-) -> int:
-    """The party's ledger account for this side: its own mapping when set, else
-    the branch (inherited) default AR/AP code."""
-    if side == "ar":
-        account_id = party.receivable_account_id or await _account_by_code(
-            session, branch_id, DEFAULT_AR_CODE
-        )
-        fallback_code = DEFAULT_AR_CODE
-    else:
-        account_id = party.payable_account_id or await _account_by_code(
-            session, branch_id, DEFAULT_AP_CODE
-        )
-        fallback_code = DEFAULT_AP_CODE
-    if account_id is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            f"no {fallback_code} account configured for this branch",
-        )
-    return account_id
-
-
 def _signed(line, side: str):
     """The line's signed movement under the side's natural sign (AR debit-
     positive, AP credit-positive). Returns (signed, debit, credit)."""
@@ -113,13 +95,13 @@ def _signed(line, side: str):
     return credit - debit, debit, credit
 
 
-def _lines_query(branch_id: int, account_id: int, party_id: int):
+def _lines_query(branch_id: int, account_ids: list[int], party_id: int):
     """Where criteria (and a row select) for lines that move this party's
-    ledger account, joined to their journal (description) and account
+    ledger account(s), joined to their journal (description) and account
     (code/name)."""
     criteria = [
         JournalLine.branch_id == branch_id,
-        JournalLine.account_id == account_id,
+        JournalLine.account_id.in_(account_ids),
         JournalLine.contra_party_id == party_id,
     ]
     stmt = (
@@ -164,8 +146,10 @@ async def get_statement(
     """
     party = await _party_or_404(session, branch_id, party_id)
     side = _side_for(party, side)
-    account_id = await _side_account(session, branch_id, party, side)
-    account = await session.get(Account, account_id)
+    account_ids, primary_account_id = await _side_accounts(
+        session, branch_id, party, side
+    )
+    account = await session.get(Account, primary_account_id)
 
     if (month is not None or year is not None) and (
         date_from is not None or date_to is not None
@@ -210,7 +194,7 @@ async def get_statement(
             .join(Account, Account.id == JournalLine.account_id)
             .where(
                 JournalLine.branch_id == branch_id,
-                JournalLine.account_id == account_id,
+                JournalLine.account_id.in_(account_ids),
                 JournalLine.contra_party_id == party_id,
                 (JournalLine.datee < start) | JournalLine.datee.between(start, end),
             )
@@ -291,13 +275,13 @@ async def get_payables(
     rows = []
     total = money.dec("0")
     for party in parties:
-        account_id = party.payable_account_id or await _account_by_code(
-            session, branch_id, DEFAULT_AP_CODE
-        )
-        if account_id is None:
+        account_ids = await account_ids_for_code(session, branch_id, DEFAULT_AP_CODE)
+        if party.payable_account_id is not None:
+            account_ids = list(dict.fromkeys([party.payable_account_id, *account_ids]))
+        if not account_ids:
             balance = money.dec("0")
         else:
-            _, criteria = _lines_query(branch_id, account_id, party.id)
+            _, criteria = _lines_query(branch_id, account_ids, party.id)
             agg = await _aggregate(session, criteria)
             balance = money.dec(agg[1]) - money.dec(agg[0])
         rows.append(

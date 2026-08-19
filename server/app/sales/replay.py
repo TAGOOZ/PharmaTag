@@ -19,6 +19,7 @@ from app.core.audit import ACTION_INSERT, audit
 from app.core.money import dec, format2, round2, tax_rate
 from app.drawer.movements import SALE, record_payment_splits
 from app.models import Invoice, InvoiceLine, Party, PaymentSplit, StockBatch
+from app.receivables.service import ensure_credit_ok
 from app.sales.journal import post_sale_journal
 from app.sales.numbering import acquire_branch_lock, next_journal_entry_no
 from app.sales.stock import Allocation, decrement_allocations
@@ -59,6 +60,17 @@ async def apply_sale_payload(
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 f"party {party_id} is inactive on target store",
+            )
+        if dec(payload.get("agel", 0)) > 0:
+            # F11.3: replay re-runs the credit-limit guard exactly like the live
+            # builder — the target store may hold debt the offline source never
+            # saw, so the check must run HERE, in the same transaction, before
+            # any stock or journal write touches this row.
+            await ensure_credit_ok(
+                session,
+                branch_id=branch_id,
+                party=customer,
+                new_agel=dec(payload.get("agel", 0)),
             )
 
     resolved: list[tuple[dict, list[Allocation]]] = []

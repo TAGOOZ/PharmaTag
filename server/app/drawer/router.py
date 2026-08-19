@@ -9,6 +9,7 @@ strings (plan/02 §2).
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -22,7 +23,11 @@ from app.core.db import atomic, get_session
 from app.core.time import business_date
 from app.drawer import schemas
 from app.drawer.close import close_day, reopen_day
-from app.drawer.movements import record_movement
+from app.drawer.movements import (
+    record_movement,
+    supplier_payments,
+    supplier_payments_by_date,
+)
 from app.models import DailyClose, DrawerMovement, User
 
 router = APIRouter()
@@ -57,7 +62,7 @@ def _serialize_movement(row: DrawerMovement) -> dict:
     ).model_dump()
 
 
-def _serialize_close(row: DailyClose) -> dict:
+def _serialize_close(row: DailyClose, supplier_payments: Decimal) -> dict:
     return schemas.DayCloseOut(
         id=row.id,
         branch_id=row.branch_id,
@@ -70,6 +75,7 @@ def _serialize_close(row: DailyClose) -> dict:
         net_network=_money(row.net_network),
         manual_cash=_money(row.manual_cash),
         manual_card=_money(row.manual_card),
+        supplier_payments=_money(supplier_payments),
         purchases=_money(row.purchases),
         expenses=_money(row.expenses),
         cost_of_sales=_money(row.cost_of_sales),
@@ -147,7 +153,16 @@ async def list_day_close(
         q = q.where(DailyClose.datee == business_date())
     q = q.order_by(DailyClose.id.desc()).limit(limit)
     rows = (await session.execute(q)).scalars().all()
-    return {"day_closes": [_serialize_close(r) for r in rows]}
+    pay_map = await supplier_payments_by_date(
+        session,
+        branch_id=branch_id,
+        datees=[r.datee for r in rows],
+    )
+    return {
+        "day_closes": [
+            _serialize_close(r, pay_map.get(r.datee, Decimal("0"))) for r in rows
+        ]
+    }
 
 
 @router.post("/day-close", status_code=status.HTTP_200_OK)
@@ -166,7 +181,10 @@ async def create_day_close(
         datee=body.datee or business_date(),
         counted_cash=body.counted_cash,
     )
-    return _serialize_close(row)
+    pay = await supplier_payments(
+        session, branch_id=row.branch_id, datee=row.datee
+    )
+    return _serialize_close(row, pay)
 
 
 @router.post("/day-close/{close_id}/reopen", status_code=status.HTTP_200_OK)
@@ -181,4 +199,7 @@ async def reopen_day_close(
     row = await reopen_day(
         session, branch_id=branch_id, user_id=caller.id, daily_close_id=close_id
     )
-    return _serialize_close(row)
+    pay = await supplier_payments(
+        session, branch_id=row.branch_id, datee=row.datee
+    )
+    return _serialize_close(row, pay)

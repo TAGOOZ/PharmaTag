@@ -13,6 +13,7 @@ from sqlalchemy import delete, select
 from app.core.db import SessionLocal
 from app.core.audit import enqueue_sync
 from app.models import (
+    Account,
     AuditLog,
     Balance,
     BranchStock,
@@ -408,6 +409,119 @@ async def test_replay_is_atomic_per_row_and_balanced():
         assert credit == Decimal("120.00")
     finally:
         await _cleanup([drug_id], invoice_ids, sync_ids)
+
+
+async def test_replay_enforces_credit_limit():
+    """F11.3 must not be bypassed by offline replay: a credit sale that pushes
+    the customer past their limit on the target store is refused (400) and the
+    outbox row marked failed, exactly like the live builder; a credit sale
+    within the remaining headroom still applies."""
+    drug_id = await _make_drug([("10.0000", "5.0000", None)])
+    batch_ids = await _batch_ids(drug_id)
+    party_ids: list[int] = []
+    sync_ids: list[int] = []
+    invoice_ids: list[int] = []
+    setup_journal_id = None
+    try:
+        async with SessionLocal() as session:
+            customer = Party(
+                branch_id=BRANCH_ID,
+                kind="customer",
+                namee=_uniq("cust"),
+                randomid=_uniq("pty"),
+                active=True,
+                credit_limit=Decimal("70"),
+            )
+            session.add(customer)
+            await session.flush()
+            party_ids.append(customer.id)
+            account_id = (
+                await session.execute(
+                    select(Account.id).where(
+                        Account.branch_id == BRANCH_ID, Account.code == "1100"
+                    )
+                )
+            ).scalar_one()
+            journal = Journal(
+                branch_id=BRANCH_ID,
+                datee=date(2026, 8, 17),
+                entry_no=999000,
+                description="setup AR debt",
+                source="manual",
+                status="posted",
+            )
+            session.add(journal)
+            await session.flush()
+            setup_journal_id = journal.id
+            session.add(
+                JournalLine(
+                    journal_id=journal.id,
+                    branch_id=BRANCH_ID,
+                    account_id=account_id,
+                    debit=Decimal("50"),
+                    credit=Decimal("0"),
+                    contra_party_id=customer.id,
+                    datee=date(2026, 8, 17),
+                    month=8,
+                    year=2026,
+                    creditdebit="debit",
+                )
+            )
+            await session.commit()
+
+        key = list(batch_ids)[0]
+        over = _payload("70007", drug_id, batch_ids[key], key, qty="3")
+        over["party_id"] = party_ids[0]
+        over["payed"] = "0.00"
+        over["agel"] = "30.00"
+        over["payments"] = []
+        await _enqueue(over)
+        async with SessionLocal() as session:
+            sync_ids = (
+                await session.execute(
+                    select(SyncLog.id).where(SyncLog.branch_id == BRANCH_ID)
+                )
+            ).scalars().all()
+
+        summary = await _replay()
+        assert summary["applied"] == 0
+        assert summary["failed"] == 1
+        assert "credit limit" in summary["failures"][0]["error"].lower()
+        assert await _stock_qty(drug_id) == Decimal("10.0000")
+
+        ok = _payload("70008", drug_id, batch_ids[key], key, qty="2")
+        ok["party_id"] = party_ids[0]
+        ok["payed"] = "0.00"
+        ok["agel"] = "20.00"
+        ok["payments"] = []
+        await _enqueue(ok)
+        async with SessionLocal() as session:
+            sync_ids = (
+                await session.execute(
+                    select(SyncLog.id).where(SyncLog.branch_id == BRANCH_ID)
+                )
+            ).scalars().all()
+        summary = await _replay()
+        assert summary["applied"] == 1
+        assert summary["failed"] == 0
+        async with SessionLocal() as session:
+            invoice = (
+                await session.execute(select(Invoice).where(Invoice.invoice_no == "70008"))
+            ).scalar_one()
+            invoice_ids.append(invoice.id)
+    finally:
+        await _cleanup([drug_id], invoice_ids, sync_ids)
+        async with SessionLocal() as session:
+            if setup_journal_id is not None:
+                await session.execute(
+                    delete(JournalLine).where(JournalLine.journal_id == setup_journal_id)
+                )
+                await session.execute(
+                    delete(Journal).where(Journal.id == setup_journal_id)
+                )
+            if party_ids:
+                await session.execute(delete(Party).where(Party.id.in_(party_ids)))
+            await session.commit()
 
 
 async def test_replay_rejects_party_kind_and_inactive_mismatch():

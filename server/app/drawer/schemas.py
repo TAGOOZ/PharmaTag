@@ -59,6 +59,7 @@ class DayCloseOut(BaseModel):
     net_network: str
     manual_cash: str
     manual_card: str
+    supplier_payments: str
     purchases: str
     expenses: str
     cost_of_sales: str

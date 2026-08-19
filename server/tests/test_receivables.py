@@ -10,10 +10,22 @@ for the AR side and the credit-sale builder enforces the party's credit limit.
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.core.db import SessionLocal
-from app.models import Account, DrawerMovement, Journal, JournalLine, SettlementVoucher
+from app.models import (
+    Account,
+    AuditLog,
+    Balance,
+    BranchStock,
+    DrawerMovement,
+    Drug,
+    Journal,
+    JournalLine,
+    Party,
+    SettlementVoucher,
+    StockBatch,
+)
 from tests.drawer_test_utils import _cleanup_drawer, _close_day, _mark_closed
 from tests.receivables_test_utils import (
     _cleanup_party,
@@ -29,6 +41,7 @@ from tests.receivables_test_utils import (
     _make_user,
     _token_for,
     _uniq,
+    _uniq_id,
     _voucher,
     _voucher_date,
 )
@@ -601,6 +614,485 @@ async def test_voucher_list_and_detail_are_branch_scoped(client):
             await _cleanup_sale([drug_id], invoice_ids)
     finally:
         await _cleanup_party(customer_id)
+
+
+async def test_credit_limit_counts_debt_after_code_shadowing(client):
+    """A branch's own "1100" account must not let the credit-limit guard
+    under-read the debt sitting on the inherited MAIN account (#19 review fix)."""
+    datee = _voucher_date(13)
+    other_branch_id = await _make_other_branch()
+    user_id = None
+    customer_id = None
+    drug_id = None
+    invoice_ids: list[int] = []
+    try:
+        user_id = await _make_user(_uniq("b2mgr2"), 7, branch_id=other_branch_id)
+        token = _token_for(user_id, other_branch_id)
+        customer_id = await _make_customer_on(other_branch_id, credit_limit="70")
+        drug_id = await _make_drug_stock_on(
+            other_branch_id,
+            tax_type="14%",
+            price="10.0000",
+            batches=[("40.0000", "5.0000", "2026-01-01")],
+            stock_qty="40.0000",
+        )
+        sale = await _credit_sale(
+            client, token, drug_id, party_id=customer_id, datee=datee
+        )
+        invoice_ids.append(sale["id"])
+
+        await _shadow_account(client, token, "1100")
+
+        r = await client.post(
+            "/api/v1/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "party_id": customer_id,
+                "datee": datee,
+                "lines": [{"drug_id": drug_id, "qty": "5"}],
+                "payments": [{"method": "credit", "amount": "50.00"}],
+            },
+        )
+        assert r.status_code == 400, r.text
+        assert "credit limit" in r.json()["detail"].lower()
+    finally:
+        await _cleanup_sale([drug_id] if drug_id else [], invoice_ids)
+        await _cleanup_branch_balances(other_branch_id)
+        if customer_id is not None:
+            await _cleanup_party(customer_id)
+        if user_id is not None:
+            await _delete_users([user_id])
+        await _delete_other_branch(other_branch_id)
+
+
+async def test_payables_register_survives_code_shadowing(client):
+    """The payables view must keep the AP posted to the inherited MAIN account
+    once the branch configured its own "2000" (#19 review fix)."""
+    datee = _voucher_date(15)
+    other_branch_id = await _make_other_branch()
+    user_id = None
+    supplier_id = None
+    drug_id = None
+    invoice_ids: list[int] = []
+    try:
+        user_id = await _make_user(_uniq("b2mgr4"), 7, branch_id=other_branch_id)
+        token = _token_for(user_id, other_branch_id)
+        supplier_id = await _make_customer_on(other_branch_id, kind="supplier")
+        drug_id = await _make_drug_for_purchase()
+        r = await client.post(
+            "/api/v1/purchases",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "supplier_id": supplier_id,
+                "datee": datee,
+                "lines": [{"drug_id": drug_id, "qty": "10", "unit_cost": "10.0000"}],
+                "payments": [{"method": "credit", "amount": "114.00"}],
+            },
+        )
+        assert r.status_code == 201, r.text
+        invoice_ids.append(r.json()["id"])
+
+        await _shadow_account(client, token, "2000")
+
+        r = await client.get(
+            "/api/v1/parties/payables", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200, r.text
+        by_id = {x["party_id"]: x for x in r.json()["payables"]}
+        assert by_id[supplier_id]["balance"] == "114.00"
+    finally:
+        await _cleanup_sale([drug_id] if drug_id else [], invoice_ids)
+        await _cleanup_branch_balances(other_branch_id)
+        if supplier_id is not None:
+            await _cleanup_party(supplier_id)
+        if user_id is not None:
+            await _delete_users([user_id])
+        await _delete_other_branch(other_branch_id)
+
+
+async def test_statement_ledger_keeps_inherited_lines_after_code_shadowing(client):
+    """The كشف حساب must still show lines posted to the inherited MAIN account
+    once the branch configured its own "1100" (#19 review fix)."""
+    datee = _voucher_date(14)
+    other_branch_id = await _make_other_branch()
+    user_id = None
+    customer_id = None
+    drug_id = None
+    invoice_ids: list[int] = []
+    try:
+        user_id = await _make_user(_uniq("b2mgr3"), 7, branch_id=other_branch_id)
+        token = _token_for(user_id, other_branch_id)
+        customer_id = await _make_customer_on(other_branch_id)
+        drug_id = await _make_drug_stock_on(
+            other_branch_id,
+            tax_type="14%",
+            price="10.0000",
+            batches=[("10.0000", "5.0000", "2026-01-01")],
+            stock_qty="20.0000",
+        )
+        sale = await _credit_sale(
+            client, token, drug_id, party_id=customer_id, datee=datee
+        )
+        invoice_ids.append(sale["id"])
+
+        await _shadow_account(client, token, "1100")
+
+        st = await _statement(client, token, customer_id, datee)
+        assert st["closing_balance"] == "50.00"
+        assert st["movements"][0]["account_code"] == "1100"
+    finally:
+        await _cleanup_sale([drug_id] if drug_id else [], invoice_ids)
+        await _cleanup_branch_balances(other_branch_id)
+        if customer_id is not None:
+            await _cleanup_party(customer_id)
+        if user_id is not None:
+            await _delete_users([user_id])
+        await _delete_other_branch(other_branch_id)
+
+
+async def test_reversal_of_payment_restores_supplier_payable(client):
+    """Reversing a payment voucher posts the opposite journal (Cr 2000 / Dr
+    1000), the opposite drawer movement (in), and returns the supplier statement
+    to the pre-payment payable — the mirror of the receipt reversal (#19 review
+    coverage gap)."""
+    datee = _voucher_date(16)
+    drug_id = await _make_drug_for_purchase()
+    supplier_id = await _make_supplier()
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        r = await client.post(
+            "/api/v1/purchases",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "supplier_id": supplier_id,
+                "datee": datee,
+                "lines": [{"drug_id": drug_id, "qty": "10", "unit_cost": "10.0000"}],
+                "payments": [{"method": "credit", "amount": "114.00"}],
+            },
+        )
+        assert r.status_code == 201, r.text
+        invoice_ids.append(r.json()["id"])
+
+        v = await _voucher(
+            client, token,
+            voucher_type="payment",
+            party_id=supplier_id,
+            datee=datee,
+            amount="57.00",
+            description=_uniq("payrev"),
+        )
+        st = await _statement(client, token, supplier_id, datee)
+        assert st["closing_balance"] == "57.00"
+
+        r = await client.post(
+            f"/api/v1/receivables/vouchers/{v['id']}/reverse",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 201, r.text
+        rev = r.json()
+        assert rev["reverses_voucher_id"] == v["id"]
+        journal = await _journal_of(rev["id"])
+        assert "إلغاء" in journal.description
+
+        st = await _statement(client, token, supplier_id, datee)
+        assert st["closing_balance"] == "114.00"
+
+        # the reversal's AP credit leg carries the supplier as contra, attached
+        # to the exact account row the original payment touched (review #5: the
+        # reversal must not re-derive the contra from a code constant)
+        rev_journal = await _journal_of(rev["id"])
+        rev_lines = await session_lines(rev_journal.id)
+        ap_legs = [l for l in rev_lines if l.credit > 0]
+        assert len(ap_legs) == 1
+        assert ap_legs[0].contra_party_id == supplier_id
+
+        rows = await movement_rows(datee)
+        assert any(
+            m.reason == "supplier_pay"
+            and m.direction == "in"
+            and Decimal(m.amount) == Decimal("57.00")
+            for m in rows
+        )
+
+        r = await client.post(
+            f"/api/v1/receivables/vouchers/{rev['id']}/reverse",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 409, r.text
+    finally:
+        await _cleanup_vouchers("payrev")
+        await _cleanup_sale([drug_id], invoice_ids)
+        await _cleanup_party(supplier_id)
+
+
+async def test_kind_both_party_nets_ar_and_ap_in_both_registers(client):
+    """A party that is both customer and supplier: the credit sale and receipt
+    move its AR (receivables register), the credit purchase and payment move its
+    AP (payables register), and each register shows only its own side."""
+    datee = _voucher_date(17)
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%", price="10.0000", batches=[("10.0000", "5.0000", "2026-01-01")],
+        stock_qty="20.0000",
+    )
+    pur_drug_id = await _make_drug_for_purchase()
+    both_id = await _make_customer(kind="both")
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        sale = await _credit_sale(
+            client, token, drug_id, party_id=both_id, datee=datee
+        )
+        invoice_ids.append(sale["id"])
+        r = await client.post(
+            "/api/v1/purchases",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "supplier_id": both_id,
+                "datee": datee,
+                "lines": [{"drug_id": pur_drug_id, "qty": "10", "unit_cost": "10.0000"}],
+                "payments": [{"method": "credit", "amount": "114.00"}],
+            },
+        )
+        assert r.status_code == 201, r.text
+        invoice_ids.append(r.json()["id"])
+
+        await _voucher(
+            client, token,
+            voucher_type="receipt", party_id=both_id, datee=datee,
+            amount="20.00", description=_uniq("both_rec"),
+        )
+        await _voucher(
+            client, token,
+            voucher_type="payment", party_id=both_id, datee=datee,
+            amount="14.00", description=_uniq("both_pay"),
+        )
+
+        r = await client.get(
+            "/api/v1/receivables", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200, r.text
+        rec = {x["party_id"]: x for x in r.json()["receivables"]}
+        assert rec[both_id]["balance"] == "30.00"
+
+        r = await client.get(
+            "/api/v1/parties/payables", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200, r.text
+        pay = {x["party_id"]: x for x in r.json()["payables"]}
+        assert pay[both_id]["balance"] == "100.00"
+    finally:
+        await _cleanup_vouchers("both")
+        await _cleanup_sale([drug_id, pur_drug_id], invoice_ids)
+        await _cleanup_party(both_id)
+
+
+async def test_receivables_register_aggregates_pinned_receivable_account(client):
+    """A party whose receivable_account_id pins a custom AR account (different
+    from the branch default code) is counted in the register from that account
+    — locks the register's single-aggregate no-N+1 behavior across per-party
+    account sets."""
+    customer_id = await _make_customer()
+    account_id = None
+    journal_id = None
+    try:
+        async with SessionLocal() as session:
+            acc = Account(
+                branch_id=BRANCH_ID,
+                code="1199",
+                name_ar=_uniq("pin"),
+                type="asset",
+                is_active=True,
+            )
+            session.add(acc)
+            await session.flush()
+            account_id = acc.id
+            party = await session.get(Party, customer_id)
+            party.receivable_account_id = account_id
+            j = Journal(
+                branch_id=BRANCH_ID,
+                datee=date(2026, 8, 20),
+                entry_no=999001,
+                description="pinned AR debt",
+                source="manual",
+                status="posted",
+            )
+            session.add(j)
+            await session.flush()
+            journal_id = j.id
+            session.add(
+                JournalLine(
+                    journal_id=j.id,
+                    branch_id=BRANCH_ID,
+                    account_id=account_id,
+                    debit=Decimal("30"),
+                    credit=Decimal("0"),
+                    contra_party_id=customer_id,
+                    datee=date(2026, 8, 20),
+                    month=8,
+                    year=2026,
+                    creditdebit="debit",
+                )
+            )
+            await session.commit()
+
+        token = await _login_token(client)
+        r = await client.get(
+            "/api/v1/receivables", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200, r.text
+        by_id = {x["party_id"]: x for x in r.json()["receivables"]}
+        assert by_id[customer_id]["balance"] == "30.00"
+    finally:
+        await _cleanup_branch_balances(BRANCH_ID)
+        async with SessionLocal() as session:
+            if journal_id is not None:
+                await session.execute(
+                    delete(JournalLine).where(JournalLine.journal_id == journal_id)
+                )
+                await session.execute(delete(Journal).where(Journal.id == journal_id))
+            await session.execute(
+                delete(AuditLog).where(
+                    AuditLog.entity == "parties", AuditLog.entity_id == customer_id
+                )
+            )
+            await session.execute(delete(Party).where(Party.id == customer_id))
+            if account_id is not None:
+                await session.execute(delete(Account).where(Account.id == account_id))
+            await session.commit()
+
+
+async def test_receivables_register_survives_code_shadowing(client):
+    """A branch that inherits its AR from MAIN and later creates its own "1100"
+    account must not lose the debt posted to the inherited account: the register
+    reads the code's own AND inherited account rows (#19 review fix)."""
+    datee = _voucher_date(12)
+    other_branch_id = await _make_other_branch()
+    user_id = None
+    customer_id = None
+    drug_id = None
+    invoice_ids: list[int] = []
+    try:
+        user_id = await _make_user(_uniq("b2mgr"), 7, branch_id=other_branch_id)
+        token = _token_for(user_id, other_branch_id)
+        customer_id = await _make_customer_on(other_branch_id)
+        drug_id = await _make_drug_stock_on(
+            other_branch_id,
+            tax_type="14%",
+            price="10.0000",
+            batches=[("10.0000", "5.0000", "2026-01-01")],
+            stock_qty="20.0000",
+        )
+        sale = await _credit_sale(
+            client, token, drug_id, party_id=customer_id, datee=datee
+        )
+        invoice_ids.append(sale["id"])
+
+        await _shadow_account(client, token, "1100")
+
+        r = await client.get(
+            "/api/v1/receivables", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200, r.text
+        by_id = {x["party_id"]: x for x in r.json()["receivables"]}
+        assert by_id[customer_id]["balance"] == "50.00"
+    finally:
+        await _cleanup_sale([drug_id] if drug_id else [], invoice_ids)
+        await _cleanup_branch_balances(other_branch_id)
+        if customer_id is not None:
+            await _cleanup_party(customer_id)
+        if user_id is not None:
+            await _delete_users([user_id])
+        await _delete_other_branch(other_branch_id)
+
+
+async def _make_customer_on(
+    branch_id: int,
+    *,
+    kind: str = "customer",
+    active: bool = True,
+    credit_limit: str = "0",
+) -> int:
+    """A throwaway customer/supplier/both party on `branch_id` (the shared
+    `_make_customer` is hardcoded to branch 1)."""
+    async with SessionLocal() as session:
+        party = Party(
+            branch_id=branch_id,
+            kind=kind,
+            namee=_uniq("b2pty"),
+            randomid=_uniq_id(),
+            active=active,
+            credit_limit=Decimal(credit_limit),
+        )
+        session.add(party)
+        await session.flush()
+        party_id = party.id
+        await session.commit()
+        return party_id
+
+
+async def _make_drug_stock_on(
+    branch_id: int,
+    *,
+    tax_type: str = "14%",
+    price: str = "10.0000",
+    batches: list | None = None,
+    stock_qty: str = "20.0000",
+) -> int:
+    """A throwaway drug with branch stock + batches on `branch_id`."""
+    async with SessionLocal() as session:
+        drug = Drug(
+            drugname=_uniq("b2drug"),
+            tax_type=tax_type,
+            price=Decimal(price),
+            price_wholesale=Decimal("8.0000"),
+            price_cost=Decimal("5.0000"),
+        )
+        session.add(drug)
+        await session.flush()
+        drug_id = drug.id
+        session.add(
+            BranchStock(
+                branch_id=branch_id, drug_id=drug_id, qty=Decimal(stock_qty), minimum=0
+            )
+        )
+        for i, (qty, cost, expire) in enumerate(batches or []):
+            session.add(
+                StockBatch(
+                    branch_id=branch_id,
+                    drug_id=drug_id,
+                    randomid=f"{_uniq('b2b')}{i}",
+                    qty=Decimal(qty),
+                    cost=Decimal(cost),
+                    expire=date.fromisoformat(expire) if expire else None,
+                )
+            )
+        await session.commit()
+        return drug_id
+
+
+async def _shadow_account(client, token, code: str) -> int:
+    """Create the branch's own account for `code` via the chart API — the
+    branch inherits the MAIN chart until it configures its own, and the per-branch
+    duplicate check lets it shadow an inherited code (the #19 review finding)."""
+    r = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "code": code,
+            "name_ar": _uniq(f"sh_{code}"),
+            "type": "asset",
+            "is_active": True,
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+async def _cleanup_branch_balances(branch_id: int) -> None:
+    async with SessionLocal() as session:
+        await session.execute(delete(Balance).where(Balance.branch_id == branch_id))
+        await session.commit()
 
 
 # ---- raw helpers (kept out of the shared utils: only this slice reads them) ----

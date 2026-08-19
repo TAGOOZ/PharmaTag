@@ -22,6 +22,7 @@ from tests.drawer_test_utils import (
 )
 from tests.purchase_returns_test_utils import _cleanup as _purchase_cleanup, _purchase
 from tests.purchase_test_utils import _delete_other_branch, _make_drug, _make_other_branch, _make_supplier
+from tests.receivables_test_utils import _cleanup_party, _cleanup_vouchers, _voucher
 from tests.sales_test_utils import _cleanup, _make_drug_and_stock
 
 
@@ -589,6 +590,38 @@ async def test_manual_cash_and_card_are_net_manual_movements(client):
         assert body["difference"] == "0.00"
     finally:
         await _cleanup_drawer()
+
+
+async def test_supplier_payment_has_named_day_report_column(client):
+    """A payment voucher (سند صرف) is neither a purchase nor a manual movement:
+    it gets its own named day-report figure (supplier_payments) so the payment
+    shows in the report the way a receipt shows in manual_cash/manual_card
+    (#19 review: the day-report classification asymmetry)."""
+    _mark_closed("2026-01-26")
+    supplier_id = await _make_supplier()
+    try:
+        token = await _login_token(client)
+        await _voucher(
+            client,
+            token,
+            voucher_type="payment",
+            party_id=supplier_id,
+            datee="2026-01-26",
+            amount="30.00",
+            description="dayreport",
+        )
+        rc = await _close_day(client, token, datee="2026-01-26", counted_cash="0")
+        assert rc.status_code == 200, rc.text
+        body = rc.json()
+        assert body["supplier_payments"] == "30.00"
+        assert body["manual_cash"] == "0.00"
+        assert body["manual_card"] == "0.00"
+        assert body["purchases"] == "0.00"
+        assert body["expected_cash"] == "-30.00"
+    finally:
+        await _cleanup_drawer()
+        await _cleanup_vouchers("dayreport")
+        await _cleanup_party(supplier_id)
 
 
 async def test_card_only_day_close_reports_net_network(client):

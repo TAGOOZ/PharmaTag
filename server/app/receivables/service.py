@@ -19,14 +19,14 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import money
 from app.core.db import atomic
 from app.drawer.movements import _method_to_drawer, guard_open_day, record_movement
 from app.money.entries import MAX_AMOUNT
-from app.money.journal import AP, AR, DRAWER, post_journal
+from app.money.journal import AP, AR, DRAWER, account_ids_for_code, post_journal
 from app.models import Account, Journal, JournalLine, Party, SettlementVoucher
 from app.sales.numbering import acquire_branch_lock, next_journal_entry_no
 
@@ -37,28 +37,6 @@ NOT_FOUND = HTTPException(status.HTTP_404_NOT_FOUND, "settlement voucher not fou
 ALREADY_REVERSED = HTTPException(
     status.HTTP_409_CONFLICT, "a reversal voucher cannot be reversed"
 )
-
-
-async def _account_by_code(
-    session: AsyncSession, branch_id: int, code: str
-) -> Optional[int]:
-    """Resolve an account id by code (own branch, then the branch-1 chart)."""
-    row = (
-        await session.execute(
-            select(Account.id).where(
-                Account.branch_id == branch_id, Account.code == code
-            )
-        )
-    ).scalar_one_or_none()
-    if row is None and branch_id != 1:
-        row = (
-            await session.execute(
-                select(Account.id).where(
-                    Account.branch_id == 1, Account.code == code
-                )
-            )
-        ).scalar_one_or_none()
-    return row
 
 
 async def _next_voucher_no(
@@ -253,9 +231,16 @@ async def reverse_voucher(
             (code_by_id[l.account_id], l.credit, l.debit, l.tips or "", l.account_id)
             for l in lines
         ]
-        contra_by_code = (
-            {AR: voucher.party_id} if voucher.voucher_type == "receipt"
-            else {AP: voucher.party_id}
+        # The original voucher attached its contra to the AR/AP leg (the one
+        # line carrying a contra_party_id). The reversal must attach the party
+        # contra to the SAME account row its offset touches — keyed by account_id,
+        # never re-derived from the hard-coded AR/AP code constants, so a party
+        # mapped to a non-default account still nets correctly in its ledger.
+        party_line = next((l for l in lines if l.contra_party_id is not None), None)
+        contra_by_account = (
+            {party_line.account_id: voucher.party_id}
+            if party_line is not None
+            else {}
         )
         entry_no = await next_journal_entry_no(session, branch_id, journal.datee)
         voucher_no = await _next_voucher_no(session, branch_id)
@@ -271,7 +256,7 @@ async def reverse_voucher(
             ),
             source="settlement",
             entries=reversed_entries,
-            contra_party_by_code=contra_by_code,
+            contra_party_by_account_id=contra_by_account,
         )
         await record_movement(
             session,
@@ -408,26 +393,46 @@ async def get_receivables(
 
     rows = []
     total = money.dec("0")
-    for party in parties:
-        account_id = party.receivable_account_id or await _account_by_code(
-            session, branch_id, DEFAULT_AR_CODE
-        )
-        if account_id is None:
-            balance = money.dec("0")
-        else:
-            debit, credit = (
-                await session.execute(
-                    select(
-                        func.coalesce(func.sum(JournalLine.debit), 0),
-                        func.coalesce(func.sum(JournalLine.credit), 0),
-                    ).where(
-                        JournalLine.branch_id == branch_id,
-                        JournalLine.account_id == account_id,
-                        JournalLine.contra_party_id == party.id,
-                    )
+    account_ids = await account_ids_for_code(session, branch_id, DEFAULT_AR_CODE)
+    # Per-party account sets: the (branch, code) resolution — own + inherited
+    # branch-1 account so a code shadowed after the branch posted history can't
+    # orphan those lines — unioned with the party's own receivable mapping when
+    # set. One GROUP BY aggregate across all parties, no per-party queries.
+    if parties:
+        conditions = [
+            and_(
+                JournalLine.contra_party_id == party.id,
+                JournalLine.account_id.in_(
+                    list(dict.fromkeys([party.receivable_account_id, *account_ids]))
+                    if party.receivable_account_id is not None
+                    else account_ids
+                ),
+            )
+            for party in parties
+        ]
+        grouped = (
+            await session.execute(
+                select(
+                    JournalLine.contra_party_id,
+                    func.coalesce(func.sum(JournalLine.debit), 0),
+                    func.coalesce(func.sum(JournalLine.credit), 0),
                 )
-            ).one()
-            balance = money.round2(money.dec(debit) - money.dec(credit))
+                .where(JournalLine.branch_id == branch_id, or_(*conditions))
+                .group_by(JournalLine.contra_party_id)
+            )
+        ).all()
+        sums = {
+            party_id: (money.dec(debit), money.dec(credit))
+            for party_id, debit, credit in grouped
+        }
+    else:
+        sums = {}
+    for party in parties:
+        if party.id in sums:
+            debit, credit = sums[party.id]
+            balance = money.round2(debit - credit)
+        else:
+            balance = money.dec("0")
         rows.append(
             {
                 "party_id": party.id,
@@ -465,10 +470,10 @@ async def ensure_credit_ok(
     limit = money.dec(party.credit_limit)
     if limit <= 0:
         return
-    account_id = party.receivable_account_id or await _account_by_code(
-        session, branch_id, DEFAULT_AR_CODE
-    )
-    if account_id is None:
+    account_ids = await account_ids_for_code(session, branch_id, DEFAULT_AR_CODE)
+    if party.receivable_account_id is not None:
+        account_ids = list(dict.fromkeys([party.receivable_account_id, *account_ids]))
+    if not account_ids:
         return
     debit, credit = (
         await session.execute(
@@ -477,7 +482,7 @@ async def ensure_credit_ok(
                 func.coalesce(func.sum(JournalLine.credit), 0),
             ).where(
                 JournalLine.branch_id == branch_id,
-                JournalLine.account_id == account_id,
+                JournalLine.account_id.in_(account_ids),
                 JournalLine.contra_party_id == party.id,
             )
         )

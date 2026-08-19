@@ -322,6 +322,63 @@ async def _corrections_net(session: AsyncSession, *, branch_id: int, datee: date
     return round2(dec(debit.scalar_one()) - dec(credit.scalar_one()))
 
 
+async def supplier_payments(
+    session: AsyncSession, *, branch_id: int, datee: date
+) -> Decimal:
+    """Net supplier payments for the day (the day report's named column for
+    سند صرف): payments OUT minus payment reversals IN, both reasons carry
+    `supplier_pay` (a reversal posts the opposite movement). Not a daily_close
+    snapshot column — that table mirrors legacy MonyInfo.phy exactly — so the
+    report computes it live from movements (a closed day is frozen, so it is
+    stable until reopen)."""
+    out = await _sum_movements(
+        session, branch_id=branch_id, datee=datee, direction="out", reason=SUPPLIER_PAY
+    )
+    inn = await _sum_movements(
+        session, branch_id=branch_id, datee=datee, direction="in", reason=SUPPLIER_PAY
+    )
+    return round2(out - inn)
+
+
+async def supplier_payments_by_date(
+    session: AsyncSession, *, branch_id: int, datees: list[date]
+) -> dict[date, Decimal]:
+    """`supplier_payments` for many dates in ONE query each (out/in) — the
+    day-close list must not compute it per row."""
+    if not datees:
+        return {}
+    out_rows = (
+        await session.execute(
+            select(DrawerMovement.datee, func.sum(DrawerMovement.amount))
+            .where(
+                DrawerMovement.branch_id == branch_id,
+                DrawerMovement.reason == SUPPLIER_PAY,
+                DrawerMovement.direction == "out",
+                DrawerMovement.datee.in_(list(dict.fromkeys(datees))),
+            )
+            .group_by(DrawerMovement.datee)
+        )
+    ).all()
+    in_rows = (
+        await session.execute(
+            select(DrawerMovement.datee, func.sum(DrawerMovement.amount))
+            .where(
+                DrawerMovement.branch_id == branch_id,
+                DrawerMovement.reason == SUPPLIER_PAY,
+                DrawerMovement.direction == "in",
+                DrawerMovement.datee.in_(list(dict.fromkeys(datees))),
+            )
+            .group_by(DrawerMovement.datee)
+        )
+    ).all()
+    out_by_date = dict(out_rows)
+    in_by_date = dict(in_rows)
+    return {
+        d: round2(dec(out_by_date.get(d, 0)) - dec(in_by_date.get(d, 0)))
+        for d in datees
+    }
+
+
 async def day_ledger(
     session: AsyncSession, *, branch_id: int, datee: date
 ) -> dict[str, Decimal]:
@@ -382,6 +439,9 @@ async def day_ledger(
         "net_network": net_network,
         "manual_cash": manual_cash,
         "manual_card": manual_card,
+        "supplier_payments": await supplier_payments(
+            session, branch_id=branch_id, datee=datee
+        ),
         "purchases": purchases_total,
         "expenses": expenses,
         "cost_of_sales": cogs,

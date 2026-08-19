@@ -181,7 +181,10 @@ def apportion_discount(
     10-11). Shares are round-half-up with the LAST line absorbing the rounding
     remainder, so SUM(out.line_total) == SUM(in.line_total) - amount exactly and
     no line_total can ever go negative (amount <= SUM(line_total) by the
-    discount-must-not-exceed-subtotal rule enforced by the callers).
+    discount-must-not-exceed-subtotal rule enforced by the callers). A share is
+    clamped to its line_total, and any leftover is redistributed to lines with
+    remaining capacity, so deep discounts on tiny lines still apply the FULL
+    amount without forcing a negative line_total.
 
     `discount` on the returned lines keeps ONLY the line discount — the invoice
     share is folded into line_total, never into the line-discount field, so a
@@ -194,15 +197,29 @@ def apportion_discount(
     base = add(l.line_total for l in lines)
     if base <= 0:
         return list(lines)
+    shares: list[Decimal] = []
     remaining = amount
-    out: list[LineMoney] = []
     for i, lm in enumerate(lines):
         share = (
             remaining
             if i == len(lines) - 1
             else round2(amount * lm.line_total / base)
         )
+        share = min(share, lm.line_total)
+        shares.append(share)
         remaining -= share
+    if remaining > 0:
+        for i, lm in enumerate(lines):
+            if remaining <= 0:
+                break
+            capacity = lm.line_total - shares[i]
+            if capacity > 0:
+                give = min(remaining, capacity)
+                shares[i] += give
+                remaining -= give
+    assert remaining == 0, "discount exceeds subtotal; caller must guard DISCOUNT_OVERFLOW"
+    out: list[LineMoney] = []
+    for lm, share in zip(lines, shares):
         line_total = lm.line_total - share
         split = split_vat(line_total, lm.tax_type, inclusive=inclusive)
         out.append(

@@ -331,3 +331,30 @@ def test_apportion_last_line_absorbs_remainder():
     out = money.apportion_discount(lines, D("1.00"), inclusive=True)
     assert [l.line_total for l in out] == [D("0.67"), D("0.67"), D("0.66")]
     assert money.add(l.line_total for l in out) == D("2.00")
+
+
+def test_apportion_never_goes_negative_on_tiny_lines():
+    """20 identical 0.05 lines with an 85% header discount (0.85 <= 1.00, so no
+    DISCOUNT_OVERFLOW): the round-half-up shares (19 x 0.04) exceed the 1.00 base
+    capacity, and the naive 'last line absorbs the remainder' would force the
+    last line to -0.04. The clamp must keep every line_total >= 0 while still
+    applying the FULL discount (sum invariant preserved).
+    """
+    lines = [money.line_money(D("1"), D("0.05"), "exempt", inclusive=True)
+             for _ in range(20)]
+    out = money.apportion_discount(lines, D("0.85"), inclusive=True)
+    assert all(l.line_total >= 0 for l in out)
+    assert money.add(l.line_total for l in out) == money.add(
+        l.line_total for l in lines
+    ) - D("0.85")
+    assert money.add(l.line_total for l in out) == D("0.15")
+
+
+def test_apportion_full_discount_zeroes_lines_without_negatives():
+    """amount == subtotal (100% discount) on tiny lines: every line_total must be
+    0, never negative, and the sum must land exactly on 0.00."""
+    lines = [money.line_money(D("1"), D("0.05"), "exempt", inclusive=True)
+             for _ in range(20)]
+    out = money.apportion_discount(lines, D("1.00"), inclusive=True)
+    assert all(l.line_total == 0 for l in out)
+    assert money.add(l.line_total for l in out) == D("0.00")

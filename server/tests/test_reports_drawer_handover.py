@@ -135,6 +135,112 @@ async def test_drawer_handover_empty_period(client):
     assert body["totals"]["opening_in"] == "0.00"
 
 
+async def test_drawer_handover_card_refund_lands_in_card_returns_out(client):
+    """A returned card sale nets against card, never against net_cash."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="exempt",
+        price="10.0000",
+        cost_price="5.0000",
+        batches=[("20.0000", "5.0000", None)],
+    )
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        r = await client.post(
+            "/api/v1/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "lines": [{"drug_id": drug_id, "qty": "12"}],
+                "payments": [{"method": "card", "amount": None}],
+            },
+        )
+        assert r.status_code == 201, r.text
+        sale = r.json()
+        invoice_ids.append(sale["id"])
+        assert sale["totalvalue"] == "120.00"
+
+        ret = await client.post(
+            f"/api/v1/sales/{sale['id']}/return",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"lines": [{"ref_invoice_line_id": sale["lines"][0]["id"], "qty": "12"}]},
+        )
+        assert ret.status_code == 201, ret.text
+        invoice_ids.append(ret.json()["id"])
+
+        today = business_date().isoformat()
+        rep = await client.get(
+            "/api/v1/reports/drawer-handover",
+            params={"date_from": today, "date_to": today},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert rep.status_code == 200, rep.text
+        body = rep.json()
+        admin = next(c for c in body["cashiers"] if c["user_id"] == 1)
+        assert admin["card_sales_in"] == "120.00"
+        assert admin["card_returns_out"] == "120.00"
+        assert admin["returns_out"] == "0.00"
+        assert admin["net_cash"] == "0.00"
+        assert body["totals"]["card_returns_out"] == "120.00"
+    finally:
+        await _cleanup([drug_id], invoice_ids)
+
+
+async def test_drawer_handover_surfaces_other_manual_movements(client):
+    """Transfer/settlement movements are reported and enter net_cash."""
+    token = await _login_token(client)
+    movement_ids: list[int] = []
+    try:
+        t = await client.post(
+            "/api/v1/drawer/movements",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "direction": "out", "reason": "transfer", "method": "cash",
+                "amount": "50.00",
+            },
+        )
+        assert t.status_code == 201, t.text
+        movement_ids.append(t.json()["id"])
+
+        s = await client.post(
+            "/api/v1/drawer/movements",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "direction": "in", "reason": "customer_settlement", "method": "cash",
+                "amount": "20.00",
+            },
+        )
+        assert s.status_code == 201, s.text
+        movement_ids.append(s.json()["id"])
+
+        today = business_date().isoformat()
+        rep = await client.get(
+            "/api/v1/reports/drawer-handover",
+            params={"date_from": today, "date_to": today},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert rep.status_code == 200, rep.text
+        body = rep.json()
+        admin = next(c for c in body["cashiers"] if c["user_id"] == 1)
+        assert admin["other_in"] == "20.00"
+        assert admin["other_out"] == "50.00"
+        assert admin["net_cash"] == "-30.00"
+        assert body["totals"]["other_in"] == "20.00"
+        assert body["totals"]["other_out"] == "50.00"
+    finally:
+        await _cleanup([], [], movement_ids)
+
+
+async def test_drawer_handover_inverted_date_range_rejected(client):
+    """date_from after date_to is a 400, not a silent empty report."""
+    token = await _login_token(client)
+    rep = await client.get(
+        "/api/v1/reports/drawer-handover",
+        params={"date_from": "2026-01-10", "date_to": "2026-01-01"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert rep.status_code == 400
+
+
 async def test_drawer_handover_html_renders_printable(client):
     """format=html returns a printable A4 page."""
     token = await _login_token(client)

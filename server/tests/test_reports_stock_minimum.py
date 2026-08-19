@@ -90,6 +90,46 @@ async def test_stock_minimum_empty_when_none_below(client):
         await _cleanup([ok_id], [])
 
 
+async def test_stock_minimum_truncation_surfaces_flag_and_true_count(client):
+    """Over the 1000-item cap: truncated=true and count is the true total."""
+    created_ids: list[int] = []
+    async with SessionLocal() as session:
+        drugs = [
+            Drug(
+                drugname=_uniq(f"bulk{i}"),
+                tax_type="exempt",
+                price=Decimal("1.0000"),
+            )
+            for i in range(1001)
+        ]
+        session.add_all(drugs)
+        await session.flush()
+        created_ids = [d.id for d in drugs]
+        session.add_all(
+            BranchStock(
+                branch_id=1,
+                drug_id=d.id,
+                qty=Decimal("1.0000"),
+                minimum=Decimal("5.0000"),
+            )
+            for d in drugs
+        )
+        await session.commit()
+    try:
+        token = await _login_token(client)
+        r = await client.get(
+            "/api/v1/reports/stock-minimum",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["truncated"] is True
+        assert body["count"] == 1001
+        assert len(body["items"]) == 1000
+    finally:
+        await _cleanup(created_ids, [])
+
+
 async def test_stock_minimum_html_renders_printable(client):
     """format=html returns a printable A4 shortage page."""
     low_id = await _make_below_drug("low", qty="3.0000", minimum="10.0000")

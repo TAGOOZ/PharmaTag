@@ -19,6 +19,7 @@ from app.models import (
     Drug,
     Invoice,
     InvoiceLine,
+    InvoiceVersion,
     Journal,
     JournalLine,
     PaymentSplit,
@@ -94,30 +95,53 @@ async def _cleanup(
     movement_ids: Optional[list[int]] = None,
 ) -> None:
     async with SessionLocal() as session:
-        for iid in invoice_ids:
-            jids = (
+        all_ids = list(invoice_ids)
+        if all_ids:
+            # include return invoices that reference the given ids
+            refs = (
                 await session.execute(
-                    select(Journal.id).where(Journal.ref_invoice_id == iid)
+                    select(Invoice.id).where(Invoice.ref_invoice_id.in_(all_ids))
                 )
             ).scalars().all()
-            if jids:
+            all_ids = list(set(all_ids) | set(refs))
+            for iid in all_ids:
+                jids = (
+                    await session.execute(
+                        select(Journal.id).where(Journal.ref_invoice_id == iid)
+                    )
+                ).scalars().all()
+                if jids:
+                    await session.execute(
+                        delete(JournalLine).where(JournalLine.journal_id.in_(jids))
+                    )
+                    await session.execute(delete(Journal).where(Journal.id.in_(jids)))
+                await session.execute(delete(Balance).where(Balance.branch_id == BRANCH_ID))
                 await session.execute(
-                    delete(JournalLine).where(JournalLine.journal_id.in_(jids))
+                    delete(PaymentSplit).where(PaymentSplit.invoice_id == iid)
                 )
-                await session.execute(delete(Journal).where(Journal.id.in_(jids)))
-            await session.execute(delete(Balance).where(Balance.branch_id == BRANCH_ID))
-            await session.execute(
-                delete(PaymentSplit).where(PaymentSplit.invoice_id == iid)
-            )
-            await session.execute(
-                delete(DrawerMovement).where(DrawerMovement.ref_invoice_id == iid)
-            )
-            await session.execute(
-                delete(InvoiceLine).where(InvoiceLine.invoice_id == iid)
-            )
-            await session.execute(delete(SyncLog).where(SyncLog.entity_id == iid))
-            await session.execute(delete(AuditLog).where(AuditLog.entity_id == iid))
-            await session.execute(delete(Invoice).where(Invoice.id == iid))
+                await session.execute(
+                    delete(DrawerMovement).where(DrawerMovement.ref_invoice_id == iid)
+                )
+                await session.execute(
+                    delete(InvoiceVersion).where(InvoiceVersion.invoice_id == iid)
+                )
+                await session.execute(delete(SyncLog).where(SyncLog.entity_id == iid))
+                await session.execute(delete(AuditLog).where(AuditLog.entity_id == iid))
+            # return invoices before their originals (self-FK ordering)
+            return_ids = (
+                await session.execute(
+                    select(Invoice.id).where(
+                        Invoice.id.in_(all_ids),
+                        Invoice.ref_invoice_id.is_not(None),
+                    )
+                )
+            ).scalars().all()
+            origin_ids = [iid for iid in all_ids if iid not in set(return_ids)]
+            for iid in list(return_ids) + origin_ids:
+                await session.execute(
+                    delete(InvoiceLine).where(InvoiceLine.invoice_id == iid)
+                )
+                await session.execute(delete(Invoice).where(Invoice.id == iid))
         for mid in movement_ids or []:
             await session.execute(
                 delete(AuditLog).where(

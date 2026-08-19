@@ -65,7 +65,7 @@ async def test_day_profit_totals_match_a_real_sale(client):
         assert body["datee"] == today
         assert body["sales_count"] == 1
         assert body["sales_returns_count"] == 0
-        assert body["sales_net"] == "105.26"
+        assert body["net_revenue"] == "105.26"
         assert body["cogs"] == EXPECTED_COGS
         assert body["expenses"] == EXPECTED_EXPENSES
         assert body["net_profit"] == "35.26"
@@ -87,7 +87,7 @@ async def test_day_profit_empty_day_returns_zeros(client):
     assert rep.status_code == 200, rep.text
     body = rep.json()
     assert body["sales_count"] == 0
-    assert body["sales_net"] == "0.00"
+    assert body["net_revenue"] == "0.00"
     assert body["cogs"] == "0.00"
     assert body["net_profit"] == "0.00"
 

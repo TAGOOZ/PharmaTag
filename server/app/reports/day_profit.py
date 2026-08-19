@@ -5,6 +5,10 @@ returns, net of VAT), cost of goods sold, expenses, net profit, VAT and
 discounts. The money figures reuse the drawer day ledger (`day_ledger`, the
 same source `daily_close` snapshots) so the report and the day close can never
 disagree; invoice counts and net revenue are aggregated here.
+
+`net_revenue` is VAT-exclusive (sales − returns, both net of VAT) — distinct
+from `period_totals`' `net_sales`/`net_purchases`, which are VAT-inclusive
+gross totals net of returns.
 """
 from __future__ import annotations
 
@@ -50,7 +54,7 @@ async def day_profit_report(
         if kind in by:
             by[kind] = {"count": count, "total": money.dec(total), "vat": money.dec(vat)}
 
-    sales_net = money.round2(
+    net_revenue = money.round2(
         (by["sale"]["total"] - by["sale"]["vat"])
         - (by["sale_return"]["total"] - by["sale_return"]["vat"])
     )
@@ -60,7 +64,7 @@ async def day_profit_report(
         "datee": datee.isoformat(),
         "sales_count": by["sale"]["count"],
         "sales_returns_count": by["sale_return"]["count"],
-        "sales_net": money.format2(sales_net),
+        "net_revenue": money.format2(net_revenue),
         "cogs": money.format2(ledger["cost_of_sales"]),
         "expenses": money.format2(ledger["expenses"]),
         "net_profit": money.format2(ledger["net_profit"]),

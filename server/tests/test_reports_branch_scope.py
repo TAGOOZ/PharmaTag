@@ -76,7 +76,7 @@ async def test_reports_are_branch_scoped(client):
         body = dp.json()
         assert body["branch_id"] == branch_id
         assert body["sales_count"] == 0  # branch 1's sale is invisible
-        assert body["sales_net"] == "0.00"
+        assert body["net_revenue"] == "0.00"
 
         sm = await client.get(
             "/api/v1/reports/stock-minimum",

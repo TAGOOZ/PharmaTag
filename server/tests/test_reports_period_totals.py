@@ -193,6 +193,17 @@ async def test_period_totals_respect_single_sided_bounds(client):
         await _cleanup([drug_id], invoice_ids)
 
 
+async def test_period_totals_inverted_date_range_rejected(client):
+    """date_from after date_to is a 400, not a silent empty report."""
+    token = await _login_token(client)
+    rep = await client.get(
+        "/api/v1/reports/period-totals",
+        params={"date_from": "2026-01-10", "date_to": "2026-01-01"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert rep.status_code == 400
+
+
 async def test_period_totals_html_renders_printable(client):
     """format=html returns a printable A4 page carrying the period figures."""
     token = await _login_token(client)

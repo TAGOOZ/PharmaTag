@@ -36,6 +36,14 @@ def _caller_branch_id(user: User) -> int:
     return user.branch_id
 
 
+def _require_ordered_range(date_from: Optional[date], date_to: Optional[date]) -> None:
+    """Reject an inverted range up front instead of returning an empty report."""
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "date_from must not be after date_to"
+        )
+
+
 @router.get("")
 async def list_reports(
     caller: User = Depends(REPORTS),
@@ -73,6 +81,7 @@ async def report_period_totals(
 ):
     """ملخص المبيعات والمشتريات: counts + totals per kind over a date range."""
     branch_id = _caller_branch_id(caller)
+    _require_ordered_range(date_from, date_to)
     payload = await period_totals_report(
         session, branch_id=branch_id, date_from=date_from, date_to=date_to
     )
@@ -111,6 +120,7 @@ async def report_drawer_handover(
 ):
     """تسليم الدرج: per-cashier cash/network in-out totals over a period."""
     branch_id = _caller_branch_id(caller)
+    _require_ordered_range(date_from, date_to)
     payload = await drawer_handover_report(
         session, branch_id=branch_id, date_from=date_from, date_to=date_to
     )

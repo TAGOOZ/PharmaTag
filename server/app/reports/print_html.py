@@ -87,7 +87,7 @@ def render_day_profit(payload: dict) -> str:
         ("عدد مرتجعات البيع", payload["sales_returns_count"]),
     ]
     labels = [
-        ("صافي المبيعات", "sales_net"),
+        ("صافي الإيراد (بدون ضريبة)", "net_revenue"),
         ("تكلفة المبيعات", "cogs"),
         ("المصروفات", "expenses"),
         ("صافي الربح", "net_profit"),
@@ -142,6 +142,12 @@ def render_stock_minimum(payload: dict) -> str:
         for item in payload["items"]
     ]
     body = _table(columns=columns, rows=rows)
+    if payload.get("truncated"):
+        body += (
+            "<p class='muted' style='margin-top:3mm;'>"
+            f"هناك أصناف أخرى غير معروضة (الحد 1000) — العدد الإجمالي {payload['count']}."
+            "</p>"
+        )
     return _page(title_ar="النواقص (أقل من الحد الأدنى)", title_en="Stock Below Minimum", meta=meta, body=body)
 
 
@@ -150,7 +156,10 @@ def render_drawer_handover(payload: dict) -> str:
         ("من تاريخ", payload["date_from"] or "—"),
         ("إلى تاريخ", payload["date_to"] or "—"),
     ]
-    columns = ["الكاشير", "فتح", "كاش مبيعات", "شبكة مبيعات", "مرتجعات", "مصروفات", "صافي كاش"]
+    columns = [
+        "الكاشير", "فتح", "كاش مبيعات", "شبكة مبيعات", "مرتجعات كاش",
+        "مرتجعات شبكة", "مصروفات", "واردة أخرى", "صادرة أخرى", "صافي كاش",
+    ]
     rows = [
         [
             cashier["name"],
@@ -158,12 +167,26 @@ def render_drawer_handover(payload: dict) -> str:
             cashier["cash_sales_in"],
             cashier["card_sales_in"],
             cashier["returns_out"],
+            cashier["card_returns_out"],
             cashier["expenses_out"],
+            cashier["other_in"],
+            cashier["other_out"],
             cashier["net_cash"],
         ]
         for cashier in payload["cashiers"]
     ]
     totals = payload["totals"]
-    foot = ["الإجمالي", totals["opening_in"], totals["cash_sales_in"], totals["card_sales_in"], totals["returns_out"], totals["expenses_out"], ""]
+    foot = [
+        "الإجمالي",
+        totals["opening_in"],
+        totals["cash_sales_in"],
+        totals["card_sales_in"],
+        totals["returns_out"],
+        totals["card_returns_out"],
+        totals["expenses_out"],
+        totals["other_in"],
+        totals["other_out"],
+        totals["net_cash"],
+    ]
     body = _table(columns=columns, rows=rows, foot=foot)
     return _page(title_ar="تسليم الدرج", title_en="Drawer Handover", meta=meta, body=body)

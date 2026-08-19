@@ -3,6 +3,10 @@
 Counts + totals per invoice kind over a date range: sales, sales returns,
 purchases, purchase returns, and the net figures (net sales/purchases, VAT
 net of returns). Read-only over `invoices`; money as exact decimal strings.
+
+`net_sales`/`net_purchases` are VAT-INCLUSIVE gross totals net of returns
+(sale total − sale return total) — unlike `day_profit`'s VAT-exclusive
+`net_revenue`.
 """
 from __future__ import annotations
 

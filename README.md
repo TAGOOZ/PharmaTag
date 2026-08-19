@@ -137,7 +137,7 @@ the ticket ships.
 | web `/` | dashboard (home) | stub — static shell, today-summary not wired | #38 |
 | desktop | module screens (`App.tsx` STUBS) | stubs — same as web | #38 |
 | desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly | #39 |
-| API | money, reports endpoints | drawer + day close are real (`/api/v1/drawer/*`, ticket #14), except `vat_expenses`, which snapshots 0 — no expense-VAT data source exists yet (documented in `app/drawer/movements.py`); reports + the rest of the money API remain stubs | #14 (S2/S3 slices later), #15 |
+| API | money endpoints | drawer + day close are real (`/api/v1/drawer/*`, ticket #14), except `vat_expenses`, which snapshots 0 — no expense-VAT data source exists yet (documented in `app/drawer/movements.py`); the rest of the money API (trial balance, receivables, manual journal, month close) remains stubs | #14 (S2/S3 slices later) |
 | API | settings endpoints | not implemented — no branch-settings API exists | #38 |
 | data | CC0 drug catalog download | documented, not bundled — the importer (`server/app/drugs/importer.py`, CLI `python -m app.drugs.importer <file>`) is real and de-dupes/idempotent, but the 24k-medicine source (CC0 `karem505/egyptian-drug-database`) is fetched at import time, not shipped. A sample fixture lives in `server/tests/fixtures/cc0_catalog_sample.csv`. | #8 (shipped) |
 
@@ -177,7 +177,17 @@ VAT, discounts) into `daily_close` per (branch, datee), gated by `day.close`;
 `vat_expenses` is snapshotted as 0 — the schema has no expense-VAT source yet
 (the expense ledger exists, but the slice writes no expense VAT); reopen is
 legacy level ≥ 7 with a reversal + audit, and a closed day rejects
-new movements until reopened) — and the web + desktop **الأدوية** screens, the web forced-reset
+new movements until reopened) — and basic reports (`/api/v1/reports`:
+`GET /reports` catalog, `GET /reports/day-profit` (ربح اليوم — net revenue,
+COGS, expenses, net profit, VAT, discounts; matches the drawer day ledger),
+`GET /reports/period-totals` (ملخص المبيعات والمشتريات — counts + totals per
+sale/return/purchase/return kind over a date range, returns netted),
+`GET /reports/stock-minimum` (النواقص — drugs below the reorder point, shortage
+= minimum − qty, sorted desc), `GET /reports/drawer-handover` (تسليم الدرج —
+per-cashier opening/cash/card/returns/expenses/net over a period); every report
+is branch-scoped to the caller and gated by the `reports` permission (admin
+level-9 or accountant role), answers JSON by default and a black-on-white A4
+page with `format=html` — plus the web + desktop **الأدوية** screens, the web forced-reset
 (first-login) and voluntary change-password flows (ticket #37).
 
 ## 7. CI

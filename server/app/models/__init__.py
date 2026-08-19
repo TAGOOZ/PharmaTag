@@ -40,6 +40,7 @@ from app.models.core import AppConfig, AuditLog, Branch, SyncLog
 from app.models.drawer import DailyClose, DrawerMovement
 from app.models.drugs import Drug, DrugBarcode, PriceChangeLog
 from app.models.plugins import AppPlugin, PluginBranchGrant, PluginDependencyRow, PluginSettings
+from app.models.receivables import SettlementVoucher
 from app.models.sales import Invoice, InvoiceLine, InvoiceVersion, PaymentSplit
 from app.models.stock import BranchStock, StockBatch, StockCorrectionRequest
 
@@ -70,6 +71,7 @@ __all__ = [
     "PluginSettings",
     "PriceChangeLog",
     "Role",
+    "SettlementVoucher",
     "StockBatch",
     "StockCorrectionRequest",
     "SyncLog",

@@ -35,6 +35,7 @@ LEGACY_LEVEL_FLOOR = {
     "drawer.manage": 3,  # manual cash-drawer movements (S1.8, ticket #14)
     "accounts.manage": 7,  # chart-of-accounts edits (S2.1, ticket #16 — ledger area, plan/02 §3 ≥7)
     "journals.manage": 7,  # manual journal entries (S2.2, ticket #17 — ledger area, plan/02 §3 ≥7)
+    "receivables.manage": 7,  # settlements سند قبض/سند صرف (S2.4, ticket #19 — ledger area, plan/02 §3 ≥7)
     "approvals": 5,
     "reports": 9,
     "users.manage": 6,

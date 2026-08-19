@@ -33,6 +33,7 @@ from app.sales.payload import _sale_payload
 from app.sales.payments import _resolve_payments
 from app.sales.pricing import _price_for, _sale_totals
 from app.sales.stock import allocate_expiry_fifo, decrement_allocations
+from app.receivables.service import ensure_credit_ok
 
 
 async def _primary_barcode(session: AsyncSession, drug_id: int) -> str:
@@ -121,6 +122,14 @@ async def _build_full_sale(
 
     totals = _sale_totals(resolved, disc_percent, inclusive=inclusive)
     payed, agel, splits = _resolve_payments(payments, totals["total"])
+
+    if agel > 0 and customer is not None:
+        # F11.3: a credit sale must not push the customer's AR debt past the
+        # party's credit limit (0 = unlimited). Runs in this transaction so the
+        # check and the posting can never race.
+        await ensure_credit_ok(
+            session, branch_id=branch_id, party=customer, new_agel=agel
+        )
 
     invoice = Invoice(
         branch_id=branch_id,

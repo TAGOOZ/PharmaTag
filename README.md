@@ -137,7 +137,7 @@ the ticket ships.
 | web `/` | dashboard (home) | stub — static shell, today-summary not wired | #38 |
 | desktop | module screens (`App.tsx` STUBS) | stubs — same as web | #38 |
 | desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly | #39 |
-| API | money endpoints | drawer + day close are real (`/api/v1/drawer/*`, ticket #14), except `vat_expenses`, which snapshots 0 — no expense-VAT data source exists yet (documented in `app/drawer/movements.py`); manual journal entries are real (`/api/v1/journals/manual`, ticket #17); كشف حساب + supplier payables are real (`/api/v1/parties/{id}/statement` + `/api/v1/parties/payables`, ticket #18); the rest of the money API (trial balance, receivables, month close) remains stubs | #14 (S2/S3 slices later) |
+| API | money endpoints | drawer + day close are real (`/api/v1/drawer/*`, ticket #14), except `vat_expenses`, which snapshots 0 — no expense-VAT data source exists yet (documented in `app/drawer/movements.py`); manual journal entries are real (`/api/v1/journals/manual`, ticket #17); كشف حساب + supplier payables are real (`/api/v1/parties/{id}/statement` + `/api/v1/parties/payables`, ticket #18); receivables + settlement vouchers (سند قبض/صرف) are real (`/api/v1/receivables/*`, ticket #19); the rest of the money API (trial balance, month close) remains stubs | #14 (S2/S3 slices later) |
 | API | settings endpoints | not implemented — no branch-settings API exists | #38 |
 | data | CC0 drug catalog download | documented, not bundled — the importer (`server/app/drugs/importer.py`, CLI `python -m app.drugs.importer <file>`) is real and de-dupes/idempotent, but the 24k-medicine source (CC0 `karem505/egyptian-drug-database`) is fetched at import time, not shipped. A sample fixture lives in `server/tests/fixtures/cc0_catalog_sample.csv`. | #8 (shipped) |
 
@@ -209,7 +209,22 @@ balance = the party's lines before the period, movements carry a running
 balance, closing = opening + movements; period is month/year (canonical, like
 the legacy monthe/yearo) or a date range — passing both or an inverted range is
 a 400; reads are branch-scoped and open to any authenticated user, JSON by
-default and a black-on-white A4 page with `format=html`) — plus the web +
+default and a black-on-white A4 page with `format=html`) — plus receivables
+and settlement vouchers (`/api/v1/receivables/*`: a `receivables.manage` holder
+(admin, manager, or accountant role — legacy level ≥ 7) posts a سند قبض
+(receipt: Dr cash/network, Cr AR) or سند صرف (payment: Dr AP, Cr cash/network)
+as a dated, described, balanced journal riding the journal engine with a
+`settlement_vouchers` reference row + drawer movement atomically under the
+branch advisory lock, entry numbers monotonic per branch/datee; `method=card`
+lands as a `network` drawer movement; receipts reduce a customer's AR statement
+balance and payments a supplier's AP payable, overpayment goes negative
+(advance) in the register; `POST /vouchers/{id}/reverse` posts the
+opposite-sided reversal journal pinned to the same AR/AP accounts — reversing a
+reversal is 409; credit sales check the customer's `credit_limit` (0 =
+unlimited) in the sale's own transaction, so a sale can never push the AR debt
+past the limit; voucher list/detail + `GET /receivables` (customers sorted desc
+by debt, with totals, JSON or A4 HTML) are branch-scoped reads open to any
+authenticated user) — plus the web +
 desktop **الأدوية** screens, the web forced-reset
 (first-login) and voluntary change-password flows (ticket #37).
 

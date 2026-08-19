@@ -47,6 +47,8 @@ ALREADY_CLOSED = HTTPException(
 
 
 def _method_to_drawer(method: str) -> str:
+    if method in ("cash", "network"):
+        return method
     if method in _CASH_METHODS:
         return "cash"
     if method in _NETWORK_METHODS:

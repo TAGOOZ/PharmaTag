@@ -534,6 +534,23 @@ CREATE TABLE manual_journal_entries (
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE settlement_vouchers (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch_id   INTEGER NOT NULL REFERENCES branches(id),
+    voucher_no  INTEGER NOT NULL,
+    voucher_type TEXT NOT NULL CHECK (voucher_type IN ('receipt','payment')),
+    party_id    INTEGER NOT NULL REFERENCES parties(id),
+    datee       TEXT NOT NULL,
+    method      TEXT NOT NULL CHECK (method IN ('cash','network')),
+    amount      INTEGER NOT NULL DEFAULT 0 CHECK (amount > 0),   -- ×100
+    journal_id  INTEGER NOT NULL REFERENCES journals(id),
+    description TEXT DEFAULT '',
+    reverses_voucher_id INTEGER REFERENCES settlement_vouchers(id),
+    created_by  INTEGER REFERENCES users(id),
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (branch_id, voucher_no)
+);
+
 CREATE TABLE app_config (
     key           TEXT PRIMARY KEY,
     value         TEXT DEFAULT '',

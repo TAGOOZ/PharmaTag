@@ -22,6 +22,7 @@ from app.parties.router import router as parties_router
 from app.plugins.registry import registry
 from app.plugins.router import router as plugins_router
 from app.purchases.router import router as purchases_router
+from app.receivables.router import router as receivables_router
 from app.reports.router import router as reports_router
 from app.sales.router import router as sales_router
 from app.statements.router import router as statements_router
@@ -87,6 +88,9 @@ def create_app() -> FastAPI:
     )
     application.include_router(
         reports_router, prefix="/api/v1/reports", tags=["reports"]
+    )
+    application.include_router(
+        receivables_router, prefix="/api/v1/receivables", tags=["receivables"]
     )
 
     # plan/02 §3: validation failures surface as 400 (not FastAPI's 422).

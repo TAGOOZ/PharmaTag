@@ -61,7 +61,10 @@ async def test_return_explicit_payments_override(client):
     invoice_ids: list[int] = []
     try:
         token = await _login_token(client)
-        sale = await _sale(client, token, [{"drug_id": drug_id, "qty": "10"}])
+        sale = await _sale(
+            client, token, [{"drug_id": drug_id, "qty": "10"}],
+            payments=[{"method": "credit", "amount": "100.00"}],
+        )
         invoice_ids.append(sale["id"])
         line_id = sale["lines"][0]["id"]
         r = await client.post(

@@ -166,6 +166,44 @@ async def test_purchase_return_credit_split_reduces_supplier_payable(client):
         await _cleanup([drug_id], invoice_ids, [supplier_id])
 
 
+async def test_purchase_return_cash_paid_credit_refund_rejected(client):
+    """A fully cash-paid purchase posts no AP credit; returning it with an
+    explicit credit refund would reduce a supplier payable that never existed
+    (a negative AP with no preceding credit). Rejected 400, nothing written."""
+    drug_id = await _make_drug(tax_type="exempt")
+    supplier_id = await _make_supplier()
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        pur = await _purchase(
+            client, token, supplier_id,
+            [{"drug_id": drug_id, "qty": "10", "unit_cost": "10.0000"}],
+            payments=[{"method": "cash", "amount": "100.00"}],
+        )
+        invoice_ids.append(pur["id"])
+
+        r = await client.post(
+            f"/api/v1/purchases/{pur['id']}/return",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "lines": [{"ref_invoice_line_id": pur["lines"][0]["id"], "qty": "4"}],
+                "payments": [{"method": "credit", "amount": "40.00"}],
+            },
+        )
+        assert r.status_code == 400, r.text
+        assert "credit portion" in r.json()["detail"]
+
+        async with SessionLocal() as session:
+            ret = (
+                await session.execute(
+                    select(Invoice).where(Invoice.ref_invoice_id == pur["id"])
+                )
+            ).scalars().all()
+            assert ret == []
+    finally:
+        await _cleanup([drug_id], invoice_ids, [supplier_id])
+
+
 async def test_purchase_return_explicit_payments_override(client):
     """Client-provided payments override the proportional mirror."""
     drug_id = await _make_drug(tax_type="exempt")
@@ -174,7 +212,8 @@ async def test_purchase_return_explicit_payments_override(client):
     try:
         token = await _login_token(client)
         pur = await _purchase(
-            client, token, supplier_id, [{"drug_id": drug_id, "qty": "10", "unit_cost": "10.0000"}]
+            client, token, supplier_id, [{"drug_id": drug_id, "qty": "10", "unit_cost": "10.0000"}],
+            payments=[{"method": "credit", "amount": "100.00"}],
         )
         invoice_ids.append(pur["id"])
         ret = await _return(

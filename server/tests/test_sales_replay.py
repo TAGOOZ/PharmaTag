@@ -7,6 +7,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
+from fastapi import HTTPException
 from sqlalchemy import delete, select
 
 from app.core.db import SessionLocal
@@ -20,6 +21,7 @@ from app.models import (
     InvoiceLine,
     Journal,
     JournalLine,
+    Party,
     PaymentSplit,
     StockBatch,
     SyncLog,
@@ -406,3 +408,54 @@ async def test_replay_is_atomic_per_row_and_balanced():
         assert credit == Decimal("120.00")
     finally:
         await _cleanup([drug_id], invoice_ids, sync_ids)
+
+
+async def test_replay_rejects_party_kind_and_inactive_mismatch():
+    """Replay re-validates the party exactly like live: a synced sale whose
+    party is supplier-kind or inactive on the target store is rejected 409 —
+    the customer ledger must never attach a sale to a party that couldn't have
+    been its customer (live rejects these with 400; replay uses 409)."""
+    drug_id = await _make_drug([("10.0000", "5.0000", None)])
+    batch_ids = await _batch_ids(drug_id)
+    party_ids: list[int] = []
+    try:
+        async with SessionLocal() as session:
+            supplier_party = Party(
+                branch_id=BRANCH_ID,
+                kind="supplier",
+                namee=_uniq("sup"),
+                randomid=_uniq("pty"),
+                active=True,
+            )
+            inactive_party = Party(
+                branch_id=BRANCH_ID,
+                kind="customer",
+                namee=_uniq("cust"),
+                randomid=_uniq("pty"),
+                active=False,
+            )
+            session.add_all([supplier_party, inactive_party])
+            await session.flush()
+            party_ids = [supplier_party.id, inactive_party.id]
+            await session.commit()
+
+        key = list(batch_ids)[0]
+        for party_id in party_ids:
+            payload = _payload("70006", drug_id, batch_ids[key], key)
+            payload["party_id"] = party_id
+            async with SessionLocal() as session:
+                from app.sales.service import apply_sale_payload
+
+                try:
+                    await apply_sale_payload(session, branch_id=BRANCH_ID, payload=payload)
+                except HTTPException as exc:
+                    assert exc.status_code == 409, exc.detail
+                else:
+                    raise AssertionError("expected 409 for party kind/active mismatch")
+        assert await _stock_qty(drug_id) == Decimal("10.0000")
+    finally:
+        await _cleanup([drug_id], [], [])
+        async with SessionLocal() as session:
+            for pid in party_ids:
+                await session.execute(delete(Party).where(Party.id == pid))
+            await session.commit()

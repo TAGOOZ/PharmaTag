@@ -13,6 +13,7 @@ running balance so the page reads like a physical ledger sheet.
 """
 from __future__ import annotations
 
+import calendar
 from datetime import date
 from typing import Optional
 
@@ -157,7 +158,9 @@ async def get_statement(
 
     Period: month/year (canonical, like the legacy monthe/yearo) OR an inclusive
     date range; passing both is rejected as ambiguous. Movement rows are ordered
-    chronologically (datee, entry_no, line id) with a running balance.
+    chronologically (datee, entry_no, line id) with a running balance. Opening
+    and movements come from ONE query (a window aggregate over the same rows),
+    so opening + Σmovements == closing holds even under concurrent writes.
     """
     party = await _party_or_404(session, branch_id, party_id)
     side = _side_for(party, side)
@@ -171,68 +174,63 @@ async def get_statement(
     if date_from is not None and date_to is not None and date_from > date_to:
         raise _INVERTED_RANGE
 
-    base, criteria = _lines_query(branch_id, account_id, party_id)
-
     if month is not None or year is not None:
         today = business_date()
         m = month or today.month
         y = year or today.year
-        before = await _aggregate(
-            session,
-            criteria
-            + [
-                (JournalLine.year < y)
-                | ((JournalLine.year == y) & (JournalLine.month < m))
-            ],
-        )
-        rows = (
-            await session.execute(
-                base.where(
-                    (JournalLine.year == y) & (JournalLine.month == m)
-                ).order_by(JournalLine.datee, Journal.entry_no, JournalLine.id)
-            )
-        ).all()
+        period_month, period_year = m, y
+        period_date_from = period_date_to = None
+        start = date(y, m, 1)
+        end = date(y, m, calendar.monthrange(y, m)[1])
+    elif date_from is not None or date_to is not None:
+        period_month = period_year = None
+        period_date_from = date_from
+        period_date_to = date_to
+        start = date_from or date(1900, 1, 1)
+        end = date_to or date(9999, 12, 31)
     else:
-        if date_from is None and date_to is None:
-            today = business_date()
-            y = today.year
-            m = today.month
-            before = await _aggregate(
-                session,
-                criteria
-                + [
-                    (JournalLine.year < y)
-                    | ((JournalLine.year == y) & (JournalLine.month < m))
-                ],
-            )
-            rows = (
-                await session.execute(
-                    base.where(
-                        (JournalLine.year == y) & (JournalLine.month == m)
-                    ).order_by(JournalLine.datee, Journal.entry_no, JournalLine.id)
-                )
-            ).all()
-        else:
-            start = date_from or date(1900, 1, 1)
-            end = date_to or date(9999, 12, 31)
-            before = await _aggregate(session, criteria + [JournalLine.datee < start])
-            rows = (
-                await session.execute(
-                    base.where(
-                        JournalLine.datee >= start, JournalLine.datee <= end
-                    ).order_by(JournalLine.datee, Journal.entry_no, JournalLine.id)
-                )
-            ).all()
+        today = business_date()
+        y = today.year
+        m = today.month
+        period_month, period_year = m, y
+        period_date_from = period_date_to = None
+        start = date(y, m, 1)
+        end = date(y, m, calendar.monthrange(y, m)[1])
 
-    opening = money.dec(before[0]) - money.dec(before[1])
-    if side == "ap":
-        opening = -opening
+    opening_debit = func.coalesce(
+        func.sum(JournalLine.debit).filter(JournalLine.datee < start).over(), 0
+    )
+    opening_credit = func.coalesce(
+        func.sum(JournalLine.credit).filter(JournalLine.datee < start).over(), 0
+    )
+    rows = (
+        await session.execute(
+            select(JournalLine, Journal, Account, opening_debit, opening_credit)
+            .join(Journal, Journal.id == JournalLine.journal_id)
+            .join(Account, Account.id == JournalLine.account_id)
+            .where(
+                JournalLine.branch_id == branch_id,
+                JournalLine.account_id == account_id,
+                JournalLine.contra_party_id == party_id,
+                (JournalLine.datee < start) | JournalLine.datee.between(start, end),
+            )
+            .order_by(JournalLine.datee, Journal.entry_no, JournalLine.id)
+        )
+    ).all()
+
+    opening = money.dec("0")
+    if rows:
+        opening = money.dec(rows[0][3]) - money.dec(rows[0][4])
+        if side == "ap":
+            opening = -opening
 
     running = opening
     movements = []
     debit_total = money.dec("0")
     credit_total = money.dec("0")
-    for line, journal, acct in rows:
+    for line, journal, acct, _, _ in rows:
+        if line.datee < start:
+            continue  # prior-period lines feed the opening window only
         movement, debit, credit = _signed(line, side)
         running += movement
         movements.append(
@@ -260,10 +258,10 @@ async def get_statement(
         "account_code": account.code if account else "",
         "account_name": account.name_ar if account else "",
         "period": {
-            "month": month,
-            "year": year,
-            "date_from": date_from.isoformat() if date_from else None,
-            "date_to": date_to.isoformat() if date_to else None,
+            "month": period_month,
+            "year": period_year,
+            "date_from": period_date_from.isoformat() if period_date_from else None,
+            "date_to": period_date_to.isoformat() if period_date_to else None,
         },
         "opening_balance": money.format2(opening),
         "closing_balance": money.format2(running),
@@ -277,7 +275,9 @@ async def get_payables(
     session: AsyncSession, *, branch_id: int
 ) -> dict:
     """All active supplier/both parties with their all-time net AP balance,
-    sorted descending (biggest payable first), with a grand total."""
+    sorted descending (biggest payable first). The grand total counts only
+    positive balances (what the branch actually owes); a supplier with a net
+    credit (overpayment) still appears in the list, sorted last."""
     parties = (
         await session.execute(
             select(Party).where(
@@ -309,7 +309,8 @@ async def get_payables(
                 "balance": money.format2(balance),
             }
         )
-        total += balance
+        if balance > 0:
+            total += balance
 
     rows.sort(key=lambda r: money.dec(r["balance"]), reverse=True)
     return {

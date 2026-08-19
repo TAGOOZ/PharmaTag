@@ -9,7 +9,7 @@ all-time net AP balance. Money leaves as exact decimal strings (plan/02 §2).
 from __future__ import annotations
 
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
@@ -29,14 +29,6 @@ def _caller_branch_id(user: User) -> int:
     return user.branch_id
 
 
-def _month(value: Optional[int]) -> Optional[int]:
-    if value is None:
-        return None
-    if value < 1 or value > 12:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "month must be 1..12")
-    return value
-
-
 @router.get("/{party_id}/statement")
 async def get_statement(
     party_id: int,
@@ -45,7 +37,7 @@ async def get_statement(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     side: Optional[str] = None,
-    format: str = "json",
+    format: Literal["json", "html"] = "json",
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -71,7 +63,7 @@ async def get_statement(
 
 @router.get("/payables")
 async def get_payables(
-    format: str = "json",
+    format: Literal["json", "html"] = "json",
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):

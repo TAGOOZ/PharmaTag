@@ -248,6 +248,58 @@ async def test_sale_party_missing_is_404(client):
         await _cleanup([drug_id], invoice_ids)
 
 
+async def test_cash_sale_return_credit_refund_rejected(client):
+    """A cash sale posts no AR debit; returning it with an explicit credit
+    refund would leave the customer ledger with a negative AR and no preceding
+    debit (the standard: AR is only involved when the sale was on credit). The
+    return is rejected 400, nothing half-written."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        price="10.0000",
+        batches=[("10.0000", "5.0000", "2026-01-01")],
+        stock_qty="20.0000",
+    )
+    customer_id = await _make_customer()
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        sale_r = await client.post(
+            "/api/v1/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "party_id": customer_id,
+                "lines": [{"drug_id": drug_id, "qty": "5"}],
+                "payments": [{"method": "cash", "amount": "50.00"}],
+            },
+        )
+        assert sale_r.status_code == 201, sale_r.text
+        sale = sale_r.json()
+        invoice_ids.append(sale["id"])
+        line_id = sale["lines"][0]["id"]
+
+        r = await client.post(
+            f"/api/v1/sales/{sale['id']}/return",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "lines": [{"ref_invoice_line_id": line_id, "qty": "5"}],
+                "payments": [{"method": "credit", "amount": "50.00"}],
+            },
+        )
+        assert r.status_code == 400, r.text
+        assert "credit portion" in r.json()["detail"]
+
+        async with SessionLocal() as session:
+            ret = (
+                await session.execute(
+                    select(Invoice).where(Invoice.ref_invoice_id == sale["id"])
+                )
+            ).scalars().all()
+            assert ret == []
+    finally:
+        await _cleanup([drug_id], invoice_ids)
+        await _cleanup_party(customer_id)
+
+
 async def test_sale_return_mirrors_customer_party(client):
     """Returning a credit sale to a tracked customer mirrors the party on the
     return header and tags the return journal's AR credit line with the

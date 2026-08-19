@@ -74,6 +74,10 @@ OVER_RETURN = HTTPException(
     status.HTTP_400_BAD_REQUEST,
     "cannot return more than the quantity sold",
 )
+CREDIT_OVERFLOW = HTTPException(
+    status.HTTP_400_BAD_REQUEST,
+    "credit refund exceeds the original sale's credit portion",
+)
 
 
 async def _already_returned(session: AsyncSession, original_line_id: int) -> Decimal:
@@ -85,6 +89,24 @@ async def _already_returned(session: AsyncSession, original_line_id: int) -> Dec
             .where(
                 InvoiceLine.ref_invoice_line_id == original_line_id,
                 Invoice.kind == "sale_return",
+            )
+        )
+    ).scalar_one()
+    return dec(total)
+
+
+async def _already_credited(session: AsyncSession, original_id: int) -> Decimal:
+    """Credit (agel) already refunded for this sale by prior sale_return
+    invoices. An explicit credit refund must stay within the original sale's
+    credit portion (an AR credit must be backed by an AR debit): refunding a
+    cash sale — which never posted an AR line — as credit would leave the
+    customer's ledger with a negative AR and no preceding debit."""
+    total = (
+        await session.execute(
+            select(func.coalesce(func.sum(Invoice.agel), 0)).where(
+                Invoice.ref_invoice_id == original_id,
+                Invoice.kind == "sale_return",
+                Invoice.status == "saved",
             )
         )
     ).scalar_one()
@@ -359,6 +381,8 @@ async def _build_full_return(
         payed, agel, splits = _resolve_payments(payments, totals["total"])
     else:
         payed, agel, splits = await _mirror_refund(session, original, totals["total"])
+    if agel > dec(original.agel) - await _already_credited(session, original.id):
+        raise CREDIT_OVERFLOW
 
     invoice = Invoice(
         branch_id=branch_id,

@@ -11,7 +11,10 @@ from decimal import Decimal
 from sqlalchemy import delete, select
 
 from app.core.db import SessionLocal
-from app.models import Drug, Invoice, Party
+from app.core.time import business_date
+from app.models import Balance, Drug, Invoice, Journal, JournalLine, Party
+from app.money.journal import post_journal
+from app.sales.numbering import next_journal_entry_no
 from tests.purchase_returns_test_utils import _cleanup as _cleanup_purchase_return
 from tests.purchase_test_utils import _cleanup as _cleanup_purchase, _make_supplier
 from tests.returns_test_utils import _cleanup
@@ -103,6 +106,41 @@ async def test_customer_statement_shows_credit_sale_with_running_balance(client)
         assert m["credit"] == "0.00"
         assert m["running_balance"] == "50.00"
         assert "فاتورة بيع" in m["description"]
+    finally:
+        await _cleanup([drug_id], invoice_ids)
+        await _cleanup_party(customer_id)
+
+
+async def test_statement_default_period_echoes_business_month(client):
+    """No period params = the business month; the response period must state the
+    resolved month/year, not the raw None params (regression: the default path
+    rendered الشهر: None / None)."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        price="10.0000",
+        batches=[("10.0000", "5.0000", "2026-01-01")],
+        stock_qty="20.0000",
+    )
+    customer_id = await _make_customer()
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        sale = await _credit_sale(
+            client, token, drug_id, party_id=customer_id, datee="2026-08-10"
+        )
+        invoice_ids.append(sale["id"])
+
+        r = await client.get(
+            f"/api/v1/parties/{customer_id}/statement",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        st = r.json()
+        today = business_date()
+        assert st["period"]["month"] == today.month
+        assert st["period"]["year"] == today.year
+        assert st["period"]["date_from"] is None
+        assert st["period"]["date_to"] is None
     finally:
         await _cleanup([drug_id], invoice_ids)
         await _cleanup_party(customer_id)
@@ -594,6 +632,12 @@ async def test_invalid_side_and_month_validation(client):
         assert r.status_code == 400, r.text
 
         r = await client.get(
+            f"/api/v1/parties/{customer_id}/statement?month=8&year=2026&format=pdf",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 400, r.text
+
+        r = await client.get(
             f"/api/v1/parties/{customer_id}/statement?month=8&year=2026&side=ap",
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -698,6 +742,59 @@ async def test_statement_cross_branch_party_is_404(client):
             await session.execute(
                 delete(Branch).where(Branch.pharmacyid.like("sb%"))
             )
+            await session.commit()
+
+
+async def test_payables_credit_balance_supplier_excluded_from_total(client):
+    """A supplier with a net credit (overpayment — e.g. from legacy/manual data)
+    still appears in the payables list, sorted last, but the grand total counts
+    only what the branch actually owes (positive payables)."""
+    supplier_id = await _make_supplier()
+    journal_id = None
+    try:
+        async with SessionLocal() as session:
+            entry_no = await next_journal_entry_no(
+                session, BRANCH_ID, date(2026, 8, 10)
+            )
+            journal = await post_journal(
+                session,
+                branch_id=BRANCH_ID,
+                user_id=None,
+                datee=date(2026, 8, 10),
+                entry_no=entry_no,
+                description="seed AP overpayment",
+                source="manual",
+                entries=[
+                    ("2000", Decimal("50.00"), Decimal("0")),
+                    ("5000", Decimal("0"), Decimal("50.00")),
+                ],
+                contra_party_by_code={"2000": supplier_id},
+            )
+            journal_id = journal.id
+            await session.commit()
+
+        token = await _login_token(client)
+        r = await client.get(
+            "/api/v1/parties/payables",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        pay = r.json()
+        by_id = {p["party_id"]: p for p in pay["payables"]}
+        assert by_id[supplier_id]["balance"] == "-50.00"
+        assert pay["payables"][-1]["party_id"] == supplier_id
+        assert pay["total"] == "0.00"
+    finally:
+        async with SessionLocal() as session:
+            if journal_id is not None:
+                await session.execute(
+                    delete(JournalLine).where(JournalLine.journal_id == journal_id)
+                )
+                await session.execute(delete(Journal).where(Journal.id == journal_id))
+            await session.execute(
+                delete(Balance).where(Balance.branch_id == BRANCH_ID)
+            )
+            await session.execute(delete(Party).where(Party.id == supplier_id))
             await session.commit()
 
 

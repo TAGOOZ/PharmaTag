@@ -50,6 +50,16 @@ async def apply_sale_payload(
                 status.HTTP_409_CONFLICT,
                 f"party {party_id} missing on target store",
             )
+        if customer.kind not in ("customer", "both"):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"party {party_id} is not a customer on target store",
+            )
+        if not customer.active:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"party {party_id} is inactive on target store",
+            )
 
     resolved: list[tuple[dict, list[Allocation]]] = []
     cogs_total = Decimal("0")

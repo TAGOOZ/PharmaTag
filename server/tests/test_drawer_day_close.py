@@ -390,6 +390,74 @@ async def test_reclose_resnapshots_drawer_start(client):
         await _delete_users(["drw_mgr_27"])
 
 
+async def test_correction_out_cannot_take_the_float_below_zero(client):
+    """A cash correction adjusts the float record (drawer_start); a
+    correction-out that would push the day's float below zero is refused (400),
+    so a mis-entered correction can never produce a negative drawer_start. The
+    float is consumed down to zero but never past it."""
+    _mark_closed("2026-02-07")
+    admin = await _login_token(client)
+    try:
+        for body in [
+            {"direction": "in", "reason": "opening", "method": "cash", "amount": "50.00"},
+        ]:
+            r = await client.post(
+                "/api/v1/drawer/movements",
+                headers={"Authorization": f"Bearer {admin}"},
+                json={**body, "datee": "2026-02-07"},
+            )
+            assert r.status_code == 201, r.text
+
+        oversized = await client.post(
+            "/api/v1/drawer/movements",
+            headers={"Authorization": f"Bearer {admin}"},
+            json={
+                "direction": "out",
+                "reason": "correction",
+                "method": "cash",
+                "amount": "60.00",
+                "datee": "2026-02-07",
+            },
+        )
+        assert oversized.status_code == 400
+        assert "below zero" in oversized.text
+
+        ok = await client.post(
+            "/api/v1/drawer/movements",
+            headers={"Authorization": f"Bearer {admin}"},
+            json={
+                "direction": "out",
+                "reason": "correction",
+                "method": "cash",
+                "amount": "40.00",
+                "datee": "2026-02-07",
+            },
+        )
+        assert ok.status_code == 201, ok.text
+
+        past_zero = await client.post(
+            "/api/v1/drawer/movements",
+            headers={"Authorization": f"Bearer {admin}"},
+            json={
+                "direction": "out",
+                "reason": "correction",
+                "method": "cash",
+                "amount": "20.00",
+                "datee": "2026-02-07",
+            },
+        )
+        assert past_zero.status_code == 400
+        assert "below zero" in past_zero.text
+
+        rc = await _close_day(client, admin, datee="2026-02-07", counted_cash="10")
+        assert rc.status_code == 200, rc.text
+        assert rc.json()["drawer_start"] == "10.00"
+        assert rc.json()["expected_cash"] == "10.00"
+        assert rc.json()["difference"] == "0.00"
+    finally:
+        await _cleanup_drawer()
+
+
 async def test_duplicate_opening_on_a_closed_day_is_409(client):
     """A closed day rejects ANY movement with 409 — even a duplicate opening,
     which (with no existing opening) previously slipped past the opening guard

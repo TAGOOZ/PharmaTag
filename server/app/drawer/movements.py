@@ -109,6 +109,12 @@ async def record_movement(
                 status.HTTP_400_BAD_REQUEST,
                 "ref_invoice_id must reference a document of your branch",
             )
+    if reason == "correction" and direction == "out" and method == "cash":
+        if await _drawer_float(session, branch_id=branch_id, datee=datee) - amount < 0:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "correction-out would take the drawer float below zero",
+            )
     if reason == "opening":
         if direction != "in" or method != "cash":
             raise HTTPException(
@@ -213,6 +219,23 @@ async def _sum_movements(
     return dec((await session.execute(q)).scalar_one())
 
 
+async def _drawer_float(
+    session: AsyncSession, *, branch_id: int, datee: date
+) -> Decimal:
+    """The recorded cash float: the day's opening (+ net cash corrections).
+
+    A correction adjusts the float record, so an in-correction raises it and
+    an out-correction lowers it; opening is set once per day. This is the value
+    `day_ledger` snapshots as `drawer_start` — and the bound a cash
+    correction-out must not push below zero.
+    """
+    return round2(
+        await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", reason="opening", method="cash")
+        + await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", reason="correction", method="cash")
+        - await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", reason="correction", method="cash")
+    )
+
+
 async def _invoice_sums(
     session: AsyncSession, *, branch_id: int, datee: date
 ) -> dict[str, dict[str, Decimal]]:
@@ -278,11 +301,7 @@ async def day_ledger(
     network_in = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", method="network")
     network_out = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", method="network")
 
-    drawer_start = round2(
-        await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", reason="opening", method="cash")
-        + await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", reason="correction", method="cash")
-        - await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", reason="correction", method="cash")
-    )
+    drawer_start = await _drawer_float(session, branch_id=branch_id, datee=datee)
     cash_sales = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", reason=SALE, method="cash")
     cash_returns = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", reason=SALE_RETURN, method="cash")
     network_sales = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", reason=SALE, method="network")
@@ -315,8 +334,11 @@ async def day_ledger(
     net_cash = round2(cash_sales - cash_returns)
     net_network = round2(network_sales - network_returns)
     # expected counts the opening float once: drawer_start already holds the
-    # opening (+ net corrections), so the day's OTHER cash receipts are
-    # (cash_in − drawer_start), minus cash out.
+    # opening (+ net cash corrections), so the day's OTHER cash receipts are
+    # (cash_in − drawer_start), minus cash out. A cash correction therefore
+    # appears on the report twice (drawer_start as a float adjustment AND
+    # manual_cash as a manual movement) but the identity simplifies to
+    # (cash_in − cash_out), so the equation still counts it exactly once.
     expected_cash = round2(drawer_start + (cash_in - drawer_start) - cash_out)
     net_profit = round2(sales_net - cogs - expenses)
 

@@ -742,3 +742,237 @@ async def test_list_limit_zero_returns_empty(client):
     )
     assert g.status_code == 200, g.text
     assert g.json()["accounts"] == []
+
+
+async def test_patch_same_code_preserves_master(client):
+    """Re-sending the account's own code (a no-op PATCH, common in form
+    round-trips) must not wipe the parent linkage: master stays the parent's
+    code, parent_id stays put."""
+    token = await _login_token(client)
+    parent = await _account_id("110")
+    r = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"code": _uniq("keep"), "name_ar": "keep", "type": "asset", "parent_id": parent},
+    )
+    account_id = r.json()["id"]
+    code = r.json()["code"]
+    try:
+        p = await client.patch(
+            f"/api/v1/accounts/{account_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": code},
+        )
+        assert p.status_code == 200, p.text
+        assert p.json()["parent_id"] == parent
+        assert p.json()["master"] == "110"
+    finally:
+        await _cleanup_accounts([account_id])
+
+
+async def test_code_rename_preserves_parent_master(client):
+    """Renaming a childless unused account's code keeps the master (parent
+    code) intact; only fary follows the new code."""
+    token = await _login_token(client)
+    parent = await _account_id("110")
+    r = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"code": _uniq("old"), "name_ar": "old", "type": "asset", "parent_id": parent},
+    )
+    account_id = r.json()["id"]
+    new_code = _uniq("new")
+    try:
+        p = await client.patch(
+            f"/api/v1/accounts/{account_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": new_code},
+        )
+        assert p.status_code == 200, p.text
+        assert p.json()["parent_id"] == parent
+        assert p.json()["master"] == "110"
+        assert p.json()["fary"] == new_code
+    finally:
+        await _cleanup_accounts([account_id])
+
+
+async def test_create_under_inactive_parent_is_409(client):
+    """An active child under a deactivated parent would be postable despite the
+    parent's 'not postable' state — creating one is refused."""
+    token = await _login_token(client)
+    r = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"code": _uniq("par"), "name_ar": "par", "type": "asset"},
+    )
+    parent_id = r.json()["id"]
+    try:
+        p = await client.patch(
+            f"/api/v1/accounts/{parent_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"is_active": False},
+        )
+        assert p.status_code == 200, p.text
+        c = await client.post(
+            "/api/v1/accounts",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": _uniq("kid"), "name_ar": "kid", "type": "asset", "parent_id": parent_id},
+        )
+        assert c.status_code == 409, c.text
+    finally:
+        await _cleanup_accounts([parent_id])
+
+
+async def test_reparent_onto_inactive_parent_is_409(client):
+    token = await _login_token(client)
+    r = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"code": _uniq("dead"), "name_ar": "dead", "type": "asset"},
+    )
+    dead_id = r.json()["id"]
+    r2 = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"code": _uniq("mov"), "name_ar": "mov", "type": "asset"},
+    )
+    mov_id = r2.json()["id"]
+    try:
+        p = await client.patch(
+            f"/api/v1/accounts/{dead_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"is_active": False},
+        )
+        assert p.status_code == 200, p.text
+        p = await client.patch(
+            f"/api/v1/accounts/{mov_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"parent_id": dead_id},
+        )
+        assert p.status_code == 409, p.text
+    finally:
+        await _cleanup_accounts([dead_id, mov_id])
+
+
+async def test_reactivation_requires_active_ancestors(client):
+    """Reactivating an account whose parent chain is inactive is refused; the
+    chain must be restored top-down first."""
+    token = await _login_token(client)
+    r = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"code": _uniq("par"), "name_ar": "par", "type": "asset"},
+    )
+    parent_id = r.json()["id"]
+    r2 = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"code": _uniq("kid"), "name_ar": "kid", "type": "asset", "parent_id": parent_id},
+    )
+    child_id = r2.json()["id"]
+    try:
+        for account_id in (child_id, parent_id):  # children-first deactivation
+            p = await client.patch(
+                f"/api/v1/accounts/{account_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"is_active": False},
+            )
+            assert p.status_code == 200, p.text
+        p = await client.patch(
+            f"/api/v1/accounts/{child_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"is_active": True},
+        )
+        assert p.status_code == 409, p.text
+        p = await client.patch(
+            f"/api/v1/accounts/{parent_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"is_active": True},
+        )
+        assert p.status_code == 200, p.text
+        p = await client.patch(
+            f"/api/v1/accounts/{child_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"is_active": True},
+        )
+        assert p.status_code == 200, p.text
+    finally:
+        await _cleanup_accounts([parent_id, child_id])
+
+
+async def test_reparent_used_account_is_409(client):
+    """Reparenting changes master (the legacy grouping key), so — like rename/
+    retype/deactivate/delete — a referenced account refuses a parent change."""
+    import random
+    from datetime import date
+    from decimal import Decimal
+
+    from app.money.journal import post_journal
+
+    token = await _login_token(client)
+    r = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"code": _uniq("used"), "name_ar": "used", "type": "expense"},
+    )
+    account_id = r.json()["id"]
+    try:
+        async with SessionLocal() as session:
+            await post_journal(
+                session,
+                branch_id=1,
+                user_id=1,
+                datee=date.today(),
+                entry_no=random.randint(1_000_000, 8_000_000),
+                description="reparent-used test",
+                source="manual",
+                entries=[("1000", Decimal("0"), Decimal("0")), (r.json()["code"], Decimal("1.00"), Decimal("0"))],
+            )
+            await session.commit()
+        p = await client.patch(
+            f"/api/v1/accounts/{account_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"parent_id": await _account_id("500")},
+        )
+        assert p.status_code == 409, p.text
+    finally:
+        await _cleanup_accounts([account_id])
+
+
+async def test_blank_name_on_used_account_is_400(client):
+    """A blank-after-strip name is a validation error (400) even when the
+    account is referenced — not a 409 rename conflict."""
+    import random
+    from datetime import date
+    from decimal import Decimal
+
+    from app.money.journal import post_journal
+
+    token = await _login_token(client)
+    r = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"code": _uniq("bn"), "name_ar": "bn", "type": "expense"},
+    )
+    account_id = r.json()["id"]
+    try:
+        async with SessionLocal() as session:
+            await post_journal(
+                session,
+                branch_id=1,
+                user_id=1,
+                datee=date.today(),
+                entry_no=random.randint(1_000_000, 8_000_000),
+                description="blank-name-used test",
+                source="manual",
+                entries=[("1000", Decimal("0"), Decimal("0")), (r.json()["code"], Decimal("1.00"), Decimal("0"))],
+            )
+            await session.commit()
+        p = await client.patch(
+            f"/api/v1/accounts/{account_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"name_ar": "   "},
+        )
+        assert p.status_code == 400, p.text
+    finally:
+        await _cleanup_accounts([account_id])

@@ -6,11 +6,15 @@ posting":
 
 * **Referenced accounts are immutable in shape** — an account with
   `journal_lines`/`balances` history or a party receivable/payable link cannot
-  be renamed, re-typed, deactivated, or deleted (409; history stays
+  be renamed, re-typed, reparented, deactivated, or deleted (409; history stays
   addressable). Deactivation is also refused while the account still has
   active children.
 * **No orphan wiring / no cycles** — a parent must live in the same branch, and
   reparenting can never make an account its own ancestor.
+* **No active account under an inactive parent** — creating under, reparenting
+  onto, or reactivating under an inactive ancestor is refused, so the journal
+  engine can trust an account's own `is_active` flag (an active account never
+  sits under an inactive one).
 
 Every write runs under `atomic()` with its `audit_log` row (G12). No sync
 outbox: the chart is branch-local configuration (same treatment as parties and
@@ -102,6 +106,32 @@ async def _has_active_children(
         )
     ).scalar_one_or_none()
     return row is not None
+
+
+async def _has_inactive_ancestor(
+    session: AsyncSession, branch_id: int, parent: Account
+) -> bool:
+    """True if `parent` or any of its same-branch ancestors is inactive.
+
+    The "no active account under an inactive parent" invariant is enforced here
+    at write time — creating under, reparenting onto, or reactivating under an
+    inactive ancestor is refused — so the journal engine can trust an account's
+    own `is_active` flag.
+    """
+    seen: set[int] = set()
+    current: Optional[Account] = parent
+    while current is not None:
+        if current.id in seen or current.branch_id != branch_id:
+            return False
+        seen.add(current.id)
+        if not current.is_active:
+            return True
+        current = (
+            await session.get(Account, current.parent_id)
+            if current.parent_id is not None
+            else None
+        )
+    return False
 
 
 async def _would_cycle(
@@ -241,6 +271,11 @@ async def create_account(
     parent: Optional[Account] = None
     if body.parent_id is not None:
         parent = await get_account(session, branch_id, body.parent_id)
+        if await _has_inactive_ancestor(session, branch_id, parent):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "cannot create an account under an inactive parent",
+            )
     account = Account(
         branch_id=branch_id,
         code=code,
@@ -291,6 +326,10 @@ async def update_account(
     used = account_id in await used_account_ids(session, branch_id)
 
     if "code" in data and data["code"] != account.code:
+        if not data["code"]:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "code cannot be blank"
+            )
         if used:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -300,10 +339,6 @@ async def update_account(
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 "cannot rename an account that has children",
-            )
-        if not data["code"]:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, "code cannot be blank"
             )
         duplicate = (
             await session.execute(
@@ -319,6 +354,14 @@ async def update_account(
                 status.HTTP_409_CONFLICT,
                 "account code already exists in this branch",
             )
+    if (
+        "name_ar" in data
+        and data["name_ar"] == ""
+        and data["name_ar"] != account.name_ar
+    ):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "name cannot be blank"
+        )
     renamed = (
         ("name_ar" in data and data["name_ar"] != account.name_ar)
         or ("name_en" in data and data["name_en"] != account.name_en)
@@ -327,14 +370,6 @@ async def update_account(
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "cannot rename a referenced account (postings/parties)",
-        )
-    if (
-        "name_ar" in data
-        and data["name_ar"].strip() == ""
-        and data["name_ar"] != account.name_ar
-    ):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "name cannot be blank"
         )
     if "type" in data and data["type"] != account.type and used:
         raise HTTPException(
@@ -345,12 +380,22 @@ async def update_account(
     parent_changed = "parent_id" in data and data["parent_id"] != account.parent_id
     new_parent: Optional[Account] = None
     if parent_changed:
+        if used:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "cannot reparent a referenced account (postings/parties)",
+            )
         if data["parent_id"] is not None:
             new_parent = await get_account(session, branch_id, data["parent_id"])
             if await _would_cycle(session, branch_id, new_parent.id, account.id):
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
                     "cannot make an account a child of its own descendant",
+                )
+            if await _has_inactive_ancestor(session, branch_id, new_parent):
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "cannot move an account under an inactive parent",
                 )
 
     deactivating = (
@@ -370,6 +415,21 @@ async def update_account(
                 "cannot deactivate an account with active children",
             )
 
+    reactivating = (
+        "is_active" in data
+        and data["is_active"] is True
+        and not account.is_active
+    )
+    if reactivating and account.parent_id is not None:
+        current_parent = await session.get(Account, account.parent_id)
+        if current_parent is not None and await _has_inactive_ancestor(
+            session, branch_id, current_parent
+        ):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "cannot reactivate an account under an inactive parent",
+            )
+
     old_value = f"code={account.code} name={account.name_ar} type={account.type}"
     if "code" in data:
         account.code = data["code"]
@@ -383,8 +443,8 @@ async def update_account(
         account.is_active = data["is_active"]
     if parent_changed:
         account.parent_id = new_parent.id if new_parent else None
-    if "code" in data or parent_changed:
         account.master = new_parent.code if new_parent else ""
+    if "code" in data:
         account.fary = account.code
 
     try:

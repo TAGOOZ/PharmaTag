@@ -142,7 +142,7 @@ async def _make_other_branch() -> int:
         branch = Branch(
             pharmacyid=f"pt{_seq[0]}",
             phar="",
-            mobile="0",
+            mobile=f"0{_seq[0]}",
             pharname=_uniq("branch"),
             is_active=True,
         )

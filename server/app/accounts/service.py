@@ -22,11 +22,12 @@ from typing import Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import ACTION_DELETE, ACTION_INSERT, ACTION_UPDATE, audit
 from app.core.db import atomic
-from app.models import Account, JournalLine, Party
+from app.models import Account, Balance, JournalLine, Party
 
 NOT_FOUND = HTTPException(status.HTTP_404_NOT_FOUND, "account not found")
 
@@ -47,16 +48,19 @@ async def get_account(session: AsyncSession, branch_id: int, account_id: int) ->
 
 
 async def used_account_ids(session: AsyncSession, branch_id: int) -> set[int]:
-    """Account ids with posting history or a party receivable/payable link."""
+    """Account ids with posting history or a party receivable/payable link.
+
+    Referenced means referenced from anywhere: a journal line or balance row
+    that points at the account counts even when the posting came from another
+    branch (the journal engine inherits branch-1's chart for chart-less
+    branches, so a branch-2 posting can reference a branch-1 account). Those
+    cross-branch references must still pin the account's shape, otherwise a
+    rename/delete would strand the history.
+    """
     ids = set(
-        (
-            await session.execute(
-                select(JournalLine.account_id).where(
-                    JournalLine.branch_id == branch_id
-                )
-            )
-        ).scalars().all()
+        (await session.execute(select(JournalLine.account_id))).scalars().all()
     )
+    ids.update((await session.execute(select(Balance.account_id))).scalars().all())
     parties = await session.execute(
         select(Party.receivable_account_id, Party.payable_account_id).where(
             Party.branch_id == branch_id
@@ -173,7 +177,7 @@ async def list_accounts(
             serialize_account(a, has_children=a.id in child_ids, used=a.id in used)
         )
     rows.sort(key=lambda r: r["code"])
-    return rows[: max(1, min(limit, 500))]
+    return rows[: min(limit, 500) if limit > 0 else 0]
 
 
 async def account_tree(session: AsyncSession, *, branch_id: int) -> list[dict]:
@@ -202,6 +206,8 @@ async def account_tree(session: AsyncSession, *, branch_id: int) -> list[dict]:
         else:
             parent["children"].append(node)
             parent["has_children"] = True
+    for node in nodes.values():
+        node["children"].sort(key=lambda n: n["code"])
     roots.sort(key=lambda n: n["code"])
     return roots
 
@@ -213,10 +219,17 @@ async def create_account(
     user_id: Optional[int],
     body,
 ) -> Account:
+    code = body.code.strip()
+    name_ar = body.name_ar.strip()
+    name_en = (body.name_en or "").strip()
+    if not code or not name_ar:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "code and name cannot be blank"
+        )
     duplicate = (
         await session.execute(
             select(Account.id).where(
-                Account.branch_id == branch_id, Account.code == body.code
+                Account.branch_id == branch_id, Account.code == code
             )
         )
     ).scalar_one_or_none()
@@ -230,27 +243,33 @@ async def create_account(
         parent = await get_account(session, branch_id, body.parent_id)
     account = Account(
         branch_id=branch_id,
-        code=body.code,
-        name_ar=body.name_ar,
-        name_en=body.name_en or "",
+        code=code,
+        name_ar=name_ar,
+        name_en=name_en,
         type=body.type,
         parent_id=parent.id if parent else None,
         master=parent.code if parent else "",
-        fary=body.code,
+        fary=code,
         is_active=body.is_active,
     )
     session.add(account)
-    async with atomic(session):
-        await session.flush()
-        await audit(
-            session,
-            branch_id=branch_id,
-            user_id=user_id,
-            entity="accounts",
-            entity_id=account.id,
-            action=ACTION_INSERT,
-            new_value=f"code={account.code} type={account.type} name={account.name_ar}",
-            typevalue=account.name_ar,
+    try:
+        async with atomic(session):
+            await session.flush()
+            await audit(
+                session,
+                branch_id=branch_id,
+                user_id=user_id,
+                entity="accounts",
+                entity_id=account.id,
+                action=ACTION_INSERT,
+                new_value=f"code={account.code} type={account.type} name={account.name_ar}",
+                typevalue=account.name_ar,
+            )
+    except IntegrityError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "account code already exists in this branch",
         )
     return account
 
@@ -265,6 +284,9 @@ async def update_account(
 ) -> Account:
     """`data` = body.model_dump(exclude_unset=True); `parent_id: None` present
     in data means "clear the parent"."""
+    data = {
+        k: (v.strip() if isinstance(v, str) else v) for k, v in data.items()
+    }
     account = await get_account(session, branch_id, account_id)
     used = account_id in await used_account_ids(session, branch_id)
 
@@ -273,6 +295,15 @@ async def update_account(
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 "cannot rename a referenced account (it has postings, parties, or children)",
+            )
+        if await account_has_children(session, branch_id, account_id):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "cannot rename an account that has children",
+            )
+        if not data["code"]:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "code cannot be blank"
             )
         duplicate = (
             await session.execute(
@@ -296,6 +327,14 @@ async def update_account(
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "cannot rename a referenced account (postings/parties)",
+        )
+    if (
+        "name_ar" in data
+        and data["name_ar"].strip() == ""
+        and data["name_ar"] != account.name_ar
+    ):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "name cannot be blank"
         )
     if "type" in data and data["type"] != account.type and used:
         raise HTTPException(
@@ -348,21 +387,27 @@ async def update_account(
         account.master = new_parent.code if new_parent else ""
         account.fary = account.code
 
-    async with atomic(session):
-        await audit(
-            session,
-            branch_id=branch_id,
-            user_id=user_id,
-            entity="accounts",
-            entity_id=account.id,
-            action=ACTION_UPDATE,
-            old_value=old_value,
-            new_value=(
-                f"code={account.code} name={account.name_ar} "
-                f"type={account.type} parent_id={account.parent_id} "
-                f"active={account.is_active}"
-            ),
-            typevalue=account.name_ar,
+    try:
+        async with atomic(session):
+            await audit(
+                session,
+                branch_id=branch_id,
+                user_id=user_id,
+                entity="accounts",
+                entity_id=account.id,
+                action=ACTION_UPDATE,
+                old_value=old_value,
+                new_value=(
+                    f"code={account.code} name={account.name_ar} "
+                    f"type={account.type} parent_id={account.parent_id} "
+                    f"active={account.is_active}"
+                ),
+                typevalue=account.name_ar,
+            )
+    except IntegrityError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "account code already exists in this branch",
         )
     return account
 
@@ -388,15 +433,21 @@ async def delete_account(
             status.HTTP_409_CONFLICT,
             "cannot delete a referenced account (postings/parties/children) — deactivate it instead",
         )
-    async with atomic(session):
-        await audit(
-            session,
-            branch_id=branch_id,
-            user_id=user_id,
-            entity="accounts",
-            entity_id=account.id,
-            action=ACTION_DELETE,
-            old_value=f"code={account.code} name={account.name_ar}",
-            typevalue=account.name_ar,
+    try:
+        async with atomic(session):
+            await audit(
+                session,
+                branch_id=branch_id,
+                user_id=user_id,
+                entity="accounts",
+                entity_id=account.id,
+                action=ACTION_DELETE,
+                old_value=f"code={account.code} name={account.name_ar}",
+                typevalue=account.name_ar,
+            )
+            await session.delete(account)
+    except IntegrityError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "cannot delete a referenced account (postings/parties/children) — deactivate it instead",
         )
-        await session.delete(account)

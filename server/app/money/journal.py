@@ -41,25 +41,31 @@ PURCHASE_ACCOUNT_CODES = (STOCK, VAT_PAYABLE, DRAWER, AP)
 
 
 async def _account_id(session: AsyncSession, branch_id: int, code: str) -> int:
+    """Resolve an active account by code (own branch, then the branch-1
+    inheritance chart). Deactivated accounts are not postable."""
     account = (
         await session.execute(
             select(Account).where(
-                Account.branch_id == branch_id, Account.code == code
+                Account.branch_id == branch_id,
+                Account.code == code,
+                Account.is_active.is_(True),
             )
         )
     ).scalar_one_or_none()
-    if account is None:
+    if account is None and branch_id != 1:
         account = (
             await session.execute(
                 select(Account).where(
-                    Account.branch_id == 1, Account.code == code
+                    Account.branch_id == 1,
+                    Account.code == code,
+                    Account.is_active.is_(True),
                 )
             )
         ).scalar_one_or_none()
     if account is None:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            f"account {code} is not configured",
+            f"account {code} is not configured or is inactive",
         )
     return account.id
 

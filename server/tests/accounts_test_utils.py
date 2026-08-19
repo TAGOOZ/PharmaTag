@@ -50,8 +50,7 @@ async def _cleanup_accounts(ids: list[int], branch_id: int = BRANCH_ID) -> None:
             await session.execute(delete(Journal).where(Journal.id.in_(jids)))
         await session.execute(
             delete(Balance).where(
-                Balance.branch_id == branch_id,
-                Balance.account_id.in_(ids) if ids else False,
+                Balance.account_id.in_(ids) if ids else False
             )
         )
         await session.execute(

@@ -8,8 +8,10 @@ guards (referenced accounts can't be deactivated/renamed/deleted), and the
 posting seam (a created account is usable by `money.journal.post_journal`).
 """
 
+from sqlalchemy import delete, select
+
 from app.core.db import SessionLocal
-from app.models import Account, AuditLog
+from app.models import Account, AuditLog, Balance, Journal, JournalLine
 from tests.accounts_test_utils import (
     _account_id,
     _cleanup_accounts,
@@ -467,3 +469,276 @@ async def test_inactive_accounts_stay_visible_with_used_flag(client):
         assert all(a["id"] != account_id for a in g.json()["accounts"])
     finally:
         await _cleanup_accounts([account_id])
+
+
+async def test_cross_branch_fallback_posting_marks_branch1_account_used(client):
+    """A branch-2 posting that falls back to a branch-1 account (the journal
+    engine inherits branch-1's chart for chart-less branches) makes that
+    account 'used': a branch-1 admin must not be able to rename or delete it."""
+    import random
+    from datetime import date
+    from decimal import Decimal
+
+    from app.money.journal import post_journal
+
+    token = await _login_token(client)
+    r = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"code": _uniq("cb"), "name_ar": "cross-branch", "type": "expense"},
+    )
+    assert r.status_code == 201, r.text
+    account_id = r.json()["id"]
+    code = r.json()["code"]
+    other_branch = await _make_other_branch()
+    other = await _make_user(_uniq("other"), permission_level=9, branch_id=other_branch)
+    try:
+        async with SessionLocal() as session:
+            await post_journal(
+                session,
+                branch_id=other_branch,
+                user_id=other,
+                datee=date.today(),
+                entry_no=random.randint(1_000_000, 8_000_000),
+                description="cross-branch fallback test",
+                source="manual",
+                entries=[
+                    ("1000", Decimal("0"), Decimal("0")),
+                    (code, Decimal("1.00"), Decimal("0")),
+                ],
+            )
+            await session.commit()
+
+        g = await client.get(
+            f"/api/v1/accounts/{account_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert g.status_code == 200, g.text
+        assert g.json()["used"] is True
+        p = await client.patch(
+            f"/api/v1/accounts/{account_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": _uniq("cb2")},
+        )
+        assert p.status_code == 409, p.text
+        d = await client.delete(
+            f"/api/v1/accounts/{account_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert d.status_code == 409, d.text
+    finally:
+        # the branch-2 fallback posting wrote journal lines/balance rows on the
+        # throwaway branch — clear them before the branch can be dropped
+        async with SessionLocal() as session:
+            await session.execute(
+                delete(JournalLine).where(JournalLine.branch_id == other_branch)
+            )
+            await session.execute(
+                delete(Journal).where(Journal.branch_id == other_branch)
+            )
+            await session.execute(
+                delete(Balance).where(Balance.branch_id == other_branch)
+            )
+            await session.commit()
+        await _delete_users([other])
+        await _delete_other_branch(other_branch)
+        await _cleanup_accounts([account_id])
+
+
+async def test_tree_children_sorted_by_code(client):
+    """Children under a root come back code-sorted, not in insertion order."""
+    other_branch = await _make_other_branch()
+    other = await _make_user(_uniq("tree"), permission_level=9, branch_id=other_branch)
+    token = _token_for(other, other_branch)
+    try:
+        r = await client.post(
+            "/api/v1/accounts",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": "9000", "name_ar": "root", "type": "expense"},
+        )
+        assert r.status_code == 201, r.text
+        root_id = r.json()["id"]
+        for code in ["9000-z", "9000-a", "9000-m"]:  # deliberately scrambled
+            r = await client.post(
+                "/api/v1/accounts",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "code": code,
+                    "name_ar": code,
+                    "type": "expense",
+                    "parent_id": root_id,
+                },
+            )
+            assert r.status_code == 201, r.text
+        g = await client.get(
+            "/api/v1/accounts/tree", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert g.status_code == 200, g.text
+        root = next(n for n in g.json()["tree"] if n["code"] == "9000")
+        codes = [c["code"] for c in root["children"]]
+        assert codes == ["9000-a", "9000-m", "9000-z"], codes
+    finally:
+        await _delete_users([other])
+        await _delete_other_branch(other_branch)
+
+
+async def test_rename_account_with_children_is_409(client):
+    """Renaming a parent's code would orphan its children's `master` links, so
+    it is refused — same protection as delete."""
+    token = await _login_token(client)
+    r = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"code": _uniq("par"), "name_ar": "parent", "type": "asset"},
+    )
+    assert r.status_code == 201, r.text
+    parent_id = r.json()["id"]
+    r2 = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "code": _uniq("kid"),
+            "name_ar": "kid",
+            "type": "asset",
+            "parent_id": parent_id,
+        },
+    )
+    assert r2.status_code == 201, r2.text
+    child_id = r2.json()["id"]
+    try:
+        p = await client.patch(
+            f"/api/v1/accounts/{parent_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": _uniq("par2")},
+        )
+        assert p.status_code == 409, p.text
+    finally:
+        await _cleanup_accounts([parent_id, child_id])
+
+
+async def test_concurrent_duplicate_create_is_409_not_500(client):
+    """Two creates of the same (branch, code) racing past the pre-check land on
+    the unique constraint — one succeeds, the other must be a 409, not a 500."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from app.accounts import service
+    from app.accounts.schemas import AccountCreate
+
+    code = _uniq("race")
+    created: list[int] = []
+
+    async def _create() -> str:
+        async with SessionLocal() as session:
+            try:
+                account = await service.create_account(
+                    session,
+                    branch_id=1,
+                    user_id=1,
+                    body=AccountCreate(code=code, name_ar="race", type="asset"),
+                )
+                created.append(account.id)
+                return "ok"
+            except HTTPException as exc:
+                return str(exc.status_code)
+
+    results = await asyncio.gather(_create(), _create())
+    try:
+        assert sorted(results) == ["409", "ok"], results
+    finally:
+        await _cleanup_accounts(created)
+
+
+async def test_deactivated_account_rejects_posting(client):
+    """Deactivation means 'not postable': the journal engine must refuse to
+    post against a deactivated code and leave nothing half-written behind."""
+    import random
+    from datetime import date
+    from decimal import Decimal
+
+    from fastapi import HTTPException
+
+    from app.money.journal import post_journal
+
+    token = await _login_token(client)
+    code = _uniq("inact")
+    r = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"code": code, "name_ar": "inactive", "type": "expense"},
+    )
+    assert r.status_code == 201, r.text
+    account_id = r.json()["id"]
+    try:
+        p = await client.patch(
+            f"/api/v1/accounts/{account_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"is_active": False},
+        )
+        assert p.status_code == 200, p.text
+        async with SessionLocal() as session:
+            try:
+                await post_journal(
+                    session,
+                    branch_id=1,
+                    user_id=1,
+                    datee=date.today(),
+                    entry_no=random.randint(1_000_000, 8_000_000),
+                    description="deactivated-account test",
+                    source="manual",
+                    entries=[
+                        ("1000", Decimal("0"), Decimal("0")),
+                        (code, Decimal("1.00"), Decimal("0")),
+                    ],
+                )
+                await session.commit()
+                raise AssertionError("posting to a deactivated account must fail")
+            except HTTPException as exc:
+                await session.rollback()
+                assert exc.status_code == 500
+            leftover = (
+                await session.execute(
+                    select(Journal.id).where(
+                        Journal.description == "deactivated-account test"
+                    )
+                )
+            ).scalars().all()
+            assert leftover == []
+    finally:
+        await _cleanup_accounts([account_id])
+
+
+async def test_codes_and_names_are_stripped(client):
+    """Codes and names are trimmed on write; whitespace-only values are 400."""
+    token = await _login_token(client)
+    code = _uniq("pad")
+    r = await client.post(
+        "/api/v1/accounts",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"code": f"  {code}  ", "name_ar": "  padded name  ", "type": "asset"},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    account_id = body["id"]
+    try:
+        assert body["code"] == code
+        assert body["name_ar"] == "padded name"
+        blank = await client.post(
+            "/api/v1/accounts",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": "   ", "name_ar": "x", "type": "asset"},
+        )
+        assert blank.status_code == 400, blank.text
+    finally:
+        await _cleanup_accounts([account_id])
+
+
+async def test_list_limit_zero_returns_empty(client):
+    """limit <= 0 is an explicit 'no rows' request, not a floor of 1."""
+    token = await _login_token(client)
+    g = await client.get(
+        "/api/v1/accounts?limit=0", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert g.status_code == 200, g.text
+    assert g.json()["accounts"] == []

@@ -231,3 +231,41 @@ def test_007_seeds_correction_account_for_every_existing_branch():
     finally:
         with _conn(BASE_URL) as conn:
             conn.execute(f"DROP DATABASE IF EXISTS {dbname} WITH (FORCE)")
+
+
+def test_010_backfills_seeded_master_fary():
+    """Rev 010 gives every SEEDED account the legacy linkage columns the API
+    populates on create/update: fary = own code, master = parent code. Root
+    accounts (no parent) keep an empty master."""
+    dbname = f"pharmatag_edge_{uuid.uuid4().hex[:12]}"
+    db_url = BASE_URL.rsplit("/", 1)[0] + "/" + dbname
+    alembic_url = ALEMBIC_URL.rsplit("/", 1)[0] + "/" + dbname
+    try:
+        with _conn(BASE_URL) as conn:
+            conn.execute(f"DROP DATABASE IF EXISTS {dbname} WITH (FORCE)")
+            conn.execute(f"CREATE DATABASE {dbname} TEMPLATE template0")
+
+        r = _alembic(["upgrade", "head"], alembic_url)
+        assert r.returncode == 0, r.stdout + r.stderr
+
+        with _conn(db_url) as conn:
+            rows = conn.execute(
+                "SELECT code, master, fary FROM accounts "
+                "WHERE code IN ('1000','110','100')"
+            ).fetchall()
+            linkage = {code: (master, fary) for code, master, fary in rows}
+            # a leaf under اصول.متداولة: master = parent code, fary = own code
+            assert linkage["1000"] == ("110", "1000")
+            # an intermediate under اصول: same pattern
+            assert linkage["110"] == ("100", "110")
+            # a root: fary = own code, master stays empty
+            assert linkage["100"] == ("", "100")
+
+        # re-upgrade is idempotent (the backfill only touches empty values)
+        r = _alembic(["upgrade", "head"], alembic_url)
+        assert r.returncode == 0, r.stdout + r.stderr
+        with _conn(db_url) as conn:
+            assert conn.execute("SELECT count(*) FROM accounts").fetchone()[0] == 23
+    finally:
+        with _conn(BASE_URL) as conn:
+            conn.execute(f"DROP DATABASE IF EXISTS {dbname} WITH (FORCE)")

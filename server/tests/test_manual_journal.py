@@ -734,6 +734,142 @@ async def test_line_note_is_persisted_and_returned(client):
         await _cleanup_journals(tag)
 
 
+async def test_oversized_amounts_are_400_not_500(client):
+    """Amounts beyond the journal's Numeric(18,2) column — or with an exponent
+    that overflows the decimal context during rounding — are 400, never an
+    unhandled 500."""
+    token = await _login_token(client)
+    tag = _uniq("mj")
+    for bad in ["1e50", "99999999999999999999.99"]:
+        r = await _post(
+            client,
+            token,
+            description=f"too big {tag}",
+            lines=[
+                {"account_code": "5000", "debit": bad},
+                {"account_code": "1000", "credit": bad},
+            ],
+        )
+        assert r.status_code == 400, (bad, r.status_code, r.text)
+
+    # the largest amount that fits Numeric(18, 2) is still accepted
+    r = await _post(
+        client,
+        token,
+        description=f"max amount {tag}",
+        lines=[
+            {"account_code": "5000", "debit": "9999999999999999.99"},
+            {"account_code": "1000", "credit": "9999999999999999.99"},
+        ],
+    )
+    assert r.status_code == 201, r.text
+    await _cleanup_journals(tag)
+
+
+async def test_reversal_carries_the_original_line_notes(client):
+    """The reversal mirrors the entry, per-line notes included: a note written
+    on an original line survives onto the reversal's opposite-signed line."""
+    token = await _login_token(client)
+    tag = _uniq("mj")
+    r = await _post(
+        client,
+        token,
+        description=f"note reversal {tag}",
+        lines=[
+            {"account_code": "5000", "debit": "10.00", "note": "rent for June"},
+            {"account_code": "1000", "credit": "10.00"},
+        ],
+    )
+    assert r.status_code == 201, r.text
+    entry_id = r.json()["id"]
+    try:
+        rv = await client.post(
+            f"/api/v1/journals/manual/{entry_id}/reverse",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert rv.status_code == 201, rv.text
+        by_code = {l["account_code"]: l for l in rv.json()["lines"]}
+        assert by_code["5000"]["note"] == "rent for June"
+        assert by_code["1000"]["note"] == ""
+    finally:
+        await _cleanup_journals(tag)
+
+
+async def test_reversal_reuses_original_account_rows_when_a_new_code_shadows(client):
+    """A reversal pins the offset to the account rows the original touched (by
+    id, never by re-resolving the code): if the caller's branch creates its own
+    account with the same code after posting, the reversal must still offset the
+    original account, not redirect onto the new one."""
+    from app.accounts import service as accounts_service
+    from app.accounts.schemas import AccountCreate
+
+    from tests.accounts_test_utils import _account_id, _cleanup_accounts
+    from tests.manual_journal_test_utils import (
+        _delete_other_branch,
+        _delete_users,
+        _make_other_branch,
+        _make_user,
+        _token_for,
+    )
+
+    tag = _uniq("mj")
+    other_branch = await _make_other_branch()
+    other = await _make_user(_uniq("other"), permission_level=7, branch_id=other_branch)
+    shadow_id = None
+    try:
+        # branch 2 posts against the inherited branch-1 code 5000 (its own chart
+        # is empty at this point, so the line lands on the branch-1 account)
+        r = await client.post(
+            "/api/v1/journals/manual",
+            headers={"Authorization": f"Bearer {_token_for(other, other_branch)}"},
+            json={
+                "datee": _entry_date(),
+                "description": f"shadow {tag}",
+                "lines": [
+                    {"account_code": "5000", "debit": "40.00"},
+                    {"account_code": "1000", "credit": "40.00"},
+                ],
+            },
+        )
+        assert r.status_code == 201, r.text
+        entry_id = r.json()["id"]
+        inherited_5000 = await _account_id("5000", 1)
+
+        # ...then branch 2 creates its own account shadowing code 5000 (the dup
+        # guard is branch-scoped, so this is allowed)
+        async with SessionLocal() as session:
+            shadow = await accounts_service.create_account(
+                session,
+                branch_id=other_branch,
+                user_id=other,
+                body=AccountCreate(code="5000", name_ar="shadow", type="expense"),
+            )
+        shadow_id = shadow.id
+
+        rv = await client.post(
+            f"/api/v1/journals/manual/{entry_id}/reverse",
+            headers={"Authorization": f"Bearer {_token_for(other, other_branch)}"},
+        )
+        assert rv.status_code == 201, rv.text
+        async with SessionLocal() as session:
+            reversal_lines = (
+                await session.execute(
+                    select(JournalLine).where(
+                        JournalLine.journal_id == rv.json()["journal_id"]
+                    )
+                )
+            ).scalars().all()
+        by_id = {l.account_id for l in reversal_lines}
+        assert shadow_id not in by_id
+        assert inherited_5000 in by_id
+    finally:
+        await _cleanup_journals(tag)
+        if shadow_id is not None:
+            await _cleanup_accounts([shadow_id], branch_id=other_branch)
+        await _delete_users([other])
+        await _delete_other_branch(other_branch)
+
+
 async def _cleanup_closed_day(datee: str) -> None:
     """Delete the daily_close row(s) + their audit for one (branch 1, datee) so
     a test's close never leaks into other slices."""
@@ -827,6 +963,7 @@ async def test_reverse_into_a_closed_day_is_409(client):
     )
     assert r.status_code == 201, r.text
     entry_id = r.json()["id"]
+    entry_no = r.json()["entry_no"]
     try:
         rc = await _close_day(client, token, datee="2026-05-03", counted_cash="0")
         assert rc.status_code == 200, rc.text
@@ -841,7 +978,8 @@ async def test_reverse_into_a_closed_day_is_409(client):
             reversal = (
                 await session.execute(
                     select(Journal.id).where(
-                        Journal.description == f"reversal of manual entry #{tag}"
+                        Journal.description
+                        == f"reversal of manual entry #{entry_no}"
                     )
                 )
             ).scalars().all()

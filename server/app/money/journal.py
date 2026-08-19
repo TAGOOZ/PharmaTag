@@ -41,14 +41,19 @@ PURCHASE_ACCOUNT_CODES = (STOCK, VAT_PAYABLE, DRAWER, AP)
 
 
 async def _account_id(session: AsyncSession, branch_id: int, code: str) -> int:
-    """Resolve an active account by code (own branch, then the branch-1
-    inheritance chart). Deactivated accounts are not postable."""
+    """Resolve the account for posting (own branch, then the branch-1
+    inheritance chart). An account that EXISTS but is deactivated is a client
+    error (400) — the caller picked a code it can see, so deactivation should
+    surface as a readable 400, not the engine's internal 500 (this also closes
+    the race where a concurrent deactivation lands between a caller's up-front
+    account check and this re-resolve). A code that is not in the chart at all
+    is an internal invariant violation (500) — the sale/purchase callers only
+    ever post seeded codes."""
     account = (
         await session.execute(
             select(Account).where(
                 Account.branch_id == branch_id,
                 Account.code == code,
-                Account.is_active.is_(True),
             )
         )
     ).scalar_one_or_none()
@@ -58,14 +63,18 @@ async def _account_id(session: AsyncSession, branch_id: int, code: str) -> int:
                 select(Account).where(
                     Account.branch_id == 1,
                     Account.code == code,
-                    Account.is_active.is_(True),
                 )
             )
         ).scalar_one_or_none()
     if account is None:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            f"account {code} is not configured or is inactive",
+            f"account {code} is not configured",
+        )
+    if not account.is_active:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"account {code} is deactivated and cannot be posted to",
         )
     return account.id
 
@@ -109,14 +118,20 @@ async def post_journal(
     entry_no: int,
     description: str,
     source: str,
-    entries: list[tuple[str, Decimal, Decimal]] | list[tuple[str, Decimal, Decimal, str]],
+    entries: list[tuple[str, Decimal, Decimal]]
+    | list[tuple[str, Decimal, Decimal, str]]
+    | list[tuple[str, Decimal, Decimal, str, int]],
     ref_invoice_id: Optional[int] = None,
     contra_party_id: Optional[int] = None,
     contra_party_by_code: Optional[dict[str, int]] = None,
 ) -> Journal:
     """Post one balanced journal entry (entries = (account_code, debit, credit)
     or (account_code, debit, credit, note) — the optional 4th element lands on
-    the line's `tips` column, used by the manual-journal slice).
+    the line's `tips` column, used by the manual-journal slice). A 5th element
+    pins the line to an already-resolved `account_id`, bypassing the by-code
+    re-resolution — used by the manual-journal reversal so the offset always
+    lands on the SAME account row the original touched, even if a new account
+    later shadows its code.
 
     `contra_party_id` labels every credit line's contra party (the sale/purchase
     pattern). `contra_party_by_code` overrides it per account code for documents
@@ -139,9 +154,14 @@ async def post_journal(
     for entry in entries:
         code, debit, credit = entry[0], entry[1], entry[2]
         note = entry[3] if len(entry) > 3 else ""
+        pinned_account_id = entry[4] if len(entry) > 4 else None
         debit = dec(debit)
         credit = dec(credit)
-        account_id = await _account_id(session, branch_id, code)
+        account_id = (
+            pinned_account_id
+            if pinned_account_id is not None
+            else await _account_id(session, branch_id, code)
+        )
         if contra_party_by_code and code in contra_party_by_code:
             contra_party = contra_party_by_code[code]
         else:

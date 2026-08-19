@@ -652,7 +652,9 @@ async def test_concurrent_duplicate_create_is_409_not_500(client):
 
 async def test_deactivated_account_rejects_posting(client):
     """Deactivation means 'not postable': the journal engine must refuse to
-    post against a deactivated code and leave nothing half-written behind."""
+    post against a deactivated code (400 — the caller picked a code it can see,
+    so a deactivated account is a client error, never an internal 500) and
+    leave nothing half-written behind."""
     import random
     from datetime import date
     from decimal import Decimal
@@ -696,7 +698,8 @@ async def test_deactivated_account_rejects_posting(client):
                 raise AssertionError("posting to a deactivated account must fail")
             except HTTPException as exc:
                 await session.rollback()
-                assert exc.status_code == 500
+                assert exc.status_code == 400
+                assert "deactivated" in exc.detail
             leftover = (
                 await session.execute(
                     select(Journal.id).where(

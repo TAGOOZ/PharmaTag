@@ -12,6 +12,7 @@ reversal is a fresh opposite-signed balanced journal linked via
 from __future__ import annotations
 
 from datetime import date
+from decimal import InvalidOperation
 from typing import Optional
 
 from fastapi import HTTPException, status
@@ -32,6 +33,11 @@ UNBALANCED = HTTPException(
 ALREADY_REVERSED = HTTPException(
     status.HTTP_409_CONFLICT, "a reversal entry cannot be reversed"
 )
+
+# journal_lines.debit/credit are Numeric(18, 2): the largest amount that fits.
+# Anything bigger (or an exponent that overflows the decimal context during
+# rounding) would 500 in the DB — reject it up front as a client error.
+MAX_AMOUNT = dec("9999999999999999.99")
 
 
 async def _resolve_account(
@@ -76,8 +82,19 @@ def _validated_entries(lines) -> list[tuple[str, object, object, str]]:
     ge=0, so the service stays safe even if the wire schema ever relaxes)."""
     entries: list[tuple[str, object, object, str]] = []
     for line in lines:
-        debit = round2(dec(line.debit or 0))
-        credit = round2(dec(line.credit or 0))
+        try:
+            debit = round2(dec(line.debit or 0))
+            credit = round2(dec(line.credit or 0))
+        except InvalidOperation:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"line {line.account_code}: amount is too large",
+            )
+        if debit > MAX_AMOUNT or credit > MAX_AMOUNT:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"line {line.account_code}: amount is too large",
+            )
         if debit < 0 or credit < 0:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
@@ -242,7 +259,11 @@ async def reverse_manual_entry(
         ).scalars().all()
         code_by_id = {a.id: a.code for a in accounts}
         reversed_entries = [
-            (code_by_id[l.account_id], l.credit, l.debit, "") for l in lines
+            # Pin each offset line to the SAME account row the original touched
+            # (by account_id, not by re-resolving the code, which could redirect
+            # onto a newer shadow account) and mirror the per-line notes.
+            (code_by_id[l.account_id], l.credit, l.debit, l.tips or "", l.account_id)
+            for l in lines
         ]
         entry_no = await next_journal_entry_no(session, branch_id, journal.datee)
         reversal = await post_journal(

@@ -22,6 +22,7 @@ from app.models import AuditLog, SyncLog
 # action vocabulary reused across the codebase (legacy TitanUserAction mapping)
 ACTION_UPDATE = "update"
 ACTION_INSERT = "insert"
+ACTION_DELETE = "delete"
 ACTION_LOGIN = "login"
 ACTION_LOGIN_FAILED = "login_failed"
 

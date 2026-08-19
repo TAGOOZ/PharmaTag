@@ -143,7 +143,11 @@ the ticket ships.
 
 Real so far: `/api/v1/auth/*` (login, me, reset-password), `/api/v1/drugs`
 (read + CRUD + search-as-you-type + CC0 catalog import; writes gated by
-`drugs.manage`), `/api/v1/users` (user CRUD, roles/permissions, manager password
+`drugs.manage`), `/api/v1/accounts` (per-branch chart of accounts: tree +
+flat list + detail + CRUD; the rev-009 seed builds the hierarchical legacy
+tree from the flat chart, writes gated by `accounts.manage` — legacy level ≥ 7
+or accountant role — with posting-safety guards on referenced accounts),
+`/api/v1/users` (user CRUD, roles/permissions, manager password
 reset), plugin registry, sales invoicing (create/list/detail/80mm print +
 offline outbox replay; gated by `sale.create`), sales returns (partial/full
 return of a saved sale — reverses stock via a new return batch + branch_stock,

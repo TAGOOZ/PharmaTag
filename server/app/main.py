@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.auth.router import router as auth_router
+from app.accounts.router import router as accounts_router
 from app.core.config import settings
 from app.core.db import SessionLocal, engine
 from app.drawer.router import router as drawer_router
@@ -46,6 +47,9 @@ def create_app() -> FastAPI:
     )
 
     application.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+    application.include_router(
+        accounts_router, prefix="/api/v1/accounts", tags=["accounts"]
+    )
     application.include_router(
         drugs_router, prefix="/api/v1/drugs", tags=["drugs"]
     )

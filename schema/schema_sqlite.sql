@@ -630,20 +630,40 @@ VALUES ('admin', 'Administrator', 'changeme', 9, 1, 1);
 INSERT INTO user_roles (user_id, role_id)
 SELECT u.id, r.id FROM users u, roles r WHERE u.username = 'admin' AND r.name = 'admin';
 
--- default chart of accounts (per-branch template)
-INSERT INTO accounts (branch_id, code, name_ar, type, is_active) VALUES
-    (1, '1000', 'اصول.متداولة.خزينة/درج', 'asset', 1),
-    (1, '1100', 'اصول.متداولة.عملاء', 'asset', 1),
-    (1, '1200', 'اصول.متداولة.مخزون', 'asset', 1),
-    (1, '1300', 'اصول.ثابتة', 'asset', 1),
-    (1, '2000', 'خصوم.متداولة.موردين', 'liability', 1),
-    (1, '2100', 'خصوم.ضريبة.مبيعات', 'liability', 1),
-    (1, '2110', 'خصوم.ضريبة.مشتريات', 'liability', 1),
-    (1, '3000', 'حقوق ملكية.راس المال', 'equity', 1),
-    (1, '4000', 'ايرادات.مبيعات', 'income', 1),
-    (1, '5000', 'مصروفات', 'expense', 1),
-    (1, '5900', 'مصروفات.جرد وتعديل الارصدة', 'expense', 1),
-    (1, '6000', 'تكلفة المبيعات', 'expense', 1);
+-- default chart of accounts (per-branch template; rev 009 hierarchical legacy tree)
+INSERT INTO accounts (branch_id, code, name_ar, name_en, type, is_active) VALUES
+    (1, '100',  'اصول',                          'Assets',                'asset', 1),
+    (1, '110',  'اصول.متداولة',                  'Current Assets',        'asset', 1),
+    (1, '200',  'خصوم',                          'Liabilities',           'liability', 1),
+    (1, '210',  'خصوم.متداولة',                  'Current Liabilities',   'liability', 1),
+    (1, '220',  'خصوم.ثابتة',                    'Fixed Liabilities',     'liability', 1),
+    (1, '300',  'حقوق ملكية',                    'Equity',                'equity', 1),
+    (1, '400',  'ايرادات',                       'Revenue',               'income', 1),
+    (1, '500',  'مصروفات',                       'Expenses',              'expense', 1),
+    (1, '1000', 'اصول.متداولة.خزينة/درج',       'Cash Drawer',           'asset', 1),
+    (1, '1001', 'اصول.متداولة.نقدية.شبكة',      'Network Cash',          'asset', 1),
+    (1, '1010', 'اصول.متداولة.بنوك',            'Banks',                 'asset', 1),
+    (1, '1100', 'اصول.متداولة.عملاء',           'Customers (AR)',        'asset', 1),
+    (1, '1110', 'اصول.متداولة.ضريبة.قيمة مضافة','Input VAT',             'asset', 1),
+    (1, '1200', 'اصول.متداولة.مخزون',           'Inventory',             'asset', 1),
+    (1, '1300', 'اصول.ثابتة',                   'Fixed Assets',          'asset', 1),
+    (1, '2000', 'خصوم.متداولة.موردين',          'Suppliers (AP)',        'liability', 1),
+    (1, '2100', 'خصوم.ضريبة.مبيعات',            'Output VAT (Sales)',    'liability', 1),
+    (1, '2110', 'خصوم.ضريبة.مشتريات',           'Output VAT (Purchases)','liability', 1),
+    (1, '3000', 'حقوق ملكية.راس المال',         'Capital',               'equity', 1),
+    (1, '4000', 'ايرادات.مبيعات',               'Sales Revenue',         'income', 1),
+    (1, '5000', 'مصروفات',                      'Expenses',              'expense', 1),
+    (1, '5900', 'مصروفات.جرد وتعديل الارصدة',  'Stock Corrections',     'expense', 1),
+    (1, '6000', 'تكلفة المبيعات',               'Cost of Goods Sold',    'expense', 1);
+
+-- parent wiring by code (rev 009)
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '100') WHERE branch_id = 1 AND code IN ('110','1300');
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '110') WHERE branch_id = 1 AND code IN ('1000','1001','1010','1100','1110','1200');
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '200') WHERE branch_id = 1 AND code IN ('210','220');
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '210') WHERE branch_id = 1 AND code IN ('2000','2100','2110');
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '300') WHERE branch_id = 1 AND code = '3000';
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '400') WHERE branch_id = 1 AND code = '4000';
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '500') WHERE branch_id = 1 AND code IN ('5000','5900','6000');
 
 -- pilot plugins registered (A10), disabled until the plugin ships
 INSERT INTO app_plugins (slug, name_ar, name_en, version, core_requires, sdk_version, status)
@@ -669,5 +689,11 @@ UPDATE drugs SET price_wholesale = price WHERE price_wholesale = 0;
 INSERT INTO permissions (code, name_ar) VALUES ('drugs.manage', 'الأصناف والمخزون');
 INSERT INTO role_permissions (role_id, permission_id)
     SELECT 1, id FROM permissions WHERE code = 'drugs.manage';
+
+-- rev 009: accounts.manage gates chart-of-accounts writes (admin + accountant).
+INSERT INTO permissions (code, name_ar) VALUES ('accounts.manage', 'إدارة شجرة الحسابات');
+INSERT INTO role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM roles r, permissions p
+    WHERE p.code = 'accounts.manage' AND r.id IN (1, 4);
 
 COMMIT;

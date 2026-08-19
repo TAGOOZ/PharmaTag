@@ -48,7 +48,7 @@ def _columns(body: str) -> dict[str, str]:
         name, typ = m.group(1), m.group(2)
         if name.upper() in CONSTRAINT_KW:
             continue
-        typ = typ.rstrip(",").rstrip("(")
+        typ = typ.rstrip(",").rstrip(";").rstrip("(")
         cols[name] = typ
     return cols
 
@@ -66,7 +66,7 @@ def parse_sqlite(paths: list[Path]) -> dict[str, dict[str, str]]:
             tables[name] = _columns(m.group(2))
         for m in ALTER_ADD_COL_RE.finditer(sql):
             name, col, typ = m.group(1), m.group(2), m.group(3)
-            tables.setdefault(name, {})[col] = typ.rstrip(",").rstrip("(")
+            tables.setdefault(name, {})[col] = typ.rstrip(",").rstrip(";").rstrip("(")
     return tables
 
 
@@ -83,7 +83,7 @@ def parse_postgres_offline() -> dict[str, dict[str, str]]:
         tables[name] = _columns(m.group(2))
     for m in ALTER_ADD_COL_RE.finditer(sql):
         name, col, typ = m.group(1), m.group(2), m.group(3)
-        tables.setdefault(name, {})[col] = typ.rstrip(",").rstrip("(")
+        tables.setdefault(name, {})[col] = typ.rstrip(",").rstrip(";").rstrip("(")
     return tables
 
 

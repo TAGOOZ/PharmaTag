@@ -13,6 +13,7 @@ from sqlalchemy import delete, select
 
 from app.core.db import SessionLocal
 from app.models import (
+    Account,
     AuditLog,
     Balance,
     Branch,
@@ -153,8 +154,11 @@ async def _make_other_branch() -> int:
 
 
 async def _delete_other_branch(branch_id: int) -> None:
-    """Remove the throwaway branch and any users created on it."""
+    """Remove the throwaway branch, its users, and any accounts created on it
+    (accounts are branch-scoped config rows; a leftover account would otherwise
+    FK-block the branch delete and leak it past the mobile unique constraint)."""
     async with SessionLocal() as session:
+        await session.execute(delete(Account).where(Account.branch_id == branch_id))
         await session.execute(delete(User).where(User.branch_id == branch_id))
         await session.execute(delete(Branch).where(Branch.id == branch_id))
         await session.commit()

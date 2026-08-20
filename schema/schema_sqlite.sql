@@ -720,4 +720,38 @@ INSERT INTO role_permissions (role_id, permission_id)
     SELECT r.id, p.id FROM roles r, permissions p
     WHERE p.code = 'journals.manage' AND r.id IN (1, 4, 5);
 
+-- rev 012: receivables.manage gates settlements (admin + accountant + manager).
+INSERT INTO permissions (code, name_ar) VALUES ('receivables.manage', 'تحصيل وسداد الآجل');
+INSERT INTO role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM roles r, permissions p
+    WHERE p.code = 'receivables.manage' AND r.id IN (1, 4, 5);
+
+-- rev 013: monthly_close + month_open_balances (S2.6, #21) — monthy\moves + start-data.
+CREATE TABLE monthly_close (
+    branch_id INTEGER NOT NULL REFERENCES branches(id),
+    year      INTEGER NOT NULL,
+    month     INTEGER NOT NULL,
+    status    TEXT NOT NULL DEFAULT 'closed',
+    closed_by INTEGER REFERENCES users(id),
+    closed_at TEXT,
+    PRIMARY KEY (branch_id, year, month),
+    CHECK (month BETWEEN 1 AND 12)
+);
+
+CREATE TABLE month_open_balances (
+    branch_id  INTEGER NOT NULL REFERENCES branches(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    year       INTEGER NOT NULL,
+    month      INTEGER NOT NULL,
+    debit      INTEGER NOT NULL DEFAULT 0 CHECK (1=1),
+    credit     INTEGER NOT NULL DEFAULT 0 CHECK (1=1),
+    PRIMARY KEY (branch_id, account_id, year, month),
+    CHECK (month BETWEEN 1 AND 12)
+);
+
+INSERT INTO permissions (code, name_ar) VALUES ('months.close', 'تقفيل الشهر');
+INSERT INTO role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM roles r, permissions p
+    WHERE p.code = 'months.close' AND r.id IN (1, 4, 5);
+
 COMMIT;

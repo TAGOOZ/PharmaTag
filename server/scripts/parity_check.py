@@ -20,7 +20,7 @@ SERVER = Path(__file__).resolve().parent.parent
 
 # plugin-owned [S] tables that must NOT be in core rev 001 (A08)
 PLUGIN_TABLES = {
-    "einvoice_log", "einvoice_counters", "monthly_close", "month_open_balances",
+    "einvoice_log", "einvoice_counters",
     "transfers", "transfer_lines", "needs", "purchase_orders", "dead_stock_exchange",
     "chain_buy_orders", "branch_registry", "drug_sync_outbox", "drug_interactions",
     "external_drug_catalog", "archive_imports", "archive_exports", "user_drawer_money",

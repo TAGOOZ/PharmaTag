@@ -40,12 +40,13 @@ _CORE_ENUMS = [
     "journal_source", "account_type", "party_kind",
 ]
 
-EXPECTED_TABLES = {  # == the SQLite twin's CREATE TABLE set (38 core + host)
+EXPECTED_TABLES = {  # == the SQLite twin's CREATE TABLE set (40 core + host)
     "accounts", "app_config", "app_plugins", "audit_log", "balances",
     "branch_identities", "branch_stock", "branches", "daily_close",
     "drawer_movements", "drug_barcodes", "drug_costs", "drugs",
     "integration_config", "invoice_lines", "invoice_versions", "invoices",
-    "journal_lines", "journals", "manual_journal_entries", "parties",
+    "journal_lines", "journals", "manual_journal_entries", "month_open_balances",
+    "monthly_close", "parties",
     "payment_splits", "permissions", "plugin_branch_grants",
     "plugin_dependencies", "plugin_settings", "price_change_log",
     "role_permissions", "roles", "settlement_vouchers", "shifts", "shortage_flags", "stock_batches",
@@ -59,14 +60,15 @@ EXPECTED_COUNTS = {
     "branches": 1,
     "users": 1,
     "roles": 5,
-    "permissions": 20,           # 16 seeded + drugs.manage (rev 005) +
+    "permissions": 21,           # 16 seeded + drugs.manage (rev 005) +
                                  # accounts.manage (rev 009) + journals.manage (rev 011) +
-                                 # receivables.manage (rev 012)
-    "role_permissions": 35,      # admin->all 16 + manager 6 + accountant 2 +
+                                 # receivables.manage (rev 012) + months.close (rev 013)
+    "role_permissions": 38,      # admin->all 16 + manager 6 + accountant 2 +
                                  # pharmacist 1 + cashier 1 + 005 admin grant +
                                  # 009 admin + accountant accounts.manage grants +
                                  # 011 journals.manage grants to roles 1, 4, 5 +
-                                 # 012 receivables.manage grants to roles 1, 4, 5
+                                 # 012 receivables.manage grants to roles 1, 4, 5 +
+                                 # 013 months.close grants to roles 1, 4, 5
     "user_roles": 1,
     "accounts": 23,              # 12 seeded + 11 rev-009 tree nodes
     "app_plugins": 2,

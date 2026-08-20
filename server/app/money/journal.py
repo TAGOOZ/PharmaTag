@@ -178,6 +178,29 @@ async def post_journal(
     pinned account the original touched (never re-derived from a code constant
     that could mismatch a party's mapped account).
     """
+    # A closed (branch, month) rejects further journals (S2.6, #21, plan/02 4.5).
+    # Inline here to avoid a circular import: monthclose imports nothing from
+    # journal, so importing guard lazily is safe, but inlining the SELECT keeps
+    # the engine thin and avoids the import entirely (the guard lives in the
+    # monthclose module for reuse; the engine just enforces the invariant).
+    from sqlalchemy import select as _select
+
+    from app.models.ledger import MonthlyClose as _MonthlyClose
+
+    _closed = (
+        await session.execute(
+            _select(_MonthlyClose.status).where(
+                _MonthlyClose.branch_id == branch_id,
+                _MonthlyClose.year == datee.year,
+                _MonthlyClose.month == datee.month,
+            )
+        )
+    ).scalar_one_or_none()
+    if _closed == "closed":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "month is closed; reopen it before posting"
+        )
+
     journal = Journal(
         branch_id=branch_id,
         datee=datee,

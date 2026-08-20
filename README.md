@@ -146,12 +146,15 @@ Real so far: `/api/v1/auth/*` (login, me, reset-password), `/api/v1/drugs`
 `drugs.manage`), `/api/v1/accounts` (per-branch chart of accounts: tree +
 flat list + detail + CRUD; the rev-009 seed builds the hierarchical legacy
 tree from the flat chart, writes gated by `accounts.manage` — legacy level ≥ 7
-or accountant role — with posting-safety guards on referenced accounts; plus
+or accountant role — with posting-safety guards on referenced accounts and a
+company-wide code/type rule (a branch account for a code in the inherited
+chart must keep that code's type); plus
 ميزان المراجعة + الميزانية العمومية `/api/v1/accounts/trial-balance` +
 `/api/v1/accounts/balance-sheet`, JSON or A4 HTML, open to any authenticated
 user — the same code-shadowing aggregation the statement/receivables reads use,
 with opening/period/closing columns and the balance-sheet identity
-assets = liabilities + equity checked live),
+assets = liabilities + equity checked live, equity splitting the opening
+retained earnings from the period's own net income),
 `/api/v1/users` (user CRUD, roles/permissions, manager password
 reset), plugin registry, sales invoicing (create/list/detail/80mm print +
 offline outbox replay; gated by `sale.create`), sales returns (partial/full

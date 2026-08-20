@@ -353,6 +353,71 @@ async def test_trial_balance_date_range_filters(client):
         await _cleanup_purchase([drug_id], invoice_ids, [])
 
 
+async def test_trial_balance_open_ended_range_echoes(client):
+    """A one-sided range is open-ended and the echo says so: date_from only
+    reports open_to=True (postings before it land in opening), date_to only
+    reports open_from=True — the caller always sees which bound was open."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        price="10.0000",
+        batches=[("10.0000", "5.0000", "2026-01-01")],
+        stock_qty="20.0000",
+    )
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        r = await client.post(
+            "/api/v1/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "datee": "2026-08-10",
+                "lines": [{"drug_id": drug_id, "qty": "5"}],
+            },
+        )
+        assert r.status_code == 201, r.text
+        invoice_ids.append(r.json()["id"])
+
+        r = await client.get(
+            "/api/v1/accounts/trial-balance?date_from=2026-08-15",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        tb = r.json()
+        assert tb["period"]["date_from"] == "2026-08-15"
+        assert tb["period"]["date_to"] is None
+        assert tb["period"]["open_from"] is False
+        assert tb["period"]["open_to"] is True
+        # the Aug 10 sale predates the window: opening, not period movement
+        assert tb["totals"]["opening_debit"] == "75.00"
+        assert tb["totals"]["debit"] == "0.00"
+        assert tb["balanced"] is True
+
+        r = await client.get(
+            "/api/v1/accounts/trial-balance?date_to=2026-08-05",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        tb = r.json()
+        assert tb["period"]["date_from"] is None
+        assert tb["period"]["date_to"] == "2026-08-05"
+        assert tb["period"]["open_from"] is True
+        assert tb["period"]["open_to"] is False
+        assert tb["totals"]["debit"] == "0.00"
+        assert tb["totals"]["credit"] == "0.00"
+        assert tb["balanced"] is True
+
+        # the HTML print renders the open end instead of a literal None
+        r = await client.get(
+            "/api/v1/accounts/trial-balance?date_from=2026-08-15&format=html",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        assert "مفتوح" in r.text
+        assert "None" not in r.text
+    finally:
+        await _cleanup_purchase([drug_id], invoice_ids, [])
+
+
 async def test_trial_balance_opening_balance_carries_forward(client):
     """July's closing becomes August's opening: the ميزان keeps history across
     month boundaries for the same branch chart."""
@@ -499,6 +564,92 @@ async def test_balance_sheet_net_loss_identity(client):
         await _cleanup_purchase([drug_id], invoice_ids, [])
 
 
+async def test_balance_sheet_no_activity_period_reports_zero_net_income(client):
+    """The period's net income is the window's OWN profit/loss, not the
+    accumulated one: with only July activity, the August balance sheet reports
+    net_income 0.00 and carries the prior profit as opening_retained_earnings."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        price="10.0000",
+        batches=[("10.0000", "5.0000", "2026-01-01")],
+        stock_qty="20.0000",
+    )
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        r = await client.post(
+            "/api/v1/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "datee": "2026-07-31",
+                "lines": [{"drug_id": drug_id, "qty": "5"}],
+            },
+        )
+        assert r.status_code == 201, r.text
+        invoice_ids.append(r.json()["id"])
+
+        r = await client.get(
+            "/api/v1/accounts/balance-sheet?month=8&year=2026",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        bs = r.json()
+        assert bs["balanced"] is True
+        assert bs["net_income"] == "0.00"
+        assert bs["opening_retained_earnings"] == "18.86"
+        eq = {a["code"]: a for a in bs["equity"]["accounts"]}
+        assert eq["__retained_earnings__"]["amount"] == "18.86"
+        assert eq["__retained_earnings__"]["side"] == "credit"
+        assert "__net_income__" not in eq
+        assert bs["total_assets"] == "25.00"
+        assert bs["total_liabilities_equity"] == "25.00"
+    finally:
+        await _cleanup_purchase([drug_id], invoice_ids, [])
+
+
+async def test_balance_sheet_period_net_income_split(client):
+    """With activity in both July and August, the August sheet splits equity
+    into the prior profit (opening_retained_earnings) and the period's own
+    (net_income) — both 18.86 here, identity still holds."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        price="10.0000",
+        batches=[("10.0000", "5.0000", "2026-01-01")],
+        stock_qty="20.0000",
+    )
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        for day in ("2026-07-31", "2026-08-10"):
+            r = await client.post(
+                "/api/v1/sales",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "datee": day,
+                    "lines": [{"drug_id": drug_id, "qty": "5"}],
+                },
+            )
+            assert r.status_code == 201, r.text
+            invoice_ids.append(r.json()["id"])
+
+        r = await client.get(
+            "/api/v1/accounts/balance-sheet?month=8&year=2026",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        bs = r.json()
+        assert bs["balanced"] is True
+        assert bs["net_income"] == "18.86"
+        assert bs["opening_retained_earnings"] == "18.86"
+        eq = {a["code"]: a for a in bs["equity"]["accounts"]}
+        assert eq["__retained_earnings__"]["amount"] == "18.86"
+        assert eq["__net_income__"]["amount"] == "18.86"
+        assert bs["total_assets"] == "50.00"
+        assert bs["total_liabilities_equity"] == "50.00"
+    finally:
+        await _cleanup_purchase([drug_id], invoice_ids, [])
+
+
 async def test_trial_balance_own_branch_account_shadows_inherited(client):
     """The S2.3 code-shadowing rule: a branch that configures its OWN account
     for a code keeps its history on the inherited branch-1 row AND displays the
@@ -571,6 +722,117 @@ async def test_trial_balance_own_branch_account_shadows_inherited(client):
         row = _by_code(tb)["1000"]
         assert row["name_ar"] == "خزينة فرعية خاصة"
         assert row["credit"] == "10.00"
+    finally:
+        from tests.manual_journal_test_utils import _cleanup_journals
+
+        await _cleanup_journals(tag)
+        async with SessionLocal() as session:
+            if other_account_id is not None:
+                await session.execute(
+                    delete(Account).where(Account.id == other_account_id)
+                )
+            await session.execute(
+                delete(AuditLog).where(AuditLog.user_id == other_user_id)
+            )
+            await session.execute(delete(User).where(User.id == other_user_id))
+            await session.execute(delete(Branch).where(Branch.id == other_branch_id))
+            await session.commit()
+
+
+async def test_trial_balance_own_account_keeps_prior_inherited_history(client):
+    """The code-shadow rule END-TO-END: a branch that posts history on the
+    inherited branch-1 row and THEN creates its own account for the code still
+    sees the old lines — one code row aggregating both account rows, the
+    own-branch account shown as the primary name/type, and new money landing on
+    the own account."""
+    from app.auth.security import create_access_token
+    from app.models import Branch, User
+
+    other_user_id = None
+    other_branch_id = None
+    other_account_id = None
+    tag = _uniq("t11")
+    try:
+        async with SessionLocal() as session:
+            branch = Branch(
+                pharmacyid=f"sb{_seq[0]}", mobile=f"8{_seq[0]}", pharname="Other"
+            )
+            session.add(branch)
+            await session.flush()
+            other_branch_id = branch.id
+            user = User(
+                username=_uniq("usr"),
+                pass_hash="x",
+                permission_level=9,
+                branch_id=branch.id,
+            )
+            session.add(user)
+            await session.flush()
+            other_user_id = user.id
+            await session.commit()
+
+        other_token = create_access_token(
+            str(other_user_id), branch_id=other_branch_id, roles=[], permission_level=9
+        )
+        # first posting resolves to the inherited branch-1 '1000' row — the
+        # branch has no own account for the code yet
+        r = await client.post(
+            "/api/v1/journals/manual",
+            headers={"Authorization": f"Bearer {other_token}"},
+            json={
+                "datee": "2026-08-10",
+                "description": f"تاريخ على الوراثة {tag}",
+                "lines": [
+                    {"account_code": "5000", "debit": "10.00"},
+                    {"account_code": "1000", "credit": "10.00"},
+                ],
+            },
+        )
+        assert r.status_code == 201, r.text
+        # the branch then configures its OWN 1000 account with a distinctive name
+        r = await client.post(
+            "/api/v1/accounts",
+            headers={"Authorization": f"Bearer {other_token}"},
+            json={
+                "code": "1000",
+                "name_ar": "خزينة فرعية خاصة",
+                "name_en": "Subsidiary Cash",
+                "type": "asset",
+            },
+        )
+        assert r.status_code == 201, r.text
+        other_account_id = r.json()["id"]
+        # new money now lands on the own account
+        r = await client.post(
+            "/api/v1/journals/manual",
+            headers={"Authorization": f"Bearer {other_token}"},
+            json={
+                "datee": "2026-08-12",
+                "description": f"تاريخ على حسابي {tag}",
+                "lines": [
+                    {"account_code": "5000", "debit": "20.00"},
+                    {"account_code": "1000", "credit": "20.00"},
+                ],
+            },
+        )
+        assert r.status_code == 201, r.text
+
+        r = await client.get(
+            "/api/v1/accounts/trial-balance?month=8&year=2026",
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+        assert r.status_code == 200, r.text
+        tb = r.json()
+        codes = [row["code"] for row in tb["accounts"]]
+        assert codes.count("1000") == 1
+        row = _by_code(tb)["1000"]
+        assert row["name_ar"] == "خزينة فرعية خاصة"
+        assert row["type"] == "asset"
+        # old inherited-line credit (10) + new own-account credit (20)
+        assert row["credit"] == "30.00"
+        assert tb["totals"]["debit"] == "30.00"
+        assert tb["totals"]["credit"] == "30.00"
+        assert tb["balanced"] is True
     finally:
         from tests.manual_journal_test_utils import _cleanup_journals
 

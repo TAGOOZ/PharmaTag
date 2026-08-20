@@ -15,6 +15,11 @@ posting":
   onto, or reactivating under an inactive ancestor is refused, so the journal
   engine can trust an account's own `is_active` flag (an active account never
   sits under an inactive one).
+* **Code/type are company-wide** — a branch account for a code that already
+  exists on the inherited branch-1 chart must keep that code's type (400
+  otherwise, on create and on update when the code/type changes): the ميزان
+  groups a code's merged balances by the own account's type, so a re-typed
+  shadow account would silently land in the wrong balance-sheet section.
 
 Every write runs under `atomic()` with its `audit_log` row (G12). No sync
 outbox: the chart is branch-local configuration (same treatment as parties and
@@ -242,6 +247,27 @@ async def account_tree(session: AsyncSession, *, branch_id: int) -> list[dict]:
     return roots
 
 
+async def _inherited_type(
+    session: AsyncSession, branch_id: int, code: str
+) -> Optional[str]:
+    """The branch-1 chart's type for a code, when the caller inherits it.
+
+    A branch account created for (or renamed onto) a code that already exists
+    on the inherited branch-1 chart must keep that code's company-wide type:
+    the ميزان aggregates a code's own + inherited balances into one row grouped
+    by the own account's type, so a re-typed shadow account would silently move
+    the merged balance into the wrong balance-sheet section. Returns None for
+    branch 1 itself and for codes absent from the company chart.
+    """
+    if branch_id == 1:
+        return None
+    return (
+        await session.execute(
+            select(Account.type).where(Account.branch_id == 1, Account.code == code)
+        )
+    ).scalar_one_or_none()
+
+
 async def create_account(
     session: AsyncSession,
     *,
@@ -267,6 +293,13 @@ async def create_account(
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "account code already exists in this branch",
+        )
+    inherited = await _inherited_type(session, branch_id, code)
+    if inherited is not None and inherited != body.type:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"code {code} is already an '{inherited}' account in the company "
+            "chart; branch accounts must keep the same type",
         )
     parent: Optional[Account] = None
     if body.parent_id is not None:
@@ -446,6 +479,15 @@ async def update_account(
         account.master = new_parent.code if new_parent else ""
     if "code" in data:
         account.fary = account.code
+
+    if "code" in data or "type" in data:
+        inherited = await _inherited_type(session, branch_id, account.code)
+        if inherited is not None and inherited != account.type:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"code {account.code} is already an '{inherited}' account in "
+                "the company chart; branch accounts must keep the same type",
+            )
 
     try:
         async with atomic(session):

@@ -171,6 +171,90 @@ async def test_create_validation_400(client):
         assert r.status_code == 400, payload
 
 
+async def test_create_account_rejects_type_mismatch_with_inherited_chart(client):
+    """The ميزان groups a code's merged balances by the own account's type, so
+    a branch account created for a code that already exists on the inherited
+    branch-1 chart must keep that code's company-wide type — a re-typed shadow
+    account would silently regroup the merged balance into the wrong
+    balance-sheet section."""
+    other_branch = await _make_other_branch()
+    other = await _make_user(_uniq("other"), permission_level=9, branch_id=other_branch)
+    token = _token_for(other, other_branch)
+    try:
+        r = await client.post(
+            "/api/v1/accounts",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": "4000", "name_ar": "ايراد خاطئ", "type": "asset"},
+        )
+        assert r.status_code == 400, r.text
+        r = await client.post(
+            "/api/v1/accounts",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": "4000", "name_ar": "ايراد فرع", "type": "income"},
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["type"] == "income"
+        # a code absent from the inherited chart is free to pick any type
+        r = await client.post(
+            "/api/v1/accounts",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": "7100", "name_ar": "إيراد آخر", "type": "income"},
+        )
+        assert r.status_code == 201, r.text
+    finally:
+        await _delete_users([other])
+        await _delete_other_branch(other_branch)
+
+
+async def test_update_account_cannot_retype_or_rename_against_inherited_chart(client):
+    """Patching a branch account's type (or renaming it) to a code whose
+    inherited branch-1 type differs is refused — the merged balance would move
+    statement sections — while a matching rename stays allowed."""
+    other_branch = await _make_other_branch()
+    other = await _make_user(_uniq("other"), permission_level=9, branch_id=other_branch)
+    token = _token_for(other, other_branch)
+    try:
+        r = await client.post(
+            "/api/v1/accounts",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": "3000", "name_ar": "رأس مال الفرع", "type": "equity"},
+        )
+        assert r.status_code == 201, r.text
+        equity_id = r.json()["id"]
+        r = await client.patch(
+            f"/api/v1/accounts/{equity_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"type": "liability"},
+        )
+        assert r.status_code == 400, r.text
+
+        r = await client.post(
+            "/api/v1/accounts",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": "7100", "name_ar": "مصروف فرع", "type": "expense"},
+        )
+        assert r.status_code == 201, r.text
+        exp_id = r.json()["id"]
+        # renaming a non-inherited expense account onto the income code 4000
+        # would re-type the shadow row — refused
+        r = await client.patch(
+            f"/api/v1/accounts/{exp_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": "4000"},
+        )
+        assert r.status_code == 400, r.text
+        # a rename onto an inherited code with a matching type is fine
+        r = await client.patch(
+            f"/api/v1/accounts/{exp_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": "6000"},
+        )
+        assert r.status_code == 200, r.text
+    finally:
+        await _delete_users([other])
+        await _delete_other_branch(other_branch)
+
+
 async def test_create_parent_outside_branch_is_404(client):
     token = await _login_token(client)
     other_branch = await _make_other_branch()

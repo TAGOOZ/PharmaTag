@@ -13,8 +13,11 @@ S2.3 code-shadowing rule), with the own-branch row as the display name/type.
   SUM(debit) == SUM(credit) for opening, period, and closing.
 * Balance sheet (balance 'umumiyya): the same closing balances grouped by
   account type - assets and liabilities on their natural sides, and equity
-  plus the period's profit/loss (income - expenses) - with the identity
-  total_assets == total_liabilities + total_equity checked live.
+  made of the branch's equity accounts at closing, the opening retained
+  earnings (prior periods' accumulated income - expenses) and the period's
+  own net income (period income - expenses, folded in as an ارباح وخسائر
+  line item) - with the identity total_assets == total_liabilities +
+  total_equity checked live.
 """
 from __future__ import annotations
 
@@ -61,12 +64,30 @@ def _resolve_period(
         y = year or today.year
         start = date(y, m, 1)
         end = date(y, m, calendar.monthrange(y, m)[1])
-        return {"month": m, "year": y, "date_from": None, "date_to": None}, start, end
+        return (
+            {
+                "month": m,
+                "year": y,
+                "date_from": None,
+                "date_to": None,
+                "open_from": False,
+                "open_to": False,
+            },
+            start,
+            end,
+        )
     if date_from is not None or date_to is not None:
         start = date_from or date(1900, 1, 1)
         end = date_to or date(9999, 12, 31)
         return (
-            {"month": None, "year": None, "date_from": date_from, "date_to": date_to},
+            {
+                "month": None,
+                "year": None,
+                "date_from": date_from,
+                "date_to": date_to,
+                "open_from": date_from is None,
+                "open_to": date_to is None,
+            },
             start,
             end,
         )
@@ -74,7 +95,14 @@ def _resolve_period(
     start = date(today.year, today.month, 1)
     end = date(today.year, today.month, calendar.monthrange(today.year, today.month)[1])
     return (
-        {"month": today.month, "year": today.year, "date_from": None, "date_to": None},
+        {
+            "month": today.month,
+            "year": today.year,
+            "date_from": None,
+            "date_to": None,
+            "open_from": False,
+            "open_to": False,
+        },
         start,
         end,
     )
@@ -251,8 +279,11 @@ async def get_balance_sheet(
 ) -> dict:
     """The balance sheet (al-mizaniyya al-'umumiyya): the same per-code closing
     balances grouped by account type. Assets and liabilities keep their natural
-    sides; equity adds the period's profit/loss (income - expenses) so the
-    identity total_assets == total_liabilities + total_equity holds."""
+    sides; equity combines the branch's equity accounts at closing with the
+    opening retained earnings (prior periods' accumulated income - expenses)
+    and the period's own net income (period income - expenses, folded in as an
+    ارباح وخسائر line item) so the identity total_assets ==
+    total_liabilities + total_equity holds as of the end of the window."""
     period, start, end = _resolve_period(month, year, date_from, date_to)
     display, ids_by_code, account_ids = await _account_rows(session, branch_id)
     sums = await _aggregate(session, branch_id, account_ids, start, end)
@@ -264,8 +295,6 @@ async def get_balance_sheet(
     assets: list[dict] = []
     liabilities: list[dict] = []
     equity_accounts: list[dict] = []
-    income_total = _ZERO
-    expense_total = _ZERO
     for row in rows:
         balance = money.dec(row["closing_balance"])
         if balance == 0:
@@ -307,12 +336,41 @@ async def get_balance_sheet(
                     "balance": row["closing_balance"],
                 }
             )
-        elif typ == "income":
-            income_total += -balance
-        elif typ == "expense":
-            expense_total += balance
 
-    net_income = money.round2(income_total - expense_total)
+    # The income/expense rows fold into equity in two pieces: what the branch
+    # had already earned before the window (opening retained earnings) and what
+    # it earned inside it (the period's net income). Income accounts are
+    # normally credited so credit - debit is income; expenses are normally
+    # debited so debit - credit is expense.
+    opening_income = opening_expense = _ZERO
+    period_income = period_expense = _ZERO
+    for row in rows:
+        typ = row["type"]
+        if typ == "income":
+            opening_income += money.dec(row["opening_credit"]) - money.dec(
+                row["opening_debit"]
+            )
+            period_income += money.dec(row["credit"]) - money.dec(row["debit"])
+        elif typ == "expense":
+            opening_expense += money.dec(row["opening_debit"]) - money.dec(
+                row["opening_credit"]
+            )
+            period_expense += money.dec(row["debit"]) - money.dec(row["credit"])
+
+    opening_retained_earnings = money.round2(opening_income - opening_expense)
+    net_income = money.round2(period_income - period_expense)
+    if opening_retained_earnings != 0:
+        equity_accounts.append(
+            {
+                "code": "__retained_earnings__",
+                "name_ar": "أرباح محتجزة",
+                "name_en": "Retained Earnings",
+                "type": "equity",
+                "side": "credit" if opening_retained_earnings > 0 else "debit",
+                "amount": money.format2(abs(opening_retained_earnings)),
+                "balance": money.format2(-opening_retained_earnings),
+            }
+        )
     if net_income != 0:
         equity_accounts.append(
             {
@@ -325,7 +383,7 @@ async def get_balance_sheet(
                 "balance": money.format2(-net_income),
             }
         )
-        equity_accounts.sort(key=lambda e: e["code"])
+    equity_accounts.sort(key=lambda e: e["code"])
 
     assets_total = sum((money.dec(a["balance"]) for a in assets), _ZERO)
     liabilities_total = -sum(
@@ -346,6 +404,7 @@ async def get_balance_sheet(
             "accounts": liabilities,
         },
         "equity": {"total": money.format2(equity_total), "accounts": equity_accounts},
+        "opening_retained_earnings": money.format2(opening_retained_earnings),
         "net_income": money.format2(net_income),
         "total_assets": money.format2(total_assets),
         "total_liabilities_equity": money.format2(total_liabilities_equity),

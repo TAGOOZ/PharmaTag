@@ -18,7 +18,15 @@ def _e(value) -> str:
 def _period_text(period: dict) -> str:
     if period["month"] is not None:
         return f"{period['month']} / {period['year']}"
-    return f"{period['date_from']} → {period['date_to']}"
+    d_from = period["date_from"]
+    d_to = period["date_to"]
+    if period.get("open_from") and period.get("open_to"):
+        return "مفتوح — مفتوح (بلا حدود)"
+    if period.get("open_from"):
+        return f"مفتوح → {d_to}"
+    if period.get("open_to"):
+        return f"{d_from} → مفتوح"
+    return f"{d_from} → {d_to}"
 
 
 def _page(*, title_ar: str, title_en: str, meta: list[tuple[str, str]], body: str) -> str:

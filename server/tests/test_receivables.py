@@ -641,7 +641,7 @@ async def test_credit_limit_counts_debt_after_code_shadowing(client):
         )
         invoice_ids.append(sale["id"])
 
-        await _shadow_account(client, token, "1100")
+        await _shadow_account(client, token, "1100", "asset")
 
         r = await client.post(
             "/api/v1/sales",
@@ -692,7 +692,7 @@ async def test_payables_register_survives_code_shadowing(client):
         assert r.status_code == 201, r.text
         invoice_ids.append(r.json()["id"])
 
-        await _shadow_account(client, token, "2000")
+        await _shadow_account(client, token, "2000", "liability")
 
         r = await client.get(
             "/api/v1/parties/payables", headers={"Authorization": f"Bearer {token}"}
@@ -735,7 +735,7 @@ async def test_statement_ledger_keeps_inherited_lines_after_code_shadowing(clien
         )
         invoice_ids.append(sale["id"])
 
-        await _shadow_account(client, token, "1100")
+        await _shadow_account(client, token, "1100", "asset")
 
         st = await _statement(client, token, customer_id, datee)
         assert st["closing_balance"] == "50.00"
@@ -988,7 +988,7 @@ async def test_receivables_register_survives_code_shadowing(client):
         )
         invoice_ids.append(sale["id"])
 
-        await _shadow_account(client, token, "1100")
+        await _shadow_account(client, token, "1100", "asset")
 
         r = await client.get(
             "/api/v1/receivables", headers={"Authorization": f"Bearer {token}"}
@@ -1071,17 +1071,18 @@ async def _make_drug_stock_on(
         return drug_id
 
 
-async def _shadow_account(client, token, code: str) -> int:
+async def _shadow_account(client, token, code: str, type: str) -> int:
     """Create the branch's own account for `code` via the chart API — the
     branch inherits the MAIN chart until it configures its own, and the per-branch
-    duplicate check lets it shadow an inherited code (the #19 review finding)."""
+    duplicate check lets it shadow an inherited code (the #19 review finding).
+    The type must match the company chart's type for the code (S2.5 guard)."""
     r = await client.post(
         "/api/v1/accounts",
         headers={"Authorization": f"Bearer {token}"},
         json={
             "code": code,
             "name_ar": _uniq(f"sh_{code}"),
-            "type": "asset",
+            "type": type,
             "is_active": True,
         },
     )

@@ -1,19 +1,23 @@
-"""Chart-of-accounts endpoints (S2.1, ticket #16).
+"""Chart-of-accounts endpoints (S2.1, ticket #16) + the ميزان (S2.5, #20).
 
-Reads (list/tree/detail) are open to any authenticated user so the tree can
-drive journal-posting pickers; writes (create/update/delete) are gated by the
-granular `accounts.manage` permission (legacy level >= 7 floor, or the
-accountant role). Every write carries its audit row (G12). The tree is
-branch-scoped: a caller only ever sees/mutates their own branch's chart.
+Reads (list/tree/detail/trial-balance/balance-sheet) are open to any
+authenticated user so the tree can drive journal-posting pickers; writes
+(create/update/delete) are gated by the granular `accounts.manage` permission
+(legacy level >= 7 floor, or the accountant role). Every write carries its
+audit row (G12). The tree is branch-scoped: a caller only ever sees/mutates
+their own branch's chart.
 """
 from __future__ import annotations
 
-from typing import Optional
+from datetime import date
+from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.accounts import service
+from app.accounts import print_html, service
+from app.accounts.mizan import get_balance_sheet, get_trial_balance
 from app.accounts.schemas import AccountCreate, AccountUpdate
 from app.auth.dependencies import get_current_user
 from app.auth.rbac import require_permission
@@ -58,6 +62,62 @@ async def tree_accounts(
     """The hierarchical chart (roots → children), sorted by code."""
     branch_id = await service.caller_branch_id(user)
     return {"tree": await service.account_tree(session, branch_id=branch_id)}
+
+
+@router.get("/trial-balance")
+async def trial_balance(
+    month: Optional[int] = Query(default=None, ge=1, le=12),
+    year: Optional[int] = Query(default=None),
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    format: Literal["json", "html"] = "json",
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """ميزان المراجعة — per-account-code debit/credit/balance for a period."""
+    branch_id = await service.caller_branch_id(user)
+    payload = await get_trial_balance(
+        session,
+        branch_id=branch_id,
+        month=month,
+        year=year,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    if format != "html":
+        return payload
+    return HTMLResponse(
+        content=print_html.render_trial_balance(payload),
+        status_code=status.HTTP_200_OK,
+    )
+
+
+@router.get("/balance-sheet")
+async def balance_sheet(
+    month: Optional[int] = Query(default=None, ge=1, le=12),
+    year: Optional[int] = Query(default=None),
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    format: Literal["json", "html"] = "json",
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """ميزانية عمومية — assets / liabilities / equity (incl. P&L) for a period."""
+    branch_id = await service.caller_branch_id(user)
+    payload = await get_balance_sheet(
+        session,
+        branch_id=branch_id,
+        month=month,
+        year=year,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    if format != "html":
+        return payload
+    return HTMLResponse(
+        content=print_html.render_balance_sheet(payload),
+        status_code=status.HTTP_200_OK,
+    )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

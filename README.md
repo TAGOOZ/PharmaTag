@@ -137,7 +137,7 @@ the ticket ships.
 | web `/` | dashboard (home) | stub — static shell, today-summary not wired | #38 |
 | desktop | module screens (`App.tsx` STUBS) | stubs — same as web | #38 |
 | desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly | #39 |
-| API | money endpoints | drawer + day close are real (`/api/v1/drawer/*`, ticket #14), except `vat_expenses`, which snapshots 0 — no expense-VAT data source exists yet (documented in `app/drawer/movements.py`); manual journal entries are real (`/api/v1/journals/manual`, ticket #17); كشف حساب + supplier payables are real (`/api/v1/parties/{id}/statement` + `/api/v1/parties/payables`, ticket #18); receivables + settlement vouchers (سند قبض/صرف) are real (`/api/v1/receivables/*`, ticket #19); the rest of the money API (trial balance, month close) remains stubs | #14 (S2/S3 slices later) |
+| API | money endpoints | drawer + day close are real (`/api/v1/drawer/*`, ticket #14), except `vat_expenses`, which snapshots 0 — no expense-VAT data source exists yet (documented in `app/drawer/movements.py`); manual journal entries are real (`/api/v1/journals/manual`, ticket #17); كشف حساب + supplier payables are real (`/api/v1/parties/{id}/statement` + `/api/v1/parties/payables`, ticket #18); receivables + settlement vouchers (سند قبض/صرف) are real (`/api/v1/receivables/*`, ticket #19); ميزان المراجعة + الميزانية العمومية are real (`/api/v1/accounts/trial-balance` + `/api/v1/accounts/balance-sheet`, JSON or A4 HTML via `format=html`, ticket #20); month close remains a stub | #14 (S2/S3 slices later) |
 | API | settings endpoints | not implemented — no branch-settings API exists | #38 |
 | data | CC0 drug catalog download | documented, not bundled — the importer (`server/app/drugs/importer.py`, CLI `python -m app.drugs.importer <file>`) is real and de-dupes/idempotent, but the 24k-medicine source (CC0 `karem505/egyptian-drug-database`) is fetched at import time, not shipped. A sample fixture lives in `server/tests/fixtures/cc0_catalog_sample.csv`. | #8 (shipped) |
 
@@ -146,7 +146,12 @@ Real so far: `/api/v1/auth/*` (login, me, reset-password), `/api/v1/drugs`
 `drugs.manage`), `/api/v1/accounts` (per-branch chart of accounts: tree +
 flat list + detail + CRUD; the rev-009 seed builds the hierarchical legacy
 tree from the flat chart, writes gated by `accounts.manage` — legacy level ≥ 7
-or accountant role — with posting-safety guards on referenced accounts),
+or accountant role — with posting-safety guards on referenced accounts; plus
+ميزان المراجعة + الميزانية العمومية `/api/v1/accounts/trial-balance` +
+`/api/v1/accounts/balance-sheet`, JSON or A4 HTML, open to any authenticated
+user — the same code-shadowing aggregation the statement/receivables reads use,
+with opening/period/closing columns and the balance-sheet identity
+assets = liabilities + equity checked live),
 `/api/v1/users` (user CRUD, roles/permissions, manager password
 reset), plugin registry, sales invoicing (create/list/detail/80mm print +
 offline outbox replay; gated by `sale.create`), sales returns (partial/full

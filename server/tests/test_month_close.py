@@ -623,3 +623,96 @@ async def test_closed_month_rejects_purchase(client):
             await session.execute(delete(Party).where(Party.id == supplier))
             await session.commit()
 
+async def test_drawer_movement_blocked_by_month_closed(client):
+    token = await _login_token(client)
+    y, m = 2026, 8
+    try:
+        r = await client.post(f"/api/v1/months/{y}/{m}/close", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200, r.text
+        r = await client.post(
+            "/api/v1/drawer/movements",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"datee": f"{y}-{m:02d}-15", "direction": "out", "reason": "expense", "method": "cash", "amount": "5.00"},
+        )
+        assert r.status_code == 409, r.text
+        # reopen should allow again
+        mgr = await _make_user("mgr_drawer", 7, branch_id=BRANCH_ID)
+        mgr_token = _token_for(mgr, BRANCH_ID)
+        try:
+            r = await client.post(f"/api/v1/months/{y}/{m}/reopen", headers={"Authorization": f"Bearer {mgr_token}"})
+            assert r.status_code == 200, r.text
+            r = await client.post(
+                "/api/v1/drawer/movements",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"datee": f"{y}-{m:02d}-15", "direction": "out", "reason": "expense", "method": "cash", "amount": "5.00"},
+            )
+            assert r.status_code == 201, r.text
+            # cleanup drawer movement
+            from sqlalchemy import delete
+            from app.models import DrawerMovement, AuditLog
+            async with SessionLocal() as session:
+                await session.execute(delete(DrawerMovement).where(DrawerMovement.branch_id == BRANCH_ID, DrawerMovement.datee == date(y, m, 15), DrawerMovement.reason == "expense"))
+                await session.execute(delete(AuditLog).where(AuditLog.entity == "drawer_movements", AuditLog.branch_id == BRANCH_ID))
+                await session.commit()
+        finally:
+            await _delete_users([mgr])
+    finally:
+        await _cleanup_month(BRANCH_ID, y, m)
+
+
+async def test_audit_entity_id_unique_per_month(client):
+    from app.models import AuditLog
+    token = await _login_token(client)
+    y1, m1 = 2026, 6
+    y2, m2 = 2026, 7
+    try:
+        r = await client.post(f"/api/v1/months/{y1}/{m1}/close", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200, r.text
+        r = await client.post(f"/api/v1/months/{y2}/{m2}/close", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200, r.text
+        async with SessionLocal() as session:
+            rows = (await session.execute(select(AuditLog).where(AuditLog.entity == "monthly_close", AuditLog.action == "close", AuditLog.branch_id == BRANCH_ID, AuditLog.typevalue.in_([f"{y1}-{m1:02d}", f"{y2}-{m2:02d}"])))).scalars().all()
+            by_type = {r.typevalue: r for r in rows}
+            assert f"{y1}-{m1:02d}" in by_type and f"{y2}-{m2:02d}" in by_type
+            assert by_type[f"{y1}-{m1:02d}"].entity_id != by_type[f"{y2}-{m2:02d}"].entity_id
+            assert by_type[f"{y1}-{m1:02d}"].entity_id == BRANCH_ID * 1_000_000 + y1 * 100 + m1
+    finally:
+        await _cleanup_month(BRANCH_ID, y1, m1)
+        await _cleanup_month(BRANCH_ID, y2, m2)
+        async with SessionLocal() as session:
+            await session.execute(AuditLog.__table__.delete().where(AuditLog.entity == "monthly_close", AuditLog.branch_id == BRANCH_ID, AuditLog.typevalue.in_([f"{y1}-{m1:02d}", f"{y2}-{m2:02d}"])))
+            await session.commit()
+
+
+async def test_reopen_twice_409_and_get_branch_isolation(client):
+    token = await _login_token(client)
+    other = await _make_other_branch()
+    other_user = await _make_user("other_iso", 9, branch_id=other)
+    other_token = _token_for(other_user, other)
+    mgr = await _make_user("mgr_twice", 7, branch_id=BRANCH_ID)
+    mgr_token = _token_for(mgr, BRANCH_ID)
+    y, m = 2026, 8
+    try:
+        r = await client.post(f"/api/v1/months/{y}/{m}/close", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200, r.text
+        r = await client.post(f"/api/v1/months/{y}/{m}/reopen", headers={"Authorization": f"Bearer {mgr_token}"})
+        assert r.status_code == 200, r.text
+        # second reopen should 409 (already reopened, not closed)
+        r = await client.post(f"/api/v1/months/{y}/{m}/reopen", headers={"Authorization": f"Bearer {mgr_token}"})
+        assert r.status_code == 409, r.text
+        # branch-2 cannot see branch-1 reopened month via GET detail (branch scoped -> 404)
+        r = await client.get(f"/api/v1/months/{y}/{m}", headers={"Authorization": f"Bearer {other_token}"})
+        assert r.status_code == 404, r.text
+        r = await client.get(f"/api/v1/months/{y}/{m}/open-balances", headers={"Authorization": f"Bearer {other_token}"})
+        assert r.status_code == 200, r.text
+        assert r.json()["rows"] == []
+    finally:
+        await _delete_users([other_user, mgr])
+        await _delete_other_branch(other)
+        await _cleanup_month(BRANCH_ID, y, m)
+        await _cleanup_month(other, y, m)
+        async with SessionLocal() as session:
+            from app.models import AuditLog
+            await session.execute(AuditLog.__table__.delete().where(AuditLog.entity == "monthly_close", AuditLog.branch_id == BRANCH_ID, AuditLog.typevalue == f"{y}-{m:02d}"))
+            await session.commit()
+

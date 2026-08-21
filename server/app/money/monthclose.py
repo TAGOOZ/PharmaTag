@@ -46,6 +46,11 @@ CLOSED_GUARD = HTTPException(status.HTTP_409_CONFLICT, "month is closed; reopen 
 _ZERO = Decimal("0")
 
 
+def _audit_id(branch_id: int, year: int, month: int) -> int:
+    """Stable BigInteger for audit_log.entity_id — unique per (branch, year, month)."""
+    return branch_id * 1_000_000 + year * 100 + month
+
+
 def _validate_month(month: int) -> None:
     if not 1 <= month <= 12:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "month must be between 1 and 12")
@@ -270,7 +275,7 @@ async def close_month(
             branch_id=branch_id,
             user_id=user_id,
             entity="monthly_close",
-            entity_id=row.branch_id,
+            entity_id=_audit_id(branch_id, year, month),
             action="close",
             new_value=f"year={year} month={month} status=closed",
             typevalue=f"{year}-{month:02d}",
@@ -314,7 +319,7 @@ async def reopen_month(
             branch_id=branch_id,
             user_id=user_id,
             entity="monthly_close",
-            entity_id=row.branch_id,
+            entity_id=_audit_id(branch_id, year, month),
             action="reopen",
             old_value="closed",
             new_value="reopened — reversal of the month close",

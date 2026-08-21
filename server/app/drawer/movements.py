@@ -97,6 +97,9 @@ async def record_movement(
         )
     await acquire_branch_lock(session, branch_id)
     await guard_open_day(session, branch_id=branch_id, datee=datee)
+    # S2.6: a closed month also blocks drawer movements (month is the ledger period)
+    from app.money.monthclose import guard_open_month
+    await guard_open_month(session, branch_id=branch_id, datee=datee)
     if ref_invoice_id is not None:
         ref = (
             await session.execute(

@@ -1,8 +1,8 @@
-"""The RPT report catalog (S3.1, ticket #23).
+"""The RPT report catalog (S3.1 #23 + S3.2 #24).
 
 Since rev 015 the catalog lives in the `report_catalog` table — a later
 report slice (S3.2–S3.5) adds rows, not code. `SEED_CATALOG` documents the
-four v1 rows the migration seeds (kept in sync with alembic 015); the
+five rows revs 015+016 seed (kept in sync with the migrations); the
 endpoint reads the table so operators can deactivate/reorder reports
 without a deploy.
 """

@@ -333,6 +333,11 @@ async def test_day_totals_exports_are_real_files(client):
 
 async def test_day_totals_print_queue_round_trip(client):
     """The queue accepts a day_totals job with its params snapshot."""
+    from sqlalchemy import delete as sqld
+
+    from app.core.db import SessionLocal
+    from app.models import PrintJob
+
     token = await _login_token(client)
     r = await client.post(
         "/api/v1/reports/day_totals/print-queue",
@@ -350,6 +355,10 @@ async def test_day_totals_print_queue_round_trip(client):
     )
     assert done.status_code == 200, done.text
     assert done.json()["status"] == "done"
+
+    async with SessionLocal() as session:
+        await session.execute(sqld(PrintJob).where(PrintJob.id == job["id"]))
+        await session.commit()
 
 
 async def test_day_totals_branch_scoped(client):

@@ -220,7 +220,8 @@ never disagree — and they reconcile against `journal_lines` (net revenue =
 reports keep their literal aliases:
 `GET /reports/day-profit` (ربح اليوم — net revenue, COGS, expenses, net profit,
 VAT, discounts; one day via `datee` or across a period via
-`date_from`/`date_to`, mixing the two is 400),
+`date_from`/`date_to` — no params means the business day, mixing `datee`
+with a range is 400),
 `GET /reports/day_totals` (الإجماليات اليومية — one row per day with the
 payment splits: cash/network sales and returns, manual cash/card, expenses,
 supplier payments, expected cash, plus purchases/discounts/VAT/COGS/net

@@ -215,3 +215,73 @@ async def test_day_profit_rejects_mixed_and_inverted_windows(client):
         headers=auth,
     )
     assert inverted.status_code == 400
+
+
+async def test_day_profit_no_params_defaults_to_the_business_day(client):
+    """ربح اليوم with no params means TODAY, never lifetime-to-date."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        price="10.0000",
+        cost_price="5.0000",
+        batches=[("20.0000", "5.0000", "2027-01-01")],
+    )
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        auth = {"Authorization": f"Bearer {token}"}
+        # an old sale far outside the business month must not leak in
+        r = await client.post(
+            "/api/v1/sales",
+            headers=auth,
+            json={"lines": [{"drug_id": drug_id, "qty": "12"}], "datee": "2020-01-01"},
+        )
+        assert r.status_code == 201, r.text
+        invoice_ids.append(r.json()["id"])
+        r = await client.post(
+            "/api/v1/sales",
+            headers=auth,
+            json={"lines": [{"drug_id": drug_id, "qty": "6"}]},
+        )
+        assert r.status_code == 201, r.text
+        invoice_ids.append(r.json()["id"])
+
+        for path in ("/api/v1/reports/day-profit", "/api/v1/reports/day_profit"):
+            rep = await client.get(path, headers=auth)
+            assert rep.status_code == 200, rep.text
+            body = rep.json()
+            assert body["datee"] == business_date().isoformat(), path
+            assert body["sales_count"] == 1, path
+            assert body["net_revenue"] == "52.63", path
+    finally:
+        await _cleanup([drug_id], invoice_ids)
+
+
+async def test_day_profit_ranged_payload_has_no_drawer_start(client):
+    """Σ of daily opening floats is meaningless across a window — omit it."""
+    token = await _login_token(client)
+    rep = await client.get(
+        "/api/v1/reports/day-profit",
+        params={"date_from": "2026-01-01", "date_to": "2026-01-31"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert rep.status_code == 200, rep.text
+    body = rep.json()
+    assert "drawer_start" not in body
+    assert "expected_cash" in body  # cash in − out stays meaningful
+
+
+async def test_print_queue_rejects_mixed_day_profit_params(client):
+    """A queued job mixing datee with a range could never render — 400 up front."""
+    token = await _login_token(client)
+    r = await client.post(
+        "/api/v1/reports/day_profit/print-queue",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "params": {
+                "datee": "2026-01-06",
+                "date_from": "2026-01-01",
+                "date_to": "2026-01-31",
+            }
+        },
+    )
+    assert r.status_code == 400

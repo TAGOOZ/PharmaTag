@@ -234,6 +234,13 @@ def _validate_params(allowed: list[str], params: dict[str, str]) -> dict[str, st
             views.parse_date(name, raw)
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    if "datee" in params and ("date_from" in params or "date_to" in params):
+        # mirrors day_profit's resolve_window rule: a job mixing the single
+        # day with a range could never render, so it must not enqueue
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "pass either datee or a date_from/date_to range, not both",
+        )
     try:
         views.require_ordered_range(
             views.parse_date("date_from", params.get("date_from")),

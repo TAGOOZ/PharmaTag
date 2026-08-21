@@ -15,6 +15,7 @@ journal identity:
 - period_totals gross     == the document's own debit+credit legs
 - drawer_handover roll-up == ΣDr(1000, source=sale) too
 """
+import os
 from datetime import date
 
 from sqlalchemy import delete, func, select
@@ -35,7 +36,7 @@ async def _make_supplier() -> int:
         party = Party(
             branch_id=1,
             kind="supplier",
-            namee=f"__t2_rec_sup_{_seq[0]}__",
+            namee=f"__t2_rec_{os.getpid()}_sup_{_seq[0]}__",
         )
         session.add(party)
         await session.flush()
@@ -160,10 +161,14 @@ async def test_money_reports_reconcile_against_the_journal(client):
         assert rep.status_code == 200, rep.text
         profit = rep.json()
 
-        sales_4000 = await _journal_totals("4000")
+        sales_4000 = await _journal_totals(
+            "4000", sources=("sale", "sale_return")
+        )
         assert profit["net_revenue"] == _delta(sales_4000, "credit")
 
-        cogs_6000 = await _journal_totals("6000")
+        cogs_6000 = await _journal_totals(
+            "6000", sources=("sale", "sale_return")
+        )
         assert profit["cogs"] == _delta(cogs_6000, "debit")
 
         vat_2100 = await _journal_totals("2100", sources=("sale", "sale_return"))

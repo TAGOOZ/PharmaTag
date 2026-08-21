@@ -77,6 +77,10 @@ async def day_profit_report(
 ) -> dict:
     """The day-profit payload (money as exact decimal strings)."""
     date_from, date_to, datee = resolve_window(datee, date_from, date_to)
+    if datee is None and date_from is None and date_to is None:
+        # ربح اليوم with no params means the business day (the #15 default) —
+        # never a lifetime-to-date aggregate.
+        datee = business_date()
     ranged = datee is None
     if not ranged:
         date_from = date_to = datee
@@ -100,7 +104,6 @@ async def day_profit_report(
         "net_network": money.format2(ledger["net_network"]),
         "manual_cash": money.format2(ledger["manual_cash"]),
         "manual_card": money.format2(ledger["manual_card"]),
-        "drawer_start": money.format2(ledger["drawer_start"]),
         "expected_cash": money.format2(ledger["expected_cash"]),
         "sales_count": 0,
         "sales_returns_count": 0,
@@ -110,6 +113,9 @@ async def day_profit_report(
         payload["date_to"] = date_to.isoformat() if date_to else None
     else:
         payload["datee"] = datee.isoformat()
+        # the opening float is a per-day figure; Σ of daily floats across a
+        # window is meaningless, so ranged payloads omit it
+        payload["drawer_start"] = money.format2(ledger["drawer_start"])
     counts = await _counts(
         session, branch_id=branch_id, date_from=date_from, date_to=date_to
     )

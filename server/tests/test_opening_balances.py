@@ -747,3 +747,56 @@ async def test_opening_balances_trial_balance_previous_month_does_not_see_future
         assert by_code["1000"]["debit"] == "0.00"
     finally:
         await _cleanup_opening(BRANCH_ID, year, month, tag)
+
+async def test_opening_rejected_after_previous_month_was_ever_closed(client):
+    """Cutover rule: an opening for month M is only allowed while NO monthly_close
+    row exists for M-1 (open or reopened). A close seeded M's snapshot from the
+    cumulative ledger — replacing it with opening-only values would desync the
+    archive from the مزان. Reopen-and-re-close regenerates instead."""
+    tag = _tag()
+    year, month = 2042, 3  # opening for March; February must never have been closed
+    try:
+        token = await _login_token(client)
+        # close February (seeds March's snapshot)
+        r = await client.post(f"/api/v1/months/{year}/2/close", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200, r.text
+        # reopen February (row still exists, status=reopened) — still rejected
+        mgr = None
+        r = await client.post(f"/api/v1/months/{year}/2/reopen", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200, r.text
+
+        r = await client.post(
+            f"/api/v1/opening-balances/{year}/{month}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"description": tag, "lines": [{"account_code": "1000", "debit": "10.00"}, {"account_code": "3000", "credit": "10.00"}]},
+        )
+        assert r.status_code == 409, r.text
+        assert "previous month was already closed" in r.text
+
+        # DELETE equally rejected for the same reason
+        r = await client.delete(f"/api/v1/opening-balances/{year}/{month}", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 409, r.text
+    finally:
+        async with SessionLocal() as session:
+            await session.execute(delete(MonthlyClose).where(MonthlyClose.branch_id == BRANCH_ID, MonthlyClose.year == year, MonthlyClose.month == 2))
+            await session.execute(delete(MonthOpenBalance).where(MonthOpenBalance.branch_id == BRANCH_ID, MonthOpenBalance.year == year, MonthOpenBalance.month == 3))
+            await session.commit()
+        await _cleanup_opening(BRANCH_ID, year, month, tag)
+
+
+async def test_opening_allowed_before_any_close(client):
+    """The happy cutover path: with no monthly_close rows anywhere, an opening
+    posts cleanly (guards pass)."""
+    tag = _tag()
+    year, month = 2042, 5
+    try:
+        token = await _login_token(client)
+        r = await client.post(
+            f"/api/v1/opening-balances/{year}/{month}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"description": tag, "lines": [{"account_code": "1000", "debit": "77.00"}, {"account_code": "3000", "credit": "77.00"}]},
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["total_debit"] == "77.00"
+    finally:
+        await _cleanup_opening(BRANCH_ID, year, month, tag)

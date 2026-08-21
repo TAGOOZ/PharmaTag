@@ -182,6 +182,28 @@ async def post_opening_balances(
         # is already frozen and would diverge from the mizan after we mutate this month.
         ny, nm = (year + 1, 1) if month == 12 else (year, month + 1)
         await _check_month_not_closed(session, branch_id, ny, nm, "next month is closed; reopen it before posting opening balances")
+        # The PREVIOUS month must have no monthly_close row at all (open OR
+        # reopened): a close seeded M's snapshot from the cumulative ledger —
+        # replacing it with opening-only values would desync the archive from
+        # the مزان until a re-close. Openings are cutover-time: they belong
+        # BEFORE any month has ever been closed.
+        py, pm = (year - 1, 12) if month == 1 else (year, month - 1)
+        prior = (
+            await session.execute(
+                select(MonthlyClose.status).where(
+                    MonthlyClose.branch_id == branch_id,
+                    MonthlyClose.year == py,
+                    MonthlyClose.month == pm,
+                )
+            )
+        ).scalar_one_or_none()
+        if prior is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "the previous month was already closed once; its carryover seeds "
+                "this month's start-data — reopen-and-re-close instead of posting "
+                "an opening",
+            )
 
         # No duplicate opening for the same branch+period — discriminator is
         # BOTH the opening journal and the month_open snapshot. month_open is
@@ -486,6 +508,26 @@ async def delete_opening_balances(session: AsyncSession, *, branch_id: int, user
         )
         ny, nm = (year + 1, 1) if month == 12 else (year, month + 1)
         await _check_month_not_closed(session, branch_id, ny, nm, "next month is closed; reopen it before deleting opening balances")
+        # Same cutover rule as POST: if the previous month was ever closed, M's
+        # snapshot may be close-generated carryover — wiping it would leave the
+        # archive empty despite prior history. Re-close regenerates instead.
+        py, pm = (year - 1, 12) if month == 1 else (year, month - 1)
+        prior = (
+            await session.execute(
+                select(MonthlyClose.status).where(
+                    MonthlyClose.branch_id == branch_id,
+                    MonthlyClose.year == py,
+                    MonthlyClose.month == pm,
+                )
+            )
+        ).scalar_one_or_none()
+        if prior is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "the previous month was already closed once; this period's "
+                "start-data belongs to the close archive — reopen-and-re-close "
+                "instead of deleting the opening",
+            )
         # Must be an opening-created period, not a bare month_close carryover
         journal = (
             await session.execute(

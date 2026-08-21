@@ -835,3 +835,73 @@ async def test_concurrent_double_close_one_wins(client):
             await session.execute(AuditLog.__table__.delete().where(AuditLog.entity == "monthly_close", AuditLog.typevalue == f"{y}-{m:02d}"))
             await session.commit()
 
+
+async def test_posting_blocked_while_next_month_closed(client):
+    """The next-month-closed guard: a month whose SUCCESSOR is closed rejects
+    new postings (sale + manual journal) with 409 — its cumulative is already
+    frozen into the successor's seeded start-data. Reopening the successor
+    unblocks posting again."""
+    tag = _tag()
+    token = await _login_token(client)
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        price="10.0000",
+        batches=[("10.0000", "5.0000", "2026-01-01")],
+        stock_qty="20.0000",
+    )
+    y, m = 2026, 6  # post in June while July is closed
+    mgr = await _make_user("mgr_next", 7, branch_id=BRANCH_ID)
+    mgr_token = _token_for(mgr, BRANCH_ID)
+    try:
+        # close the NEXT month (July)
+        r = await client.post(f"/api/v1/months/{y}/{m+1}/close", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200, r.text
+
+        # a sale dated June must now be rejected (July's snapshot would go stale)
+        r = await client.post(
+            "/api/v1/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "datee": f"{y}-{m:02d}-15",
+                "lines": [{"drug_id": drug_id, "qty": "1"}],
+            },
+        )
+        assert r.status_code == 409, r.text
+        assert "next month is closed" in r.text
+
+        # a manual journal dated June too
+        r = await client.post(
+            "/api/v1/journals/manual",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "datee": f"{y}-{m:02d}-20",
+                "description": f"blocked-next {tag}",
+                "lines": [
+                    {"account_code": "1000", "debit": "5.00"},
+                    {"account_code": "4000", "credit": "5.00"},
+                ],
+            },
+        )
+        assert r.status_code == 409, r.text
+
+        # reopen July -> June accepts postings again
+        r = await client.post(f"/api/v1/months/{y}/{m+1}/reopen", headers={"Authorization": f"Bearer {mgr_token}"})
+        assert r.status_code == 200, r.text
+        r = await client.post(
+            "/api/v1/journals/manual",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "datee": f"{y}-{m:02d}-20",
+                "description": f"allowed-after-reopen {tag}",
+                "lines": [
+                    {"account_code": "1000", "debit": "5.00"},
+                    {"account_code": "4000", "credit": "5.00"},
+                ],
+            },
+        )
+        assert r.status_code == 201, r.text
+    finally:
+        await _cleanup_sale(drug_id)
+        await _cleanup_journals(tag)
+        await _delete_users([mgr])
+        await _cleanup_month(BRANCH_ID, y, m + 1)

@@ -44,7 +44,7 @@ async def test_catalog_lists_the_four_basic_reports(client):
     assert day["title_ar"] == "ربح اليوم"
     assert "title_en" in day and day["title_en"]
     assert "params" in day and day["params"]
-    assert "group" in day
+    assert "category" in day
 
 
 async def test_catalog_requires_auth(client):

@@ -121,6 +121,14 @@ Drug-master **writes** (ticket #8) live on the same API: `POST /api/v1/drugs`,
 authenticated user) and `POST /api/v1/drugs/import` (CSV body, CC0 catalog —
 see §6). Prices are exact decimal strings, rounded half-up to 2 dp.
 
+The web **التقارير** page (ticket #23) is the generic ReportView: it reads the
+catalog menu grouped by category, asks only for the selected report's params
+(date inputs) + paper (A4/A5), renders any entry through the same grid the
+printable page uses, and offers عرض / طباعة (browser print of the black-on-white
+page) / PDF / Excel downloads and إضافة لقائمة الطباعة with a
+"تم الطباعة" queue drain. Sign in from الأدوية first — the page links there
+when no token is stored.
+
 ## 6. Known stubs (not finished work)
 
 Keep this inventory honest: a screen/endpoint listed here is a **placeholder**, not
@@ -132,7 +140,7 @@ the ticket ships.
 
 | Area | Item | Status | Ticket |
 | --- | --- | --- | --- |
-| web `/pos` `/purchases` `/stock` `/money` `/reports` `/employees` | module screens | stubs — show "built in the corresponding slice" | #38 |
+| web `/pos` `/purchases` `/stock` `/money` `/employees` | module screens | stubs — show "built in the corresponding slice" | #38 |
 | web `/settings` | module screen | change-password form works (ticket #37); the rest of the settings module is a stub | #38 |
 | web `/` | dashboard (home) | stub — static shell, today-summary not wired | #38 |
 | desktop | module screens (`App.tsx` STUBS) | stubs — same as web | #38 |
@@ -189,17 +197,28 @@ VAT, discounts) into `daily_close` per (branch, datee), gated by `day.close`;
 `vat_expenses` is snapshotted as 0 — the schema has no expense-VAT source yet
 (the expense ledger exists, but the slice writes no expense VAT); reopen is
 legacy level ≥ 7 with a reversal + audit, and a closed day rejects
-new movements until reopened) — and basic reports (`/api/v1/reports`:
-`GET /reports` catalog, `GET /reports/day-profit` (ربح اليوم — net revenue,
-COGS, expenses, net profit, VAT, discounts; matches the drawer day ledger),
+new movements until reopened) — and the report framework (`/api/v1/reports`,
+ticket #23: the catalog lives in the `report_catalog` table (rev 015) so later
+report slices add rows, not code; `GET /reports` lists active rows (code,
+bilingual titles, params, paper), `GET /reports/{code}` renders ANY catalog
+entry through one generic engine — JSON by default, `format=grid` for the web
+ReportView, or a black-on-white printable page with `format=html&paper=A4|A5`
+(`@page` size); `GET /reports/{code}/export?format=xlsx|pdf&paper=A4|A5`
+downloads real files — .xlsx via openpyxl (RTL sheet, money cells kept as
+exact-decimal strings, never float) and PDF via fpdf2 with the bundled OFL
+IBM Plex Sans Arabic + HarfBuzz shaping so Arabic prints shaped on any
+machine; a durable branch-scoped print queue (`POST /reports/{code}/print-queue`
+enqueue with params snapshot + paper, `GET /reports/print-queue` newest-first,
+`POST /reports/print-queue/{id}/done` queued→done exactly once); everything is
+branch-scoped and gated by the `reports` permission (admin level-9 or
+accountant role). The four v1 reports keep their literal aliases:
+`GET /reports/day-profit` (ربح اليوم — net revenue, COGS, expenses, net profit,
+VAT, discounts; matches the drawer day ledger),
 `GET /reports/period-totals` (ملخص المبيعات والمشتريات — counts + totals per
 sale/return/purchase/return kind over a date range, returns netted),
 `GET /reports/stock-minimum` (النواقص — drugs below the reorder point, shortage
 = minimum − qty, sorted desc), `GET /reports/drawer-handover` (تسليم الدرج —
-per-cashier opening/cash/card/returns/expenses/net over a period); every report
-is branch-scoped to the caller and gated by the `reports` permission (admin
-level-9 or accountant role), answers JSON by default and a black-on-white A4
-page with `format=html` — plus manual journal entries (`/api/v1/journals/manual`:
+per-cashier opening/cash/card/returns/expenses/net over a period) — plus manual journal entries (`/api/v1/journals/manual`:
 a `journals.manage` holder (admin, accountant, or manager role — legacy level ≥ 7)
 posts a dated, described, balanced قيد riding the journal engine (journal +
 balanced lines + balances + audit + a `manual_journal_entries` reference,

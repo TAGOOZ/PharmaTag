@@ -42,6 +42,7 @@ from app.models.ledger import MonthOpenBalance, MonthlyClose
 from app.models.drugs import Drug, DrugBarcode, PriceChangeLog
 from app.models.plugins import AppPlugin, PluginBranchGrant, PluginDependencyRow, PluginSettings
 from app.models.receivables import SettlementVoucher
+from app.models.reports import PrintJob, ReportCatalog
 from app.models.sales import Invoice, InvoiceLine, InvoiceVersion, PaymentSplit
 from app.models.stock import BranchStock, StockBatch, StockCorrectionRequest
 
@@ -69,10 +70,12 @@ __all__ = [
     "Party",
     "PaymentSplit",
     "Permission",
+    "PrintJob",
     "PluginBranchGrant",
     "PluginDependencyRow",
     "PluginSettings",
     "PriceChangeLog",
+    "ReportCatalog",
     "Role",
     "SettlementVoucher",
     "StockBatch",

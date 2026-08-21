@@ -56,6 +56,11 @@ def _validate_month(month: int) -> None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "month must be between 1 and 12")
 
 
+def _validate_year(year: int) -> None:
+    if not 1900 <= year <= 9999:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "year must be between 1900 and 9999")
+
+
 def _end_of(year: int, month: int) -> date:
     if month == 12:
         return date(year, 12, 31)
@@ -212,6 +217,7 @@ async def close_month(
     month_open_balances from the closing ledger state, atomically under the
     branch lock with an audit row (G12). 409 if already closed."""
     _validate_month(month)
+    _validate_year(year)
     async with atomic(session):
         await acquire_branch_lock(session, branch_id)
         existing = (
@@ -296,6 +302,7 @@ async def reopen_month(
     """Manager-only reopen (A07): flip a closed month to reopened + audit so
     the period can accept new postings and be re-closed."""
     _validate_month(month)
+    _validate_year(year)
     async with atomic(session):
         await acquire_branch_lock(session, branch_id)
         row = (
@@ -332,6 +339,7 @@ async def get_month_close(
     session: AsyncSession, *, branch_id: int, year: int, month: int
 ) -> dict:
     _validate_month(month)
+    _validate_year(year)
     row = (
         await session.execute(
             select(MonthlyClose).where(
@@ -364,6 +372,7 @@ async def get_open_balances(
     """The opening balances FOR (year, month) — i.e. month_open_balances rows
     for that month (seeded when the preceding month closed)."""
     _validate_month(month)
+    _validate_year(year)
     rows = (
         await session.execute(
             select(MonthOpenBalance).where(

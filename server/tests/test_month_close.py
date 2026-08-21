@@ -716,3 +716,122 @@ async def test_reopen_twice_409_and_get_branch_isolation(client):
             await session.execute(AuditLog.__table__.delete().where(AuditLog.entity == "monthly_close", AuditLog.branch_id == BRANCH_ID, AuditLog.typevalue == f"{y}-{m:02d}"))
             await session.commit()
 
+async def test_closed_month_rejects_settlement(client):
+    from tests.receivables_test_utils import _make_customer, _cleanup_party, _cleanup_vouchers
+    token = await _login_token(client)
+    y, m = 2026, 8
+    cust = await _make_customer(active=True)
+    tag = f"settle {y}-{m} {cust}"
+    try:
+        r = await client.post(f"/api/v1/months/{y}/{m}/close", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200, r.text
+        # receipt (sana قبض) in closed month should 409
+        r = await client.post(
+            "/api/v1/receivables/vouchers",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"voucher_type": "receipt", "party_id": cust, "datee": f"{y}-{m:02d}-20", "amount": "10.00", "method": "cash", "description": tag},
+        )
+        assert r.status_code == 409, r.text
+        # also payment path (same guard via post_journal)
+        # need a supplier
+        from tests.receivables_test_utils import _make_supplier
+        sup = await _make_supplier()
+        try:
+            r = await client.post(
+                "/api/v1/receivables/vouchers",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"voucher_type": "payment", "party_id": sup, "datee": f"{y}-{m:02d}-20", "amount": "10.00", "method": "cash", "description": tag+" sup"},
+            )
+            assert r.status_code == 409, r.text
+        finally:
+            await _cleanup_party(sup)
+            await _cleanup_vouchers(tag+" sup")
+    finally:
+        await _cleanup_party(cust)
+        await _cleanup_vouchers(tag)
+        await _cleanup_month(BRANCH_ID, y, m)
+
+
+async def test_year_validation_and_get_invalid_month_400(client):
+    token = await _login_token(client)
+    # year out of bounds should 400 on POST
+    for bad_year in [1899, 10000, 0, -1]:
+        r = await client.post(f"/api/v1/months/{bad_year}/8/close", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 400, f"year {bad_year}: {r.text}"
+        r = await client.get(f"/api/v1/months/{bad_year}/8", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 400, f"GET year {bad_year}: {r.text}"
+        r = await client.get(f"/api/v1/months/{bad_year}/8/open-balances", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 400, f"GET open year {bad_year}: {r.text}"
+    # month invalid on GET should 400
+    for bad_month in [0, 13, 99]:
+        r = await client.get(f"/api/v1/months/2026/{bad_month}", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 400, f"month {bad_month}: {r.text}"
+        r = await client.get(f"/api/v1/months/2026/{bad_month}/open-balances", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 400, f"open month {bad_month}: {r.text}"
+
+
+async def test_auth_on_reads_and_permission_split(client):
+    # GET list without token should 401
+    r = await client.get("/api/v1/months")
+    assert r.status_code == 401, r.text
+    r = await client.get("/api/v1/months/2026/8")
+    assert r.status_code == 401, r.text
+    r = await client.get("/api/v1/months/2026/8/open-balances")
+    assert r.status_code == 401, r.text
+    # accountant (role 4) can close (months.close granted to 4) but cannot reopen (needs level 7)
+    from tests.purchase_test_utils import _make_user as _mu
+    # create accountant user: permission_level 3 but role 4 gives months.close via role
+    # to simulate accountant we need to assign role 4 — _make_user only sets permission_level, not role
+    # Instead test with a level 4 user (not 7) — close should succeed via role? No role, but level 4 <7 so close should 403, reopen 403
+    # To test permission split properly, we need a user with permission_level 5 and role accountant? Simpler: test that a level 5 manager can close but not reopen? Actually level 7 is needed for reopen.
+    # The split is: close requires months.close (floor 7) so level 7 passes, level 6 fails; reopen requires level 7
+    # Let's test level 6 can close? No, floor 7, so level 6 should fail to close
+    # And level 7 can close and reopen, level 6 cannot do either
+    # For the role-based path, admin has it, accountant role has it without level 7 — but _make_user with role assignment is needed
+    # We can test the level-based split: level 7 vs 6
+    acc_close = await _mu("acc_close_test", 6, branch_id=BRANCH_ID)
+    mgr_close = await _mu("mgr_perm_test", 7, branch_id=BRANCH_ID)
+    acc_token = _token_for(acc_close, BRANCH_ID)
+    mgr_token = _token_for(mgr_close, BRANCH_ID)
+    y, m = 2027, 5
+    try:
+        # level 6 should fail to close (months.close floor 7)
+        r = await client.post(f"/api/v1/months/{y}/{m}/close", headers={"Authorization": f"Bearer {acc_token}"})
+        assert r.status_code == 403, r.text
+        # level 7 should succeed
+        r = await client.post(f"/api/v1/months/{y}/{m}/close", headers={"Authorization": f"Bearer {mgr_token}"})
+        assert r.status_code == 200, r.text
+        # level 6 cannot reopen
+        r = await client.post(f"/api/v1/months/{y}/{m}/reopen", headers={"Authorization": f"Bearer {acc_token}"})
+        assert r.status_code == 403, r.text
+        # level 7 can reopen (but we just test 403 for level 6)
+        # clean reopen for idempotency
+        r = await client.post(f"/api/v1/months/{y}/{m}/reopen", headers={"Authorization": f"Bearer {mgr_token}"})
+        assert r.status_code == 200, r.text
+    finally:
+        await _delete_users([acc_close, mgr_close])
+        await _cleanup_month(BRANCH_ID, y, m)
+        async with SessionLocal() as session:
+            from app.models import AuditLog
+            await session.execute(AuditLog.__table__.delete().where(AuditLog.entity == "monthly_close", AuditLog.typevalue == f"{y}-{m:02d}"))
+            await session.commit()
+
+
+async def test_concurrent_double_close_one_wins(client):
+    import asyncio
+    token = await _login_token(client)
+    y, m = 2026, 10
+    try:
+        async def close():
+            return await client.post(f"/api/v1/months/{y}/{m}/close", headers={"Authorization": f"Bearer {token}"})
+        results = await asyncio.gather(close(), close())
+        statuses = sorted([r.status_code for r in results])
+        # one should be 200, one 409 (advisory lock serializes)
+        assert statuses == [200, 409], f"got {statuses}: {[r.text for r in results]}"
+    finally:
+        await _cleanup_month(BRANCH_ID, y, m)
+        async with SessionLocal() as session:
+            from app.models import AuditLog
+            await session.execute(AuditLog.__table__.delete().where(AuditLog.entity == "monthly_close", AuditLog.typevalue == f"{y}-{m:02d}"))
+            await session.commit()
+

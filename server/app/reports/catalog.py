@@ -27,8 +27,16 @@ SEED_CATALOG: list[dict] = [
         "category": "money",
         "title_ar": "ربح اليوم",
         "title_en": "Day Profit",
-        "params": ["datee"],
+        "params": ["datee", "date_from", "date_to"],
         "sort": 20,
+    },
+    {
+        "code": "day_totals",
+        "category": "money",
+        "title_ar": "الإجماليات اليومية",
+        "title_en": "Day Totals",
+        "params": ["date_from", "date_to"],
+        "sort": 25,
     },
     {
         "code": "period_totals",

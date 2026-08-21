@@ -129,16 +129,23 @@ async def list_reports(
 @router.get("/day-profit")
 async def report_day_profit(
     datee: Optional[date] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
     format: str = "json",
     caller: User = Depends(REPORTS),
     session: AsyncSession = Depends(get_session),
 ):
-    """ربح اليوم: net revenue, COGS, expenses, net profit, VAT, discounts."""
+    """ربح اليوم: net revenue, COGS, expenses, net profit, VAT, discounts —
+    for one day (`datee`) or across a period (`date_from`/`date_to`)."""
     return await _run_report(
         code="day_profit",
         session=session,
         branch_id=_caller_branch_id(caller),
-        params={"datee": datee.isoformat() if datee else ""},
+        params={
+            "datee": datee.isoformat() if datee else "",
+            "date_from": date_from.isoformat() if date_from else "",
+            "date_to": date_to.isoformat() if date_to else "",
+        },
         format=format,
     )
 

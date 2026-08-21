@@ -241,90 +241,6 @@ async def _drawer_float(
     )
 
 
-async def _invoice_sums(
-    session: AsyncSession, *, branch_id: int, datee: date
-) -> dict[str, dict[str, Decimal]]:
-    """Period figures from the invoice table for one (branch, datee).
-
-    Returns net-of-return totals per kind: net revenue (total − vat), vat,
-    discounts, purchases, credit (agel) — the sale/purchase side of the day.
-    """
-    kinds = ("sale", "sale_return", "purchase", "purchase_return")
-    rows = (
-        await session.execute(
-            select(
-                Invoice.kind,
-                func.coalesce(func.sum(Invoice.totalvalue), 0),
-                func.coalesce(func.sum(Invoice.vat), 0),
-                func.coalesce(func.sum(Invoice.discount), 0),
-            )
-            .where(Invoice.branch_id == branch_id, Invoice.datee == datee)
-            .group_by(Invoice.kind)
-        )
-    ).all()
-    by = {kind: {"total": Decimal("0"), "vat": Decimal("0"), "discount": Decimal("0")} for kind in kinds}
-    for kind, total, vat, discount in rows:
-        if kind not in by:
-            continue
-        by[kind] = {
-            "total": dec(total),
-            "vat": dec(vat),
-            "discount": dec(discount),
-        }
-    return by
-
-
-async def _cogs(session: AsyncSession, *, branch_id: int, datee: date) -> Decimal:
-    """Net cost of goods sold for the day from journal_lines (account 6000)."""
-    debit = await session.execute(
-        select(func.coalesce(func.sum(JournalLine.debit), 0))
-        .join(Account, Account.id == JournalLine.account_id)
-        .where(
-            Account.code == "6000",
-            JournalLine.branch_id == branch_id,
-            JournalLine.datee == datee,
-        )
-    )
-    credit = await session.execute(
-        select(func.coalesce(func.sum(JournalLine.credit), 0))
-        .join(Account, Account.id == JournalLine.account_id)
-        .where(
-            Account.code == "6000",
-            JournalLine.branch_id == branch_id,
-            JournalLine.datee == datee,
-        )
-    )
-    return round2(dec(debit.scalar_one()) - dec(credit.scalar_one()))
-
-
-async def _corrections_net(session: AsyncSession, *, branch_id: int, datee: date) -> Decimal:
-    """Net stock-correction value for the day from journal_lines (account 5900).
-
-    The count-correction journal debits 5900 on a deficit (a stock loss hits
-    the P&L as a cost) and credits it on an overage (a count gain nets down the
-    expense contra), so net = Σdebit − Σcredit feeds the P&L as a cost below.
-    """
-    debit = await session.execute(
-        select(func.coalesce(func.sum(JournalLine.debit), 0))
-        .join(Account, Account.id == JournalLine.account_id)
-        .where(
-            Account.code == "5900",
-            JournalLine.branch_id == branch_id,
-            JournalLine.datee == datee,
-        )
-    )
-    credit = await session.execute(
-        select(func.coalesce(func.sum(JournalLine.credit), 0))
-        .join(Account, Account.id == JournalLine.account_id)
-        .where(
-            Account.code == "5900",
-            JournalLine.branch_id == branch_id,
-            JournalLine.datee == datee,
-        )
-    )
-    return round2(dec(debit.scalar_one()) - dec(credit.scalar_one()))
-
-
 async def supplier_payments(
     session: AsyncSession, *, branch_id: int, datee: date
 ) -> Decimal:
@@ -386,75 +302,249 @@ async def day_ledger(
     session: AsyncSession, *, branch_id: int, datee: date
 ) -> dict[str, Decimal]:
     """The drawer equation + the day's totals for (branch, datee)."""
-    cash_in = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", method="cash")
-    cash_out = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", method="cash")
-    network_in = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", method="network")
-    network_out = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", method="network")
-
-    drawer_start = await _drawer_float(session, branch_id=branch_id, datee=datee)
-    cash_sales = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", reason=SALE, method="cash")
-    cash_returns = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", reason=SALE_RETURN, method="cash")
-    network_sales = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", reason=SALE, method="network")
-    network_returns = await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", reason=SALE_RETURN, method="network")
-    expenses = round2(
-        await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", reason="expense")
-    )
-    manual_cash = round2(
-        await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", method="cash", reasons=_MANUAL_REASONS)
-        - await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", method="cash", reasons=_MANUAL_REASONS)
-    )
-    manual_card = round2(
-        await _sum_movements(session, branch_id=branch_id, datee=datee, direction="in", method="network", reasons=_MANUAL_REASONS)
-        - await _sum_movements(session, branch_id=branch_id, datee=datee, direction="out", method="network", reasons=_MANUAL_REASONS)
+    return await period_ledger(
+        session, branch_id=branch_id, date_from=datee, date_to=datee
     )
 
-    inv = await _invoice_sums(session, branch_id=branch_id, datee=datee)
-    sales = inv["sale"]
-    sale_returns = inv["sale_return"]
-    purchases = inv["purchase"]
-    purchase_returns = inv["purchase_return"]
 
-    sales_net = round2((sales["total"] - sales["vat"]) - (sale_returns["total"] - sale_returns["vat"]))
-    vat_sales = round2(sales["vat"] - sale_returns["vat"])
-    vat_purchases = round2(purchases["vat"] - purchase_returns["vat"])
-    discounts = round2(sales["discount"] - sale_returns["discount"])
-    purchases_total = round2(purchases["total"] - purchase_returns["total"])
-    cogs = await _cogs(session, branch_id=branch_id, datee=datee)
-    corrections = await _corrections_net(session, branch_id=branch_id, datee=datee)
+# The granular per-day buckets `day_ledgers` computes. Every identity is
+# LINEAR in these buckets, so a period total is exactly Σ(day values) — that
+# is what makes `period_ledger`, the day_totals grid and the single-day
+# `day_ledger` provably consistent: all three read this one bucket engine.
+_LEDGER_KEYS = (
+    "drawer_start",
+    "expected_cash",
+    "cash_in",
+    "cash_out",
+    "cash_sales",
+    "network_sales",
+    "cash_returns",
+    "network_returns",
+    "net_cash",
+    "net_network",
+    "manual_cash",
+    "manual_card",
+    "supplier_payments",
+    "purchases",
+    "expenses",
+    "cost_of_sales",
+    "corrections",
+    "sales_net",
+    "net_profit",
+    "discounts",
+    "vat_sales",
+    "vat_purchases",
+    "vat_expenses",
+    "sales_count",
+    "sales_returns_count",
+)
 
-    net_cash = round2(cash_sales - cash_returns)
-    net_network = round2(network_sales - network_returns)
+_MONEY_KEYS = tuple(k for k in _LEDGER_KEYS if k not in ("sales_count", "sales_returns_count"))
+
+
+def _empty_ledger() -> dict[str, Decimal]:
+    ledger = {key: Decimal("0") for key in _LEDGER_KEYS}
+    # Expenses are recorded gross (a manual expense movement is one cash
+    # figure, no VAT rate is stored) and no expense journal posts VAT in
+    # this slice, so there is no data source for vat_expenses — it stays 0
+    # until an expense-VAT path exists (see README §6 money row).
+    ledger["vat_expenses"] = Decimal("0")
+    return ledger
+
+
+def _finalize(lg: dict[str, Decimal]) -> None:
+    """Round the raw buckets and derive the compound figures in place."""
+    for key in _MONEY_KEYS:
+        lg[key] = round2(lg[key])
+    lg["net_cash"] = round2(lg["cash_sales"] - lg["cash_returns"])
+    lg["net_network"] = round2(lg["network_sales"] - lg["network_returns"])
     # expected counts the opening float once: drawer_start already holds the
     # opening (+ net cash corrections), so the day's OTHER cash receipts are
     # (cash_in − drawer_start), minus cash out. A cash correction therefore
     # appears on the report twice (drawer_start as a float adjustment AND
     # manual_cash as a manual movement) but the identity simplifies to
     # (cash_in − cash_out), so the equation still counts it exactly once.
-    expected_cash = round2(drawer_start + (cash_in - drawer_start) - cash_out)
+    lg["expected_cash"] = round2(lg["cash_in"] - lg["cash_out"])
     # stock-count corrections (account 5900) are a P&L cost: a deficit nets
     # down profit, an overage (contra) nets it back up.
-    net_profit = round2(sales_net - cogs - expenses - corrections)
+    lg["net_profit"] = round2(
+        lg["sales_net"] - lg["cost_of_sales"] - lg["expenses"] - lg["corrections"]
+    )
 
-    return {
-        "drawer_start": drawer_start,
-        "expected_cash": expected_cash,
-        "net_cash": net_cash,
-        "net_network": net_network,
-        "manual_cash": manual_cash,
-        "manual_card": manual_card,
-        "supplier_payments": await supplier_payments(
-            session, branch_id=branch_id, datee=datee
-        ),
-        "purchases": purchases_total,
-        "expenses": expenses,
-        "cost_of_sales": cogs,
-        "net_profit": net_profit,
-        "discounts": discounts,
-        "vat_sales": vat_sales,
-        "vat_purchases": vat_purchases,
-        # Expenses are recorded gross (a manual expense movement is one cash
-        # figure, no VAT rate is stored) and no expense journal posts VAT in
-        # this slice, so there is no data source for vat_expenses — it stays 0
-        # until an expense-VAT path exists (see README §6 money row).
-        "vat_expenses": Decimal("0"),
-    }
+
+async def day_ledgers(
+    session: AsyncSession,
+    *,
+    branch_id: int,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+) -> dict[date, dict[str, Decimal]]:
+    """Granular per-day ledgers for every day with data in the window.
+
+    The batched form of `day_ledger`: four GROUP BY datee queries cover the
+    whole range regardless of its length — drawer movements by
+    date/direction/reason/method, invoices by date/kind, and journal_lines
+    per account for COGS (6000) and stock corrections (5900) — then the same
+    bucket math runs per day in Python.
+    """
+    where = [DrawerMovement.branch_id == branch_id]
+    if date_from is not None:
+        where.append(DrawerMovement.datee >= date_from)
+    if date_to is not None:
+        where.append(DrawerMovement.datee <= date_to)
+    movement_rows = (
+        await session.execute(
+            select(
+                DrawerMovement.datee,
+                DrawerMovement.direction,
+                DrawerMovement.reason,
+                DrawerMovement.method,
+                func.coalesce(func.sum(DrawerMovement.amount), 0),
+            )
+            .where(*where)
+            .group_by(
+                DrawerMovement.datee,
+                DrawerMovement.direction,
+                DrawerMovement.reason,
+                DrawerMovement.method,
+            )
+        )
+    ).all()
+
+    inv_where = [Invoice.branch_id == branch_id]
+    if date_from is not None:
+        inv_where.append(Invoice.datee >= date_from)
+    if date_to is not None:
+        inv_where.append(Invoice.datee <= date_to)
+    invoice_rows = (
+        await session.execute(
+            select(
+                Invoice.datee,
+                Invoice.kind,
+                func.count(Invoice.id),
+                func.coalesce(func.sum(Invoice.totalvalue), 0),
+                func.coalesce(func.sum(Invoice.vat), 0),
+                func.coalesce(func.sum(Invoice.discount), 0),
+            )
+            .where(*inv_where)
+            .group_by(Invoice.datee, Invoice.kind)
+        )
+    ).all()
+
+    async def _journal_net_by_day(code: str) -> dict[date, Decimal]:
+        jwhere = [Account.code == code, JournalLine.branch_id == branch_id]
+        if date_from is not None:
+            jwhere.append(JournalLine.datee >= date_from)
+        if date_to is not None:
+            jwhere.append(JournalLine.datee <= date_to)
+        rows = (
+            await session.execute(
+                select(
+                    JournalLine.datee,
+                    func.coalesce(func.sum(JournalLine.debit), 0),
+                    func.coalesce(func.sum(JournalLine.credit), 0),
+                )
+                .join(Account, Account.id == JournalLine.account_id)
+                .where(*jwhere)
+                .group_by(JournalLine.datee)
+            )
+        ).all()
+        return {row_datee: dec(debit) - dec(credit) for row_datee, debit, credit in rows}
+
+    cogs_by_day = await _journal_net_by_day("6000")
+    corrections_by_day = await _journal_net_by_day("5900")
+
+    ledgers: dict[date, dict[str, Decimal]] = {}
+
+    def _ledger_for(datee: date) -> dict[str, Decimal]:
+        if datee not in ledgers:
+            ledgers[datee] = _empty_ledger()
+        return ledgers[datee]
+
+    for datee, direction, reason, method, amount in movement_rows:
+        lg = _ledger_for(datee)
+        value = dec(amount)
+        if direction == "in":
+            if method == "cash":
+                lg["cash_in"] += value
+                if reason in ("opening", "correction"):
+                    lg["drawer_start"] += value
+                elif reason == SALE:
+                    lg["cash_sales"] += value
+                if reason in _MANUAL_REASONS:
+                    lg["manual_cash"] += value
+            elif method == "network":
+                if reason == SALE:
+                    lg["network_sales"] += value
+                if reason in _MANUAL_REASONS:
+                    lg["manual_card"] += value
+            if reason == SUPPLIER_PAY:
+                lg["supplier_payments"] -= value
+        else:
+            if method == "cash":
+                lg["cash_out"] += value
+                if reason == "correction":
+                    lg["drawer_start"] -= value
+                elif reason == SALE_RETURN:
+                    lg["cash_returns"] += value
+                if reason in _MANUAL_REASONS:
+                    lg["manual_cash"] -= value
+            elif method == "network":
+                if reason == SALE_RETURN:
+                    lg["network_returns"] += value
+                if reason in _MANUAL_REASONS:
+                    lg["manual_card"] -= value
+            if reason == SUPPLIER_PAY:
+                lg["supplier_payments"] += value
+            elif reason == "expense":
+                lg["expenses"] += value
+
+    for datee, kind, count, total, vat, discount in invoice_rows:
+        if kind not in ("sale", "sale_return", "purchase", "purchase_return"):
+            continue
+        lg = _ledger_for(datee)
+        sign = 1 if kind in ("sale", "purchase") else -1
+        if kind == "sale":
+            lg["sales_count"] += count
+        elif kind == "sale_return":
+            lg["sales_returns_count"] += count
+        if kind in ("sale", "sale_return"):
+            lg["sales_net"] += sign * (dec(total) - dec(vat))
+            lg["vat_sales"] += sign * dec(vat)
+            lg["discounts"] += sign * dec(discount)
+        else:
+            lg["purchases"] += sign * dec(total)
+            lg["vat_purchases"] += sign * dec(vat)
+
+    for datee, net in cogs_by_day.items():
+        _ledger_for(datee)["cost_of_sales"] = net
+    for datee, net in corrections_by_day.items():
+        _ledger_for(datee)["corrections"] = net
+
+    for lg in ledgers.values():
+        _finalize(lg)
+    return ledgers
+
+
+async def period_ledger(
+    session: AsyncSession,
+    *,
+    branch_id: int,
+    date_from: Optional[date],
+    date_to: Optional[date],
+) -> dict[str, Decimal]:
+    """The ledger buckets over a whole window: Σ of the per-day values.
+
+    Linear identities make the merge exact, so a ranged report and the
+    per-day grid can never disagree. Returns the full granular bucket set
+    (`_LEDGER_KEYS`) — callers project the columns they show.
+    """
+    ledgers = await day_ledgers(
+        session, branch_id=branch_id, date_from=date_from, date_to=date_to
+    )
+    total = _empty_ledger()
+    for lg in ledgers.values():
+        for key in _LEDGER_KEYS:
+            total[key] += lg[key]
+    _finalize(total)
+    return total

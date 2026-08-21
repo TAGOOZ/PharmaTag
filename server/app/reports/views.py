@@ -14,6 +14,7 @@ from typing import Any, Awaitable, Callable
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.reports.day_profit import day_profit_report
+from app.reports.day_totals import DAY_COLUMNS, day_totals_report
 from app.reports.drawer_handover import drawer_handover_report
 from app.reports.period_totals import period_totals_report
 from app.reports.stock_minimum import stock_minimum_report
@@ -43,11 +44,19 @@ def require_ordered_range(date_from: date | None, date_to: date | None) -> None:
 
 
 def _day_profit_view(payload: dict) -> ViewSpec:
-    meta = [
-        ("التاريخ", payload["datee"]),
-        ("عدد فواتير البيع", payload["sales_count"]),
-        ("عدد مرتجعات البيع", payload["sales_returns_count"]),
-    ]
+    if "datee" in payload:
+        meta = [
+            ("التاريخ", payload["datee"]),
+            ("عدد فواتير البيع", payload["sales_count"]),
+            ("عدد مرتجعات البيع", payload["sales_returns_count"]),
+        ]
+    else:
+        meta = [
+            ("من تاريخ", payload["date_from"] or "مفتوح"),
+            ("إلى تاريخ", payload["date_to"] or "مفتوح"),
+            ("عدد فواتير البيع", payload["sales_count"]),
+            ("عدد مرتجعات البيع", payload["sales_returns_count"]),
+        ]
     labels = [
         ("صافي الإيراد (بدون ضريبة)", "net_revenue"),
         ("تكلفة المبيعات", "cogs"),
@@ -148,6 +157,25 @@ def _stock_minimum_view(payload: dict) -> ViewSpec:
     }
 
 
+def _day_totals_view(payload: dict) -> ViewSpec:
+    rows = [
+        [day["datee"]] + [day[key] for key, _ in DAY_COLUMNS]
+        for day in payload["days"]
+    ]
+    totals = payload["totals"]
+    return {
+        "meta": [
+            ("من تاريخ", payload["date_from"] or "—"),
+            ("إلى تاريخ", payload["date_to"] or "—"),
+            ("عدد الأيام", len(payload["days"])),
+        ],
+        "columns": ["التاريخ"] + [label for _, label in DAY_COLUMNS],
+        "rows": rows,
+        "foot": ["الإجمالي"] + [totals[key] for key, _ in DAY_COLUMNS],
+        "note": None,
+    }
+
+
 def _drawer_handover_view(payload: dict) -> ViewSpec:
     rows = [
         [
@@ -198,7 +226,11 @@ async def _query_day_profit(
     session: AsyncSession, branch_id: int, params: dict[str, str]
 ) -> dict:
     return await day_profit_report(
-        session, branch_id=branch_id, datee=parse_date("datee", params.get("datee"))
+        session,
+        branch_id=branch_id,
+        datee=parse_date("datee", params.get("datee")),
+        date_from=parse_date("date_from", params.get("date_from")),
+        date_to=parse_date("date_to", params.get("date_to")),
     )
 
 
@@ -217,6 +249,17 @@ async def _query_stock_minimum(
     session: AsyncSession, branch_id: int, params: dict[str, str]
 ) -> dict:
     return await stock_minimum_report(session, branch_id=branch_id)
+
+
+async def _query_day_totals(
+    session: AsyncSession, branch_id: int, params: dict[str, str]
+) -> dict:
+    date_from = parse_date("date_from", params.get("date_from"))
+    date_to = parse_date("date_to", params.get("date_to"))
+    require_ordered_range(date_from, date_to)
+    return await day_totals_report(
+        session, branch_id=branch_id, date_from=date_from, date_to=date_to
+    )
 
 
 async def _query_drawer_handover(
@@ -238,6 +281,7 @@ REGISTRY: dict[str, dict[str, Callable]] = {
         "query": _query_drawer_handover,
         "view": _drawer_handover_view,
     },
+    "day_totals": {"query": _query_day_totals, "view": _day_totals_view},
 }
 
 

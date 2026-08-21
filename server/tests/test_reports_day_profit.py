@@ -122,3 +122,96 @@ async def test_day_profit_html_renders_printable(client):
         assert "50.00" in html.text  # exempt: total == net
     finally:
         await _cleanup([drug_id], invoice_ids)
+
+
+async def test_day_profit_across_a_period_aggregates_the_window(client):
+    """date_from..date_to sums every day's figures and echoes the window."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        price="10.0000",
+        cost_price="5.0000",
+        batches=[("40.0000", "5.0000", "2027-01-01")],
+        stock_qty="40.0000",
+    )
+    invoice_ids: list[int] = []
+    movement_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        auth = {"Authorization": f"Bearer {token}"}
+        for datee in ("2026-01-06", "2026-01-07"):
+            r = await client.post(
+                "/api/v1/sales",
+                headers=auth,
+                json={
+                    "lines": [{"drug_id": drug_id, "qty": "12"}],
+                    "datee": datee,
+                },
+            )
+            assert r.status_code == 201, r.text
+            invoice_ids.append(r.json()["id"])
+        mv = await client.post(
+            "/api/v1/drawer/movements",
+            headers=auth,
+            json={
+                "direction": "out",
+                "reason": "expense",
+                "method": "cash",
+                "amount": "10.00",
+                "datee": "2026-01-07",
+            },
+        )
+        assert mv.status_code == 201, mv.text
+        movement_ids.append(mv.json()["id"])
+
+        rep = await client.get(
+            "/api/v1/reports/day-profit",
+            params={"date_from": "2026-01-06", "date_to": "2026-01-07"},
+            headers=auth,
+        )
+        assert rep.status_code == 200, rep.text
+        body = rep.json()
+        assert body["date_from"] == "2026-01-06"
+        assert body["date_to"] == "2026-01-07"
+        assert "datee" not in body
+        assert body["sales_count"] == 2
+        assert body["net_revenue"] == "210.52"  # 2 × 105.26
+        assert body["cogs"] == "120.00"
+        assert body["expenses"] == "10.00"
+        assert body["net_profit"] == "80.52"
+
+        # single-sided bound stays open-ended, not an error
+        rep = await client.get(
+            "/api/v1/reports/day-profit",
+            params={"date_from": "2026-01-07"},
+            headers=auth,
+        )
+        assert rep.status_code == 200, rep.text
+        body = rep.json()
+        assert body["sales_count"] == 1
+        assert body["expenses"] == "10.00"
+    finally:
+        await _cleanup([drug_id], invoice_ids, movement_ids)
+
+
+async def test_day_profit_rejects_mixed_and_inverted_windows(client):
+    """Mixing datee with a range is ambiguous (400); an inverted range is 400."""
+    token = await _login_token(client)
+    auth = {"Authorization": f"Bearer {token}"}
+
+    mixed = await client.get(
+        "/api/v1/reports/day-profit",
+        params={
+            "datee": "2026-01-06",
+            "date_from": "2026-01-01",
+            "date_to": "2026-01-31",
+        },
+        headers=auth,
+    )
+    assert mixed.status_code == 400
+
+    inverted = await client.get(
+        "/api/v1/reports/day-profit",
+        params={"date_from": "2026-01-31", "date_to": "2026-01-01"},
+        headers=auth,
+    )
+    assert inverted.status_code == 400

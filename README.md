@@ -211,9 +211,20 @@ machine; a durable branch-scoped print queue (`POST /reports/{code}/print-queue`
 enqueue with params snapshot + paper, `GET /reports/print-queue` newest-first,
 `POST /reports/print-queue/{id}/done` queued→done exactly once); everything is
 branch-scoped and gated by the `reports` permission (admin level-9 or
-accountant role). The four v1 reports keep their literal aliases:
+accountant role). The money reports (ticket #24) share one bucket engine
+(`drawer/movements.py`: `day_ledgers` batches four GROUP BY queries per
+window, `period_ledger` sums the linear buckets, `day_ledger` = the
+single-day window) so the grid, the ranged totals and each day's close can
+never disagree — and they reconcile against `journal_lines` (net revenue =
+Δ4000, COGS = Δ6000, VAT = Δ2100, drawer-in/out = Δ1000 by source). The v1
+reports keep their literal aliases:
 `GET /reports/day-profit` (ربح اليوم — net revenue, COGS, expenses, net profit,
-VAT, discounts; matches the drawer day ledger),
+VAT, discounts; one day via `datee` or across a period via
+`date_from`/`date_to`, mixing the two is 400),
+`GET /reports/day_totals` (الإجماليات اليومية — one row per day with the
+payment splits: cash/network sales and returns, manual cash/card, expenses,
+supplier payments, expected cash, plus purchases/discounts/VAT/COGS/net
+profit per day, totals foot),
 `GET /reports/period-totals` (ملخص المبيعات والمشتريات — counts + totals per
 sale/return/purchase/return kind over a date range, returns netted),
 `GET /reports/stock-minimum` (النواقص — drugs below the reorder point, shortage

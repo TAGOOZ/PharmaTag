@@ -1,10 +1,12 @@
-"""S1.9 basic reports (ticket #15): the report catalog + access gate.
+"""S1.9 basic reports (ticket #15) + S3.2 money reports (ticket #24): the
+report catalog + access gate.
 
-The reports slice ships four reports (day profit, sales/purchases summary,
-stock below minimum, drawer handover). `GET /api/v1/reports` lists the catalog
-of those reports (code + Arabic/English titles + params) so a screen can render
-the menu; everything is gated by the seeded `reports` permission (admin level-9
-or the accountant role).
+The v1 slice shipped four reports (day profit, sales/purchases summary,
+stock below minimum, drawer handover); S3.2 adds day totals (الإجماليات
+اليومية). `GET /api/v1/reports` lists the catalog of those reports (code +
+Arabic/English titles + params) so a screen can render the menu; everything
+is gated by the seeded `reports` permission (admin level-9 or the
+accountant role).
 """
 from sqlalchemy import delete, select
 
@@ -15,6 +17,7 @@ BRANCH_ID = 1
 
 EXPECTED_CODES = {
     "day_profit",
+    "day_totals",
     "period_totals",
     "stock_minimum",
     "drawer_handover",

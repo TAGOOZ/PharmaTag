@@ -13,6 +13,7 @@ from tests.reports_test_utils import _login_token
 
 EXPECTED_CODES = {
     "day_profit",
+    "day_totals",
     "period_totals",
     "stock_minimum",
     "drawer_handover",
@@ -80,4 +81,10 @@ async def test_catalog_orders_by_sort_then_code(client):
         "/api/v1/reports", headers={"Authorization": f"Bearer {token}"}
     )
     codes = [rep["code"] for rep in r.json()["reports"]]
-    assert codes == ["drawer_handover", "day_profit", "period_totals", "stock_minimum"]
+    assert codes == [
+        "drawer_handover",
+        "day_profit",
+        "day_totals",
+        "period_totals",
+        "stock_minimum",
+    ]

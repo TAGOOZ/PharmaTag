@@ -30,12 +30,19 @@ from app.models import (
 
 BRANCH_ID = 1
 
+# Namespace every throwaway row by the pytest process id so two themed files
+# sharing these helpers (same process) can never collide, and a crashed run
+# that leaked rows can never collide with the next run's fresh counter.
+import os as _os
+
+_PID = _os.getpid()
+
 _seq = [0]
 
 
 def _uniq(tag: str) -> str:
     _seq[0] += 1
-    return f"__t2_rep_{tag}_{_seq[0]}__"
+    return f"__t2_rep_{_PID}_{tag}_{_seq[0]}__"
 
 
 async def _login_token(client) -> str:

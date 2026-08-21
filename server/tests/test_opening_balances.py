@@ -520,9 +520,9 @@ async def test_opening_balances_negative_and_double_sided_and_blank_desc_rejecte
 
 async def test_opening_balances_boundary_year_month_and_max_amount(client):
     token = await _login_token(client)
-    # boundary valid
+    # boundary valid — 1900-01 is rejected because journal would be 1899-12-31
     tag = _tag()
-    for year, month in [(1900, 1), (9999, 12), (2036, 1), (2036, 12)]:
+    for year, month in [(1900, 2), (9999, 12), (2036, 1), (2036, 12)]:
         r = await client.post(
             f"/api/v1/opening-balances/{year}/{month}",
             headers={"Authorization": f"Bearer {token}"},
@@ -530,6 +530,14 @@ async def test_opening_balances_boundary_year_month_and_max_amount(client):
         )
         assert r.status_code == 201, f"{year}-{month}: {r.text}"
         await _cleanup_opening(BRANCH_ID, year, month, tag)
+    # 1900-01 specifically rejected (would be 1899-12-31)
+    r = await client.post(
+        f"/api/v1/opening-balances/1900/1",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"lines": [{"account_code": "1000", "debit": "1.00"}, {"account_code": "3000", "credit": "1.00"}]},
+    )
+    assert r.status_code == 400, r.text
+    assert "1900-01" in r.text or "1899" in r.text
     # invalid boundaries
     for year, month in [(1899, 6), (10000, 6), (2036, 0), (2036, 13)]:
         r = await client.post(

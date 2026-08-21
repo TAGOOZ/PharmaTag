@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.accounts.service import caller_branch_id
 from app.auth.dependencies import get_current_user
-from app.auth.rbac import require_level, require_permission
+from app.auth.rbac import require_permission
 from app.core.db import get_session
 from app.models import User
 from app.money import opening
@@ -26,7 +26,6 @@ from app.money.opening_schemas import OpeningBalancesCreate
 router = APIRouter()
 
 OPENING_WRITE = require_permission("opening_balances.manage")
-REOPEN = require_level(7)
 
 
 @router.get("", status_code=status.HTTP_200_OK)
@@ -73,7 +72,7 @@ async def post_opening(
 async def delete_opening(
     year: int,
     month: int,
-    caller: User = Depends(REOPEN),
+    caller: User = Depends(OPENING_WRITE),
     session: AsyncSession = Depends(get_session),
 ):
     branch_id = await caller_branch_id(caller)

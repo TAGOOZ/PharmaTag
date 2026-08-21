@@ -16,8 +16,7 @@ DELETE first. Reads are open to any authenticated, branch-scoped user.
 """
 from __future__ import annotations
 
-import calendar
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -31,11 +30,7 @@ from app.core.money import dec, format2, round2
 from app.models import Account, Balance, Journal, JournalLine, MonthOpenBalance, MonthlyClose
 from app.sales.numbering import acquire_branch_lock, next_journal_entry_no
 
-ALREADY_EXISTS = HTTPException(status.HTTP_409_CONFLICT, "opening balances already exist for this period")
-MONTH_CLOSED = HTTPException(status.HTTP_409_CONFLICT, "month is closed; reopen it before posting opening balances")
-NOT_FOUND = HTTPException(status.HTTP_404_NOT_FOUND, "opening balances not found")
-UNBALANCED = HTTPException(status.HTTP_400_BAD_REQUEST, "journal is not balanced: SUM(debit) != SUM(credit)")
-MAX_AMOUNT = dec("9999999999999999.99")
+_MAX_AMOUNT = dec("9999999999999999.99")
 _ZERO = Decimal("0")
 
 
@@ -62,7 +57,12 @@ def _opening_date(year: int, month: int) -> date:
     period movement for the opening month itself.
     """
     first = date(year, month, 1)
-    return first - timedelta(days=1)
+    od = first - timedelta(days=1)
+    # Cutover cannot be the minimal year/month because the journal would be
+    # outside the validated calendar (1899-12-31). Reject explicitly.
+    if od.year < 1900:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "opening balances cannot be set for 1900-01 (journal would be 1899-12-31)")
+    return od
 
 
 async def _resolve_account(session: AsyncSession, branch_id: int, code: str) -> Account:
@@ -89,9 +89,9 @@ def _validated_entries(lines) -> list[tuple[str, Decimal, Decimal, str]]:
         try:
             debit = round2(dec(line.debit or 0))
             credit = round2(dec(line.credit or 0))
-        except InvalidOperation:
+        except (InvalidOperation, TypeError, ValueError):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"line {line.account_code}: amount is too large")
-        if debit > MAX_AMOUNT or credit > MAX_AMOUNT:
+        if debit > _MAX_AMOUNT or credit > _MAX_AMOUNT:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"line {line.account_code}: amount is too large")
         if debit < 0 or credit < 0:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"line {line.account_code}: amounts cannot be negative")
@@ -101,7 +101,7 @@ def _validated_entries(lines) -> list[tuple[str, Decimal, Decimal, str]]:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"line {line.account_code}: a line can be debit OR credit, not both")
         entries.append((line.account_code.strip(), debit, credit, (line.note or "").strip()))
     if sum(dec(d) for _, d, _, _ in entries) != sum(dec(c) for _, _, c, _ in entries):
-        raise UNBALANCED
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "journal is not balanced: SUM(debit) != SUM(credit)")
     return entries
 
 
@@ -116,6 +116,18 @@ async def _touch_balance(
     balance.debit = dec(balance.debit) + dec(debit)
     balance.credit = dec(balance.credit) + dec(credit)
     balance.balance = balance.debit - balance.credit
+
+
+async def _check_month_not_closed(session: AsyncSession, branch_id: int, year: int, month: int, msg: str) -> None:
+    row = (
+        await session.execute(
+            select(MonthlyClose.status).where(
+                MonthlyClose.branch_id == branch_id, MonthlyClose.year == year, MonthlyClose.month == month
+            )
+        )
+    ).scalar_one_or_none()
+    if row == "closed":
+        raise HTTPException(status.HTTP_409_CONFLICT, msg)
 
 
 async def post_opening_balances(
@@ -154,28 +166,41 @@ async def post_opening_balances(
         await acquire_branch_lock(session, branch_id)
 
         # Target month must be open; a closed month never takes new postings (S2.6).
-        target = (
+        await _check_month_not_closed(session, branch_id, year, month, "month is closed; reopen it before posting opening balances")
+        # The journal's own date must also be open — otherwise we would mutate a frozen period.
+        await _check_month_not_closed(
+            session, branch_id, opening_date.year, opening_date.month, "previous month is closed; reopen it before posting opening balances"
+        )
+
+        # No duplicate opening for the same branch+period — discriminator is
+        # BOTH the opening journal and the month_open snapshot. month_open is
+        # shared with month_close's auto-seeded next-month carryover (which has
+        # no opening journal), and after a reversal the journal remains but the
+        # snapshot is cleared — both cases must allow a new POST.
+        existing_journal = (
             await session.execute(
-                select(MonthlyClose.status).where(
-                    MonthlyClose.branch_id == branch_id, MonthlyClose.year == year, MonthlyClose.month == month
+                select(Journal.id)
+                .where(
+                    Journal.branch_id == branch_id,
+                    Journal.datee == opening_date,
+                    Journal.source == "opening",
                 )
+                .limit(1)
             )
         ).scalar_one_or_none()
-        if target == "closed":
-            raise MONTH_CLOSED
-
-        # No duplicate opening for the same branch+period.
-        existing = (
+        existing_snapshot = (
             await session.execute(
-                select(MonthOpenBalance).where(
+                select(MonthOpenBalance.branch_id)
+                .where(
                     MonthOpenBalance.branch_id == branch_id,
                     MonthOpenBalance.year == year,
                     MonthOpenBalance.month == month,
                 )
+                .limit(1)
             )
-        ).scalars().all()
-        if existing:
-            raise ALREADY_EXISTS
+        ).scalar_one_or_none()
+        if existing_journal is not None and existing_snapshot is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "opening balances already exist for this period")
 
         # Allocate monotonic entry_no for the opening journal's date.
         entry_no = await next_journal_entry_no(session, branch_id, opening_date)
@@ -265,17 +290,19 @@ async def get_opening_balances(session: AsyncSession, *, branch_id: int, year: i
     opening_date = _opening_date(year, month)
     journal = (
         await session.execute(
-            select(Journal).where(
+            select(Journal)
+            .where(
                 Journal.branch_id == branch_id,
                 Journal.datee == opening_date,
                 Journal.source == "opening",
             )
+            .order_by(Journal.id.desc())
         )
     ).scalars().first()
     if journal is None:
         # No opening journal for this period — distinguish from month_close's
         # auto-seeded month_open_balances (which have no opening journal).
-        raise NOT_FOUND
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "opening balances not found")
     rows = (
         await session.execute(
             select(MonthOpenBalance).where(
@@ -286,7 +313,7 @@ async def get_opening_balances(session: AsyncSession, *, branch_id: int, year: i
         )
     ).scalars().all()
     if not rows:
-        raise NOT_FOUND
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "opening balances not found")
     ids = {r.account_id for r in rows}
     accounts = (
         (await session.execute(select(Account).where(Account.id.in_(ids)))).scalars().all() if ids else []
@@ -333,45 +360,116 @@ async def list_opening_balances(session: AsyncSession, *, branch_id: int) -> lis
     which share the same table but have no opening journal."""
     journals = (
         await session.execute(
-            select(Journal).where(Journal.branch_id == branch_id, Journal.source == "opening").order_by(Journal.datee.desc())
+            select(Journal)
+            .where(Journal.branch_id == branch_id, Journal.source == "opening")
+            .order_by(Journal.datee.desc(), Journal.id.desc())
         )
     ).scalars().all()
-    out = []
-    seen: set[tuple[int, int]] = set()
+    if not journals:
+        return []
+    # Distinct target months (opening_date +1 day)
+    distinct: set[tuple[int, int]] = set()
     for j in journals:
-        # Opening journal's date is prev-month-end; target month is next day.
         target = j.datee + timedelta(days=1)
-        key = (target.year, target.month)
-        if key in seen:
+        distinct.add((target.year, target.month))
+    # One-shot fetch of month_open rows for those distinct periods
+    all_rows = (
+        await session.execute(
+            select(MonthOpenBalance).where(MonthOpenBalance.branch_id == branch_id)
+        )
+    ).scalars().all()
+    rows_by_period: dict[tuple[int, int], list[MonthOpenBalance]] = {}
+    for r in all_rows:
+        key = (r.year, r.month)
+        if key in distinct:
+            rows_by_period.setdefault(key, []).append(r)
+    # Batch load accounts
+    all_ids = {r.account_id for rows in rows_by_period.values() for r in rows}
+    accounts = (
+        (await session.execute(select(Account).where(Account.id.in_(all_ids)))).scalars().all() if all_ids else []
+    )
+    by_id = {a.id: a for a in accounts}
+    # Map each target to its latest journal (max id for that opening_date)
+    journal_by_target: dict[int, Journal] = {}
+    for j in journals:
+        target = j.datee + timedelta(days=1)
+        key_int = target.year * 100 + target.month
+        # Keep the first encountered (newest due to order by datee desc, id desc)
+        if key_int not in journal_by_target:
+            journal_by_target[key_int] = j
+    out: list[dict] = []
+    for (year, month) in sorted(distinct, reverse=True):
+        key_int = year * 100 + month
+        journal = journal_by_target.get(key_int)
+        if journal is None:
             continue
-        seen.add(key)
-        try:
-            out.append(await get_opening_balances(session, branch_id=branch_id, year=key[0], month=key[1]))
-        except HTTPException:
+        rows = rows_by_period.get((year, month), [])
+        if not rows:
             continue
-    # Deterministic ordering newest first (same as month_close list)
-    out.sort(key=lambda p: (p["year"], p["month"]), reverse=True)
+        opening_date = _opening_date(year, month)
+        out_rows = []
+        for r in sorted(rows, key=lambda r: by_id.get(r.account_id).code if r.account_id in by_id else str(r.account_id)):
+            acct = by_id.get(r.account_id)
+            out_rows.append(
+                {
+                    "account_id": r.account_id,
+                    "account_code": acct.code if acct else "",
+                    "account_name": acct.name_ar if acct else "",
+                    "type": acct.type if acct else "",
+                    "debit": format2(r.debit),
+                    "credit": format2(r.credit),
+                    "balance": format2(dec(r.debit) - dec(r.credit)),
+                }
+            )
+        total_debit = format2(sum((dec(r.debit) for r in rows), _ZERO))
+        total_credit = format2(sum((dec(r.credit) for r in rows), _ZERO))
+        out.append(
+            {
+                "branch_id": branch_id,
+                "year": year,
+                "month": month,
+                "opening_date": opening_date.isoformat(),
+                "journal_id": journal.id,
+                "entry_no": journal.entry_no,
+                "description": journal.description,
+                "total_debit": total_debit,
+                "total_credit": total_credit,
+                "rows": out_rows,
+                "balanced": dec(total_debit) == dec(total_credit),
+            }
+        )
     return out
 
 
 async def delete_opening_balances(session: AsyncSession, *, branch_id: int, user_id: Optional[int], year: int, month: int) -> None:
-    """Delete the opening snapshot + its journal (manager-only at router).
+    """Reverse the opening (append-only) — posts an opposite journal and clears
+    the month_open snapshot. Original journal and audits are kept per G12.
 
     Fails 409 if the target month is closed; 404 if no opening exists.
     """
     _validate_year(year)
     _validate_month(month)
+    opening_date = _opening_date(year, month)
     async with atomic(session):
         await acquire_branch_lock(session, branch_id)
-        target = (
+        await _check_month_not_closed(session, branch_id, year, month, "month is closed; reopen it before deleting opening balances")
+        await _check_month_not_closed(
+            session, branch_id, opening_date.year, opening_date.month, "previous month is closed; reopen it before deleting opening balances"
+        )
+        # Must be an opening-created period, not a bare month_close carryover
+        journal = (
             await session.execute(
-                select(MonthlyClose.status).where(
-                    MonthlyClose.branch_id == branch_id, MonthlyClose.year == year, MonthlyClose.month == month
+                select(Journal)
+                .where(
+                    Journal.branch_id == branch_id,
+                    Journal.datee == opening_date,
+                    Journal.source == "opening",
                 )
+                .order_by(Journal.id.desc())
             )
-        ).scalar_one_or_none()
-        if target == "closed":
-            raise MONTH_CLOSED
+        ).scalars().first()
+        if journal is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "opening balances not found")
         rows = (
             await session.execute(
                 select(MonthOpenBalance).where(
@@ -382,33 +480,49 @@ async def delete_opening_balances(session: AsyncSession, *, branch_id: int, user
             )
         ).scalars().all()
         if not rows:
-            raise NOT_FOUND
-        opening_date = _opening_date(year, month)
-        journals = (
-            await session.execute(
-                select(Journal).where(
-                    Journal.branch_id == branch_id,
-                    Journal.datee == opening_date,
-                    Journal.source == "opening",
-                )
-            )
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "opening balances not found")
+
+        # Post a reversal journal on the same opening_date (swapped sides) to
+        # keep the ledger append-only. The original opening remains for audit.
+        lines = (
+            await session.execute(select(JournalLine).where(JournalLine.journal_id == journal.id))
         ).scalars().all()
-        # Reverse the balances touched by those journals (opening_date's month).
-        for j in journals:
-            lines = (
-                await session.execute(select(JournalLine).where(JournalLine.journal_id == j.id))
-            ).scalars().all()
-            for l in lines:
-                bal = await session.get(Balance, (branch_id, l.account_id, l.month, l.year))
-                if bal is not None:
-                    bal.debit = dec(bal.debit) - dec(l.debit)
-                    bal.credit = dec(bal.credit) - dec(l.credit)
-                    bal.balance = bal.debit - bal.credit
-                    if bal.debit == 0 and bal.credit == 0:
-                        await session.delete(bal)
-            await session.execute(delete(JournalLine).where(JournalLine.journal_id == j.id))
-            # Audit trail for reversal (journals) — keep the opening_balances audit.
-            await session.execute(delete(Journal).where(Journal.id == j.id))
+        reversal_no = await next_journal_entry_no(session, branch_id, opening_date)
+        reversal = Journal(
+            branch_id=branch_id,
+            datee=opening_date,
+            entry_no=reversal_no,
+            description=f"reversal of opening balances {year}-{month:02d}",
+            source="opening",
+            status="posted",
+            created_by=user_id,
+        )
+        session.add(reversal)
+        await session.flush()
+        for line in lines:
+            rev = JournalLine(
+                journal_id=reversal.id,
+                branch_id=branch_id,
+                account_id=line.account_id,
+                debit=line.credit,
+                credit=line.debit,
+                datee=opening_date,
+                month=opening_date.month,
+                year=opening_date.year,
+                creditdebit="debit" if line.credit else "credit",
+                tips=line.tips,
+            )
+            session.add(rev)
+            await _touch_balance(
+                session,
+                branch_id=branch_id,
+                account_id=line.account_id,
+                month=opening_date.month,
+                year=opening_date.year,
+                debit=line.credit,
+                credit=line.debit,
+            )
+        # Clear the month_open snapshot for the target month
         await session.execute(
             delete(MonthOpenBalance).where(
                 MonthOpenBalance.branch_id == branch_id,
@@ -423,7 +537,18 @@ async def delete_opening_balances(session: AsyncSession, *, branch_id: int, user
             user_id=user_id,
             entity="opening_balances",
             entity_id=_audit_id(branch_id, year, month),
-            action="delete",
+            action="reverse",
             old_value=f"year={year} month={month}",
+            new_value=f"reversal journal {reversal.id}",
             typevalue=f"{year}-{month:02d}",
+        )
+        await audit(
+            session,
+            branch_id=branch_id,
+            user_id=user_id,
+            entity="journals",
+            entity_id=reversal.id,
+            action="insert",
+            new_value=reversal.description,
+            typevalue=reversal.description,
         )

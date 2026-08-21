@@ -104,6 +104,15 @@ async function click(text: string) {
   });
 }
 
+/** Click a <summary> toggle (details/queue section). */
+async function clickSummary(text: string) {
+  const summary = [...host.querySelectorAll('summary')].find((s) => s.textContent?.includes(text));
+  if (!summary) throw new Error(`no summary containing "${text}"`);
+  await act(async () => {
+    summary.click();
+  });
+}
+
 function _urlIncludesQueue(url: unknown): boolean {
   return String(url).includes('/print-queue');
 }
@@ -153,6 +162,34 @@ describe('ReportsPage', () => {
       String(u).includes('format=grid'),
     ) as unknown as [string] | undefined;
     expect(gridCall?.[0]).toContain('/api/v1/reports/drawer_handover?format=grid');
+  });
+
+  it('marks a queued job done from the queue without any report selected', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    let doneCalled = false;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/print-queue/3/done')) {
+        doneCalled = true;
+        return jsonResponse({ id: 3, status: 'done' });
+      }
+      if (url.includes('/print-queue')) {
+        return jsonResponse({
+          jobs: [doneCalled ? { ...QUEUE.jobs[0], status: 'done' } : QUEUE.jobs[0]],
+        });
+      }
+      return jsonResponse(CATALOG);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<ReportsPage />);
+
+    // no report selected yet — the queue action must still fire
+    await clickSummary('قائمة الطباعة');
+    await click('تم الطباعة');
+    const doneCall = fetchMock.mock.calls.find(([u]) =>
+      String(u).includes('/print-queue/3/done'),
+    ) as unknown as [string] | undefined;
+    expect(doneCall).toBeDefined();
+    expect(textOf()).toContain('قائمة الطباعة (0 في الانتظار)');
   });
 
   it('clears a stale token and returns to the login prompt on 401', async () => {

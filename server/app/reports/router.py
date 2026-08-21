@@ -16,7 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.rbac import require_permission
@@ -210,7 +210,12 @@ class PrintQueueEnqueue(BaseModel):
 
 
 def _validate_params(allowed: list[str], params: dict[str, str]) -> dict[str, str]:
-    """Snapshot params must be known catalog params carrying ISO dates."""
+    """Snapshot params must be known catalog params carrying ISO dates.
+
+    Every param the v1 catalog declares is a date (datee / date_from /
+    date_to); a later slice adding a non-date param must extend this
+    validation (or carry a per-param type in report_catalog).
+    """
     unknown = set(params) - set(allowed)
     if unknown:
         raise HTTPException(
@@ -262,7 +267,8 @@ async def enqueue_print_job(
 ):
     """Queue one print of a catalog report (params snapshot + paper)."""
     entry = await catalog.get_catalog_entry(session, code)
-    if entry is None:
+    if entry is None or views.get_entry(code) is None:
+        # no engine behind the row → the job could never render
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown report '{code}'")
     paper = _clean_paper(body.paper or entry.paper)
     params = _validate_params(list(entry.params or {}), body.params)
@@ -292,16 +298,29 @@ async def mark_print_job_done(
     caller: User = Depends(REPORTS),
     session: AsyncSession = Depends(get_session),
 ):
-    """Confirm a queued job printed: queued→done exactly once."""
+    """Confirm a queued job printed: queued→done exactly once.
+
+    The flip is a conditional UPDATE (`WHERE status = 'queued'`) so two
+    concurrent confirms cannot both win — the loser's UPDATE matches no
+    row and gets the 409.
+    """
     job = await session.get(PrintJob, job_id)
     if job is None or job.branch_id != _caller_branch_id(caller):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such print job")
-    if job.status != "queued":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, f"print job already {job.status}"
+    previous_status = job.status
+    result = await session.execute(
+        update(PrintJob)
+        .where(
+            PrintJob.id == job_id,
+            PrintJob.status == "queued",
         )
-    job.status = "done"
-    job.done_at = func.now()
+        .values(status="done", done_at=func.now())
+    )
+    if result.rowcount == 0:
+        await session.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"print job already {previous_status}"
+        )
     await session.commit()
     await session.refresh(job)
     return {
@@ -325,7 +344,7 @@ async def report_export(
     """Export any catalog report as a real file (xlsx / pdf)."""
     if format not in ("xlsx", "pdf"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "format must be xlsx or pdf")
-    skip = {"format"}
+    skip = {"format", "paper"}  # paper styles the page, it is not report data
     params = {k: v for k, v in request.query_params.items() if k not in skip}
     entry, spec = await _grid(
         code=code, session=session, branch_id=_caller_branch_id(caller), params=params

@@ -11,6 +11,7 @@ server-side twin of the browser print path (plan/09 P06).
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 
 from fpdf import FPDF
@@ -28,6 +29,21 @@ FONT_FAMILY = "IBMPlexSansArabic"
 _PAPER_FORMAT = {"A4": "A4", "A5": "A5"}
 
 
+def _write_text(ws, row: int, col: int, value: str, font: Font | None = None) -> None:
+    """Write a cell as TEXT, never a formula (CWE-1236).
+
+    openpyxl stores any string starting with '=' as a live formula — a
+    drug/cashier name like '=WEBSERVICE(...)' planted by a low-priv user
+    would execute when an admin opens the export. Forcing data_type='s'
+    keeps the text verbatim and inert.
+    """
+    cell = ws.cell(row=row, column=col, value=value)
+    if cell.data_type == "f":
+        cell.data_type = "s"
+    if font is not None:
+        cell.font = font
+
+
 def build_xlsx(
     *,
     title_ar: str,
@@ -41,41 +57,41 @@ def build_xlsx(
     """Render one report grid as an .xlsx workbook (RTL, exact strings)."""
     wb = Workbook()
     ws = wb.active
-    ws.title = title_en[:31] or "Report"  # Excel sheet-name cap
+    # Excel sheet names: ≤31 chars, none of []:*?/\
+    safe_title = re.sub(r"[\[\]:*?/\\]", " ", title_en)[:31].strip() or "Report"
+    ws.title = safe_title
     ws.sheet_view.rightToLeft = True
 
     bold = Font(bold=True)
     row_idx = 1
-    ws.cell(row=row_idx, column=1, value="فارما تاج — PharmaTag").font = bold
+    _write_text(ws, row_idx, 1, "فارما تاج — PharmaTag", bold)
     row_idx += 1
-    ws.cell(row=row_idx, column=1, value=title_ar).font = bold
+    _write_text(ws, row_idx, 1, title_ar, bold)
     row_idx += 1
-    ws.cell(row=row_idx, column=1, value=title_en)
+    _write_text(ws, row_idx, 1, title_en)
     row_idx += 2
     for label, value in meta:
-        ws.cell(row=row_idx, column=1, value=str(label))
-        ws.cell(row=row_idx, column=2, value=str(value))
+        _write_text(ws, row_idx, 1, str(label))
+        _write_text(ws, row_idx, 2, str(value))
         row_idx += 1
     row_idx += 1
 
     header_row = row_idx
     for col_idx, name in enumerate(columns, start=1):
-        cell = ws.cell(row=header_row, column=col_idx, value=str(name))
-        cell.font = bold
+        _write_text(ws, header_row, col_idx, str(name), bold)
     row_idx += 1
     for row in rows:
         for col_idx, value in enumerate(row, start=1):
             # exact-decimal rule: every cell is written as text, never float
-            ws.cell(row=row_idx, column=col_idx, value=str(value))
+            _write_text(ws, row_idx, col_idx, str(value))
         row_idx += 1
     if foot:
         for col_idx, value in enumerate(foot, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=str(value))
-            cell.font = bold
+            _write_text(ws, row_idx, col_idx, str(value), bold)
         row_idx += 1
     if note:
         row_idx += 1
-        ws.cell(row=row_idx, column=1, value=str(note))
+        _write_text(ws, row_idx, 1, str(note))
 
     # readable column widths: widest cell per column, capped
     for col_idx in range(1, len(columns) + 1):

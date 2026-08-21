@@ -18,7 +18,7 @@ from datetime import date
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import money
@@ -274,16 +274,48 @@ async def get_payables(
 
     rows = []
     total = money.dec("0")
+    if not parties:
+        return {
+            "branch_id": branch_id,
+            "total": money.format2(total),
+            "payables": rows,
+        }
+
+    # One GROUP BY across all parties — mirrors get_receivables, no N+1.
+    account_ids = await account_ids_for_code(session, branch_id, DEFAULT_AP_CODE)
+    conditions = []
     for party in parties:
-        account_ids = await account_ids_for_code(session, branch_id, DEFAULT_AP_CODE)
-        if party.payable_account_id is not None:
-            account_ids = list(dict.fromkeys([party.payable_account_id, *account_ids]))
-        if not account_ids:
-            balance = money.dec("0")
+        ids = list(dict.fromkeys([party.payable_account_id, *account_ids])) if party.payable_account_id is not None else account_ids
+        if not ids:
+            continue
+        conditions.append(
+            and_(
+                JournalLine.contra_party_id == party.id,
+                JournalLine.account_id.in_(ids),
+            )
+        )
+    if conditions:
+        grouped = (
+            await session.execute(
+                select(
+                    JournalLine.contra_party_id,
+                    func.coalesce(func.sum(JournalLine.debit), 0),
+                    func.coalesce(func.sum(JournalLine.credit), 0),
+                )
+                .where(JournalLine.branch_id == branch_id, or_(*conditions))
+                .group_by(JournalLine.contra_party_id)
+            )
+        ).all()
+        sums = {pid: (money.dec(d), money.dec(c)) for pid, d, c in grouped}
+    else:
+        sums = {}
+
+    for party in parties:
+        if party.id in sums:
+            debit, credit = sums[party.id]
+            balance = money.dec(credit) - money.dec(debit)
         else:
-            _, criteria = _lines_query(branch_id, account_ids, party.id)
-            agg = await _aggregate(session, criteria)
-            balance = money.dec(agg[1]) - money.dec(agg[0])
+            balance = money.dec("0")
         rows.append(
             {
                 "party_id": party.id,

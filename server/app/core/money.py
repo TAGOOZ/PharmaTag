@@ -217,7 +217,8 @@ def apportion_discount(
                 give = min(remaining, capacity)
                 shares[i] += give
                 remaining -= give
-    assert remaining == 0, "discount exceeds subtotal; caller must guard DISCOUNT_OVERFLOW"
+    if remaining != 0:
+        raise ValueError("discount exceeds subtotal or rounding overflow; caller must guard DISCOUNT_OVERFLOW")
     out: list[LineMoney] = []
     for lm, share in zip(lines, shares):
         line_total = lm.line_total - share

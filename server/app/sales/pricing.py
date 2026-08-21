@@ -51,12 +51,13 @@ def _sale_totals(resolved, disc_percent, *, inclusive: bool) -> dict:
     discount = line_disc + invoice_disc
     if discount > subtotal:
         raise DISCOUNT_OVERFLOW
-    for item, lm in zip(
-        resolved,
-        apportion_discount(
+    try:
+        apportioned = apportion_discount(
             [item["lm"] for item in resolved], invoice_disc, inclusive=inclusive
-        ),
-    ):
+        )
+    except ValueError:
+        raise DISCOUNT_OVERFLOW
+    for item, lm in zip(resolved, apportioned):
         item["lm"] = lm
     vat = add(item["lm"].vat for item in resolved)
     total = round2(subtotal - discount + (vat if not inclusive else Decimal("0")))

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import func, select, text
+from sqlalchemy import Integer, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Invoice, Journal
@@ -29,9 +29,7 @@ async def acquire_branch_lock(session: AsyncSession, branch_id: int) -> None:
     retry loop on the unique constraints.
     """
     await session.execute(
-        text(
-            "SELECT pg_advisory_xact_lock(hashtext(:ns)::bigint + :branch_id)"
-        ),
+        text("SELECT pg_advisory_xact_lock(hashtext(:ns), :branch_id)"),
         {"ns": _LOCK_NAMESPACE, "branch_id": branch_id},
     )
 
@@ -40,7 +38,7 @@ async def next_invoice_no(session: AsyncSession, branch_id: int) -> str:
     """Next monotonic invoice_no for the branch (call under the branch lock)."""
     current = (
         await session.execute(
-            select(func.max(Invoice.invoice_no)).where(
+            select(func.max(func.cast(Invoice.invoice_no, Integer))).where(
                 Invoice.branch_id == branch_id
             )
         )

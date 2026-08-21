@@ -75,9 +75,11 @@ def _next_month(year: int, month: int) -> tuple[int, int]:
 
 async def guard_open_month(session: AsyncSession, *, branch_id: int, datee: date) -> None:
     """Raise 409 if (branch, datee.year, datee.month) monthly_close.status is
-    closed — a closed month takes no new journals. Reopened (or absent) allows
-    posting. Acquires the branch advisory lock so the check is atomic with the
-    close (idempotent re-acquisition in the caller's transaction)."""
+    closed — a closed month takes no new journals. Also rejects if the *next*
+    month is already closed, because its month_open_balances snapshot was
+    seeded from this month's cumulative and would become stale. Reopened (or
+    absent) allows posting. Acquires the branch advisory lock so the check is
+    atomic with the close (idempotent re-acquisition in the caller's transaction)."""
     await acquire_branch_lock(session, branch_id)
     row = (
         await session.execute(
@@ -90,6 +92,18 @@ async def guard_open_month(session: AsyncSession, *, branch_id: int, datee: date
     ).scalar_one_or_none()
     if row == "closed":
         raise CLOSED_GUARD
+    ny, nm = _next_month(datee.year, datee.month)
+    nxt = (
+        await session.execute(
+            select(MonthlyClose.status).where(
+                MonthlyClose.branch_id == branch_id,
+                MonthlyClose.year == ny,
+                MonthlyClose.month == nm,
+            )
+        )
+    ).scalar_one_or_none()
+    if nxt == "closed":
+        raise HTTPException(status.HTTP_409_CONFLICT, "next month is closed; reopen it before posting")
 
 
 async def _closing_per_account(

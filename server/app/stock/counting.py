@@ -188,10 +188,12 @@ async def _weighted_avg_cost(
 ) -> tuple[Decimal, bool]:
     """Weighted-average unit cost across the drug's positive batches, locked.
 
-    Returns `(cost, has_positive_batches)`. With no positive-qty batch it falls
-    back to the drug master's cost price (feature §2.3 — opening at cost excl.
-    VAT); `has_positive_batches=False` lets the caller refuse a correction that
-    has NO cost basis at all (no batches AND no master cost).
+    Returns `(cost, has_positive_batches)` as exact Decimal (no rounding) —
+    callers round only when posting the ledger (round2) so account 1200 never
+    drifts from SUM(batch.qty*cost). With no positive-qty batch it falls back
+    to the drug master's cost price (feature §2.3 — opening at cost excl. VAT);
+    `has_positive_batches=False` lets the caller refuse a correction that has NO
+    cost basis at all (no batches AND no master cost).
     """
     rows = (
         await session.execute(
@@ -206,10 +208,10 @@ async def _weighted_avg_cost(
     ).scalars().all()
     total_qty = sum((money.dec(b.qty) for b in rows), Decimal("0"))
     if total_qty == 0:
-        cost = money.round4(money.dec(fallback_cost) if fallback_cost is not None else 0)
+        cost = money.dec(fallback_cost) if fallback_cost is not None else Decimal("0")
         return cost, False
     total_value = sum((money.dec(b.qty) * money.dec(b.cost) for b in rows), Decimal("0"))
-    return money.round4(total_value / total_qty), True
+    return total_value / total_qty, True
 
 
 async def _audit_batch(
@@ -514,9 +516,9 @@ async def approve_count_request(
                     deficit=deficit,
                     barcode=barcode,
                 )
-                # value by what actually LEFT inventory (Σ take x cost)
+                # value by what actually LEFT inventory (Σ take x cost) — exact until final round2
                 value = money.round2(moved_value)
-                price = money.round4(moved_value / deficit) if deficit else Decimal("0")
+                price = (moved_value / deficit) if deficit else Decimal("0")
 
         await _upsert_branch_stock(
             session,

@@ -134,7 +134,11 @@ async def decrement_allocations(
     """
     total_cost = Decimal("0")
     for alloc in allocations:
-        batch = await session.get(StockBatch, alloc.batch_id)
+        batch = (
+            await session.execute(
+                select(StockBatch).where(StockBatch.id == alloc.batch_id).with_for_update()
+            )
+        ).scalar_one_or_none()
         if batch is None:
             raise MISSING_BATCH
         old = dec(batch.qty)
@@ -158,7 +162,13 @@ async def decrement_allocations(
         )
         total_cost += alloc.take * alloc.cost
 
-    branch = await session.get(BranchStock, (branch_id, drug_id))
+    branch = (
+        await session.execute(
+            select(BranchStock)
+            .where(BranchStock.branch_id == branch_id, BranchStock.drug_id == drug_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
     if branch is None:
         raise NO_STOCK
     old = dec(branch.qty)

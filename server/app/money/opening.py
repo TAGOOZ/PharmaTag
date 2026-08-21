@@ -171,6 +171,10 @@ async def post_opening_balances(
         await _check_month_not_closed(
             session, branch_id, opening_date.year, opening_date.month, "previous month is closed; reopen it before posting opening balances"
         )
+        # Next month must also be open — otherwise its seeded snapshot (monthy/start-data)
+        # is already frozen and would diverge from the mizan after we mutate this month.
+        ny, nm = (year + 1, 1) if month == 12 else (year, month + 1)
+        await _check_month_not_closed(session, branch_id, ny, nm, "next month is closed; reopen it before posting opening balances")
 
         # No duplicate opening for the same branch+period — discriminator is
         # BOTH the opening journal and the month_open snapshot. month_open is
@@ -201,6 +205,18 @@ async def post_opening_balances(
         ).scalar_one_or_none()
         if existing_journal is not None and existing_snapshot is not None:
             raise HTTPException(status.HTTP_409_CONFLICT, "opening balances already exist for this period")
+        # Avoid PK collision when overwriting a close-seeded snapshot (no journal)
+        # or a reversed opening (journal kept, snapshot cleared) — delete any
+        # existing snapshot rows for this period before inserting the new ones.
+        if existing_snapshot is not None:
+            await session.execute(
+                delete(MonthOpenBalance).where(
+                    MonthOpenBalance.branch_id == branch_id,
+                    MonthOpenBalance.year == year,
+                    MonthOpenBalance.month == month,
+                )
+            )
+            await session.flush()
 
         # Allocate monotonic entry_no for the opening journal's date.
         entry_no = await next_journal_entry_no(session, branch_id, opening_date)
@@ -456,6 +472,8 @@ async def delete_opening_balances(session: AsyncSession, *, branch_id: int, user
         await _check_month_not_closed(
             session, branch_id, opening_date.year, opening_date.month, "previous month is closed; reopen it before deleting opening balances"
         )
+        ny, nm = (year + 1, 1) if month == 12 else (year, month + 1)
+        await _check_month_not_closed(session, branch_id, ny, nm, "next month is closed; reopen it before deleting opening balances")
         # Must be an opening-created period, not a bare month_close carryover
         journal = (
             await session.execute(

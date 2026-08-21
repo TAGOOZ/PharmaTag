@@ -21,7 +21,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import audit
@@ -87,8 +87,8 @@ def _validated_entries(lines) -> list[tuple[str, Decimal, Decimal, str]]:
     entries: list[tuple[str, Decimal, Decimal, str]] = []
     for line in lines:
         try:
-            debit = round2(dec(line.debit or 0))
-            credit = round2(dec(line.credit or 0))
+            debit = round2(dec(line.debit if line.debit is not None else 0))
+            credit = round2(dec(line.credit if line.credit is not None else 0))
         except (InvalidOperation, TypeError, ValueError):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"line {line.account_code}: amount is too large")
         if debit > _MAX_AMOUNT or credit > _MAX_AMOUNT:
@@ -164,6 +164,13 @@ async def post_opening_balances(
 
     async with atomic(session):
         await acquire_branch_lock(session, branch_id)
+        # Re-validate active flag inside lock — avoids TOCTOU where an account
+        # is deactivated between the pre-lock _resolve_account and the write.
+        for code, acct in list(account_by_code.items()):
+            fresh = await session.get(Account, acct.id)
+            if fresh is None or not fresh.is_active:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"account {code} is deactivated and cannot be posted to")
+            account_by_code[code] = fresh
 
         # Target month must be open; a closed month never takes new postings (S2.6).
         await _check_month_not_closed(session, branch_id, year, month, "month is closed; reopen it before posting opening balances")
@@ -388,17 +395,22 @@ async def list_opening_balances(session: AsyncSession, *, branch_id: int) -> lis
     for j in journals:
         target = j.datee + timedelta(days=1)
         distinct.add((target.year, target.month))
-    # One-shot fetch of month_open rows for those distinct periods
-    all_rows = (
-        await session.execute(
-            select(MonthOpenBalance).where(MonthOpenBalance.branch_id == branch_id)
-        )
-    ).scalars().all()
+    # One-shot fetch of month_open rows for those distinct periods (filtered in SQL, not Python)
+    if distinct:
+        all_rows = (
+            await session.execute(
+                select(MonthOpenBalance).where(
+                    MonthOpenBalance.branch_id == branch_id,
+                    tuple_(MonthOpenBalance.year, MonthOpenBalance.month).in_(list(distinct)),
+                )
+            )
+        ).scalars().all()
+    else:
+        all_rows = []
     rows_by_period: dict[tuple[int, int], list[MonthOpenBalance]] = {}
     for r in all_rows:
         key = (r.year, r.month)
-        if key in distinct:
-            rows_by_period.setdefault(key, []).append(r)
+        rows_by_period.setdefault(key, []).append(r)
     # Batch load accounts
     all_ids = {r.account_id for rows in rows_by_period.values() for r in rows}
     accounts = (

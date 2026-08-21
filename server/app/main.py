@@ -18,6 +18,7 @@ from app.core.db import SessionLocal, engine
 from app.drawer.router import router as drawer_router
 from app.drugs.router import router as drugs_router
 from app.money.months_router import router as months_router
+from app.money.opening_router import router as opening_router
 from app.money.router import router as money_router
 from app.parties.router import router as parties_router
 from app.plugins.registry import registry
@@ -95,6 +96,9 @@ def create_app() -> FastAPI:
     )
     application.include_router(
         months_router, prefix="/api/v1/months", tags=["months"]
+    )
+    application.include_router(
+        opening_router, prefix="/api/v1/opening-balances", tags=["opening-balances"]
     )
 
     # plan/02 §3: validation failures surface as 400 (not FastAPI's 422).

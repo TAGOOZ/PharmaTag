@@ -727,11 +727,12 @@ INSERT INTO role_permissions (role_id, permission_id)
     WHERE p.code = 'receivables.manage' AND r.id IN (1, 4, 5);
 
 -- rev 013: monthly_close + month_open_balances (S2.6, #21) — monthy\moves + start-data.
+-- status default 'open' mirrors daily_close and spec plan/01 §3.5; absent row = open
 CREATE TABLE monthly_close (
     branch_id INTEGER NOT NULL REFERENCES branches(id),
     year      INTEGER NOT NULL,
     month     INTEGER NOT NULL,
-    status    TEXT NOT NULL DEFAULT 'closed',
+    status    TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','reopened')),
     closed_by INTEGER REFERENCES users(id),
     closed_at TEXT,
     PRIMARY KEY (branch_id, year, month),

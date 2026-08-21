@@ -7,7 +7,7 @@ CREATE TABLE monthly_close (
     branch_id INTEGER NOT NULL REFERENCES branches(id),
     year      INTEGER NOT NULL,
     month     INTEGER NOT NULL,
-    status    TEXT NOT NULL DEFAULT 'closed',
+    status    TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','reopened')),
     closed_by INTEGER REFERENCES users(id),
     closed_at TEXT,
     PRIMARY KEY (branch_id, year, month),

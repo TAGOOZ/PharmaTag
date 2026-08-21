@@ -25,6 +25,8 @@ from app.core.audit import ACTION_INSERT, audit
 from app.core.money import dec
 from app.models import Account, Balance, Journal, JournalLine
 
+from app.money.monthclose import guard_open_month
+
 DRAWER = "1000"
 AR = "1100"
 STOCK = "1200"
@@ -179,27 +181,11 @@ async def post_journal(
     that could mismatch a party's mapped account).
     """
     # A closed (branch, month) rejects further journals (S2.6, #21, plan/02 4.5).
-    # Inline here to avoid a circular import: monthclose imports nothing from
-    # journal, so importing guard lazily is safe, but inlining the SELECT keeps
-    # the engine thin and avoids the import entirely (the guard lives in the
-    # monthclose module for reuse; the engine just enforces the invariant).
-    from sqlalchemy import select as _select
-
-    from app.models.ledger import MonthlyClose as _MonthlyClose
-
-    _closed = (
-        await session.execute(
-            _select(_MonthlyClose.status).where(
-                _MonthlyClose.branch_id == branch_id,
-                _MonthlyClose.year == datee.year,
-                _MonthlyClose.month == datee.month,
-            )
-        )
-    ).scalar_one_or_none()
-    if _closed == "closed":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "month is closed; reopen it before posting"
-        )
+    # Delegates to the canonical guard so the closed-month SELECT is always
+    # covered by the branch advisory lock (TOCTOU-safe with concurrent close_month).
+    # Re-acquisition in the same xact is a no-op (pg_advisory_xact_lock), so
+    # callers that already hold the lock remain idempotent.
+    await guard_open_month(session, branch_id=branch_id, datee=datee)
 
     journal = Journal(
         branch_id=branch_id,

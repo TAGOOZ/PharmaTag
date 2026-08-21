@@ -6,6 +6,14 @@ closed — the month snapshot, mirrors `\\Files\\Archive\\monthy\\moves`) and
 `\\Files\\Archive\\monthy\\start-data`) from the branch's closing ledger state
 (cumulative debit/credit per account through the end of the closed month).
 
+Archive interpretation: the archive IS the `monthly_close` row (the
+month snapshot) plus the `month_open_balances` snapshot for the following
+month. No separate `archive_imports` / `archive_exports` row or
+`\\Files\\Archive\\Input` / `Output` file is created here — those tables
+live in the `tools` plugin per plan/01 §3.8 and remain deferred, consistent
+with prior S2 slices (settlement_vouchers etc. in `public` without moving to a
+plugin schema).
+
 A closed month rejects further journal posts: `post_journal` (the shared engine
 used by sales / purchases / returns / settlements / manual journals / stock
 corrections) calls `guard_open_month` so the ledger can never be mutated after
@@ -78,7 +86,35 @@ async def _closing_per_account(
     session: AsyncSession, *, branch_id: int, year: int, month: int
 ) -> dict[int, tuple[Decimal, Decimal]]:
     """Cumulative debit/credit per account_id through the end of (year, month)
-    from `journal_lines` — the closing state of the month."""
+    from `journal_lines` — the closing state of the month.
+
+    Why `journal_lines` and not `balances` (plan/02:175 "seeding from closing
+    balances"):
+
+    * `journal_lines` is the authoritative ledger (every money document posts
+      there via `post_journal`; plan/01 §3.5 `farysales` → `journal_lines`).
+      The trial balance (`app/accounts/mizan.py:_aggregate`) and the party
+      statements already compute closing/opening by aggregating
+      `journal_lines` directly — so month close must use the same source or
+      the seeded start-data would diverge from `mizan`.
+
+    * `balances` is a materialized per-(branch,account,month,year) cache
+      maintained by `_touch_balance` (period debit/credit for that single month,
+      not cumulative). To reconstruct the cumulative closing state from it you
+      must SUM over all prior months and risk inheriting any drift that the
+      nightly reconciliation (A04) hasn't fixed yet. `journal_lines` needs no
+      such reconstruction and never drifts.
+
+    * Empirically the close tests reconcile `next_open_balances` against a raw
+      `SUM(journal_lines) WHERE datee <= _end_of()` (see
+      `server/tests/test_month_close.py:_cumulative`) — the same query this
+      helper issues. Using `balances` cumulatively would be equivalent but
+      strictly weaker; using it per-month only would be wrong (it would seed
+      just the last month's delta, not the cumulative opening).
+
+    We therefore keep the `journal_lines` aggregation as the source of truth
+    and treat `balances` as what it is: a read cache, not the close source.
+    """
     end = _end_of(year, month)
     rows = (
         await session.execute(

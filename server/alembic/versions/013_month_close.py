@@ -9,6 +9,7 @@ debit/credit per account). A closed month rejects further journal posts
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 revision = "013_month_close"
 down_revision = "012_settlement_vouchers"
@@ -17,12 +18,15 @@ depends_on = None
 
 
 def upgrade() -> None:
+    close_status = postgresql.ENUM(
+        "open", "closed", "reopened", name="close_status", create_type=False
+    )
     op.create_table(
         "monthly_close",
         sa.Column("branch_id", sa.BigInteger(), sa.ForeignKey("branches.id"), nullable=False),
         sa.Column("year", sa.Integer(), nullable=False),
         sa.Column("month", sa.Integer(), nullable=False),
-        sa.Column("status", sa.Text(), nullable=False, server_default="closed"),
+        sa.Column("status", close_status, nullable=False, server_default="open"),
         sa.Column("closed_by", sa.BigInteger(), sa.ForeignKey("users.id"), nullable=True),
         sa.Column("closed_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("branch_id", "year", "month"),

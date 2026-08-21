@@ -228,3 +228,14 @@ async def test_enqueue_catalog_row_without_engine_is_404(client):
                 text("DELETE FROM report_catalog WHERE code = '__t2_rep_noengine__'")
             )
             await session.commit()
+
+
+async def test_enqueue_rejects_inverted_date_range(client):
+    """date_from after date_to would queue a job that can never render."""
+    token = await _login_token(client)
+    r = await client.post(
+        "/api/v1/reports/period_totals/print-queue",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"params": {"date_from": "2026-02-01", "date_to": "2026-01-01"}},
+    )
+    assert r.status_code == 400

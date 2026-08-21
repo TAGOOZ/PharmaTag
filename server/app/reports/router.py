@@ -227,6 +227,13 @@ def _validate_params(allowed: list[str], params: dict[str, str]) -> dict[str, st
             views.parse_date(name, raw)
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    try:
+        views.require_ordered_range(
+            views.parse_date("date_from", params.get("date_from")),
+            views.parse_date("date_to", params.get("date_to")),
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     return {k: v for k, v in params.items() if v}
 
 

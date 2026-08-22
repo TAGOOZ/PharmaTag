@@ -5,6 +5,12 @@ statements window-aggregate pattern: opening = Σ(debit − credit) before the
 window, movements ordered (datee, entry_no, line id) each carrying a running
 balance, closing = opening + the window's movement sum.
 
+Opening and movements come from ONE query on purpose: a single statement sees
+a single snapshot, so opening + Σmovements == closing holds even under
+concurrent writes (the statements-service guarantee). The cost — pre-window
+lines are scanned to build the opening window aggregate — is accepted for
+that atomicity; this is an accountant-facing report, not a hot path.
+
 A code resolves to EVERY account row it maps to for this branch (own row plus
 the inherited branch-1 rows carrying this branch's postings — the S2.3
 code-shadowing rule, via `account_ids_for_code`), so history posted before a
@@ -33,7 +39,7 @@ _NOT_FOUND = HTTPException(
 
 
 async def _display_account(
-    session: AsyncSession, branch_id: int, code: str, account_ids: list[int]
+    session: AsyncSession, branch_id: int, account_ids: list[int]
 ) -> Account:
     """The row that names the ledger: this branch's own account for the code,
     else the inherited branch-1 row (same precedence as the id resolution)."""
@@ -77,7 +83,7 @@ async def ledger_account_report(
     account_ids = await account_ids_for_code(session, branch_id, account_code)
     if not account_ids:
         raise _NOT_FOUND
-    account = await _display_account(session, branch_id, account_code, account_ids)
+    account = await _display_account(session, branch_id, account_ids)
 
     # ONE query feeds both the opening and the movements (window aggregate),
     # so opening + Σmovements == closing holds even under concurrent writes.

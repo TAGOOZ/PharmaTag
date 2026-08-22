@@ -92,11 +92,10 @@ async def vat_summary_report(
             .where(
                 InvoiceLine.branch_id == branch_id,
                 Invoice.kind.in_(("sale", "sale_return", "purchase", "purchase_return")),
-                # saved-only is deliberate: it is the status every writer
-                # stamps, and it keeps this report's population identical to
-                # period_totals' so the AC reconciliation cannot silently
-                # diverge if a legacy non-saved row ever appears
-                Invoice.status == "saved",
+                # NO status filter — deliberately identical population to
+                # period_totals (which also reads every invoice row), so the
+                # AC reconciliation between the two can never silently
+                # diverge on a legacy non-saved row
                 Invoice.datee >= start,
                 Invoice.datee <= end,
             )

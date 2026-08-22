@@ -361,8 +361,9 @@ async def test_ledger_closing_reconciles_to_trial_balance(client):
 
 
 async def test_ledger_account_param_guards(client):
-    """Unknown chart code → 404; malformed account_code, month/year mixed
-    with a range, and an inverted range → 400 — never a silent empty page."""
+    """Unknown chart code → 404; missing or malformed account_code,
+    month/year mixed with a range, and an inverted range → 400 — never a
+    silent empty page."""
     token = await _login_token(client)
     auth = {"Authorization": f"Bearer {token}"}
 
@@ -372,6 +373,13 @@ async def test_ledger_account_param_guards(client):
         headers=auth,
     )
     assert r.status_code == 404, r.text
+
+    r = await client.get(
+        "/api/v1/reports/ledger_account",
+        params={"month": "8", "year": "2026"},
+        headers=auth,
+    )
+    assert r.status_code == 400, r.text
 
     r = await client.get(
         "/api/v1/reports/ledger_account",

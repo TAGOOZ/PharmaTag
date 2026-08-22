@@ -9,7 +9,12 @@ from sqlalchemy import delete
 from app.core.db import SessionLocal
 from app.models import Branch, User
 
-from tests.reports_test_utils import _uniq, _make_drug_and_stock
+from tests.reports_test_utils import (
+    _cleanup,
+    _login_token,
+    _make_drug_and_stock,
+    _uniq,
+)
 
 _seq = [0]
 
@@ -108,3 +113,56 @@ async def _login_token(client) -> str:
     )
     assert login.status_code == 200
     return login.json()["access_token"]
+
+async def test_sales_family_reports_are_branch_scoped(client):
+    """The #26 codes answer branch-scoped through the generic dispatcher: a
+    branch-2 user gets their own (empty) report, never branch-1 rows."""
+    drug_id = await _make_drug_and_stock(
+        tax_type="14%",
+        price="10.0000",
+        cost_price="5.0000",
+        batches=[("20.0000", "5.0000", "2026-01-01")],
+    )
+    invoice_ids: list[int] = []
+    user_id = None
+    branch_id = None
+    try:
+        token = await _login_token(client)
+        auth = {"Authorization": f"Bearer {token}"}
+        r = await client.post(
+            "/api/v1/sales", headers=auth,
+            json={"lines": [{"drug_id": drug_id, "qty": "12"}]},
+        )
+        assert r.status_code == 201, r.text
+        invoice_ids.append(r.json()["id"])
+
+        user_id, branch_id = await _make_other_branch_user()
+        other = {"Authorization": f"Bearer {_token_for(user_id, branch_id)}"}
+
+        si = await client.get("/api/v1/reports/sales_invoices", headers=other)
+        assert si.status_code == 200, si.text
+        assert si.json()["branch_id"] == branch_id
+        assert si.json()["rows"] == []
+        assert si.json()["totals"]["count"] == 0
+
+        pi = await client.get("/api/v1/reports/purchase_invoices", headers=other)
+        assert pi.status_code == 200, pi.text
+        assert pi.json()["branch_id"] == branch_id
+        assert pi.json()["rows"] == []
+
+        rp = await client.get("/api/v1/reports/returns_period", headers=other)
+        assert rp.status_code == 200, rp.text
+        assert rp.json()["branch_id"] == branch_id
+        assert rp.json()["rows"] == []
+
+        pty = await client.get("/api/v1/reports/party_totals", headers=other)
+        assert pty.status_code == 200, pty.text
+        assert pty.json()["customers"] == []
+        assert pty.json()["suppliers"] == []
+    finally:
+        await _cleanup([drug_id], invoice_ids)
+        if user_id is not None and branch_id is not None:
+            async with SessionLocal() as session:
+                await session.execute(delete(User).where(User.id == user_id))
+                await session.execute(delete(Branch).where(Branch.id == branch_id))
+                await session.commit()

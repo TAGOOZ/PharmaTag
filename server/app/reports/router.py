@@ -44,6 +44,18 @@ def _clean_paper(paper: str) -> str:
     return paper
 
 
+def _reject_unknown_params(entry: ReportCatalog, params: dict[str, str]) -> None:
+    """GET dispatcher /export guard mirroring the print queue's allowlist: a
+    typo'd param (`date_form`) must 400, not silently degrade the report to
+    an open range."""
+    unknown = set(params) - set(entry.params or [])
+    if unknown:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"unknown params for '{entry.code}': {', '.join(sorted(unknown))}",
+        )
+
+
 async def _run_report(
     *,
     code: str,
@@ -59,6 +71,7 @@ async def _run_report(
         reg = views.get_entry(code)
         if entry is None or reg is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown report '{code}'")
+        _reject_unknown_params(entry, params)
         try:
             return await reg["query"](session, branch_id, params)
         except ValueError as exc:
@@ -107,6 +120,7 @@ async def _grid(
     reg = views.get_entry(code)
     if entry is None or reg is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown report '{code}'")
+    _reject_unknown_params(entry, params)
     try:
         payload = await reg["query"](session, branch_id, params)
     except ValueError as exc:

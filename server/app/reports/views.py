@@ -16,7 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.reports.day_profit import day_profit_report
 from app.reports.day_totals import DAY_COLUMNS, day_totals_report
 from app.reports.drawer_handover import drawer_handover_report
+from app.reports.party_totals import party_totals_report
 from app.reports.period_totals import period_totals_report
+from app.reports.purchase_invoices import purchase_invoices_report
+from app.reports.returns_period import returns_period_report
+from app.reports.sales_invoices import sales_invoices_report
 from app.reports.stock_current import stock_current_report
 from app.reports.stock_expired import _DEFAULT_HORIZON_DAYS, stock_expired_report
 from app.reports.stock_minimum import stock_minimum_report
@@ -161,6 +165,113 @@ def _period_totals_view(payload: dict) -> ViewSpec:
             payload["net_discounts"],
         ],
         "note": None,
+    }
+
+
+def _sales_invoices_view(payload: dict) -> ViewSpec:
+    totals = payload["totals"]
+    rows = [
+        [
+            row["invoice_no"],
+            row["datee"],
+            row["party_namee"] or "بدون عميل",
+            row["totalvalue"],
+            row["payed"],
+            row["agel"],
+            row["vat"],
+            row["writer"] or "—",
+        ]
+        for row in payload["rows"]
+    ]
+    return {
+        "meta": [
+            ("من تاريخ", payload["date_from"] or "مفتوح"),
+            ("إلى تاريخ", payload["date_to"] or "مفتوح"),
+            ("عدد الفواتير", totals["count"]),
+        ],
+        "columns": [
+            "رقم الفاتورة",
+            "التاريخ",
+            "العميل",
+            "الاجمالي",
+            "المدفوع",
+            "الآجل",
+            "الضريبة",
+            "الموظف",
+        ],
+        "rows": rows,
+        "foot": [
+            "الإجمالي",
+            "",
+            "",
+            totals["total"],
+            totals["payed"],
+            totals["agel"],
+            totals["vat"],
+            "",
+        ],
+        "note": (
+            f"هناك فواتير أخرى غير معروضة (الحد 1000) — العدد الإجمالي {totals['count']}."
+            if payload.get("truncated")
+            else None
+        ),
+    }
+
+
+def _purchase_invoices_view(payload: dict) -> ViewSpec:
+    totals = payload["totals"]
+    rows = [
+        [
+            row["invoice_no"],
+            row["datee"],
+            row["supplier_namee"] or "—",
+            row["drugname"],
+            row["qty"],
+            row["unit_cost"],
+            row["vat_amount"],
+            row["line_total"],
+            row["expire"] or "—",
+            row["batch_randomid"] or "—",
+        ]
+        for row in payload["rows"]
+    ]
+    return {
+        "meta": [
+            ("من تاريخ", payload["date_from"] or "مفتوح"),
+            ("إلى تاريخ", payload["date_to"] or "مفتوح"),
+            ("عدد الفواتير", totals["invoice_count"]),
+            ("عدد الأصناف", totals["line_count"]),
+        ],
+        "columns": [
+            "رقم الفاتورة",
+            "التاريخ",
+            "المورد",
+            "الصنف",
+            "الكمية",
+            "سعر التكلفة",
+            "الضريبة",
+            "اجمالي السطر",
+            "تاريخ الصلاحية",
+            "رقم التشغيلة",
+        ],
+        "rows": rows,
+        "foot": [
+            "الإجمالي",
+            "",
+            "",
+            "",
+            "",
+            "",
+            totals["vat"],
+            totals["total"],
+            "",
+            "",
+        ],
+        "note": (
+            f"هناك بنود أخرى غير معروضة (الحد 1000) — عدد البنود {totals['line_count']}."
+            if payload.get("truncated")
+            else None
+        ),
     }
 
 
@@ -481,6 +592,127 @@ async def _query_drawer_handover(
     )
 
 
+async def _query_sales_invoices(
+    session: AsyncSession, branch_id: int, params: dict[str, str]
+) -> dict:
+    date_from = parse_date("date_from", params.get("date_from"))
+    date_to = parse_date("date_to", params.get("date_to"))
+    require_ordered_range(date_from, date_to)
+    return await sales_invoices_report(
+        session, branch_id=branch_id, date_from=date_from, date_to=date_to
+    )
+
+
+async def _query_purchase_invoices(
+    session: AsyncSession, branch_id: int, params: dict[str, str]
+) -> dict:
+    date_from = parse_date("date_from", params.get("date_from"))
+    date_to = parse_date("date_to", params.get("date_to"))
+    require_ordered_range(date_from, date_to)
+    return await purchase_invoices_report(
+        session, branch_id=branch_id, date_from=date_from, date_to=date_to
+    )
+
+
+async def _query_returns_period(
+    session: AsyncSession, branch_id: int, params: dict[str, str]
+) -> dict:
+    date_from = parse_date("date_from", params.get("date_from"))
+    date_to = parse_date("date_to", params.get("date_to"))
+    require_ordered_range(date_from, date_to)
+    return await returns_period_report(
+        session, branch_id=branch_id, date_from=date_from, date_to=date_to
+    )
+
+
+async def _query_party_totals(
+    session: AsyncSession, branch_id: int, params: dict[str, str]
+) -> dict:
+    date_from = parse_date("date_from", params.get("date_from"))
+    date_to = parse_date("date_to", params.get("date_to"))
+    require_ordered_range(date_from, date_to)
+    return await party_totals_report(
+        session, branch_id=branch_id, date_from=date_from, date_to=date_to
+    )
+
+
+def _returns_period_view(payload: dict) -> ViewSpec:
+    totals = payload["totals"]
+    rows = [
+        [
+            "مرتجع مبيعات" if row["kind"] == "sale_return" else "مرتجع مشتريات",
+            row["invoice_no"],
+            row["datee"],
+            row["party_namee"] or "—",
+            row["ref_invoice_no"] or "—",
+            row["totalvalue"],
+            row["vat"],
+        ]
+        for row in payload["rows"]
+    ]
+    return {
+        "meta": [
+            ("من تاريخ", payload["date_from"] or "مفتوح"),
+            ("إلى تاريخ", payload["date_to"] or "مفتوح"),
+        ],
+        "columns": [
+            "النوع",
+            "رقم الفاتورة",
+            "التاريخ",
+            "الطرف",
+            "الفاتورة الأصلية",
+            "القيمة (سالب)",
+            "الضريبة",
+        ],
+        "rows": rows,
+        "foot": [
+            "الصافي",
+            "",
+            "",
+            "",
+            "",
+            totals["net"],
+            "",
+        ],
+        "note": (
+            f"هناك مرتجعات أخرى غير معروضة (الحد 1000) — العدد الإجمالي {totals['count']}."
+            if payload.get("truncated")
+            else "قيم المرتجعات بالسالب: تُخصم من إجماليات الفترة وضريبتها."
+        ),
+    }
+
+
+def _party_totals_view(payload: dict) -> ViewSpec:
+    rows = []
+    for section, label in (("customers", "عميل"), ("suppliers", "مورد")):
+        for row in payload[section]:
+            rows.append(
+                [
+                    label,
+                    row["namee"],
+                    row["period_debit"],
+                    row["period_credit"],
+                    row["closing"],
+                ]
+            )
+    return {
+        "meta": [
+            ("من تاريخ", payload["date_from"] or "مفتوح"),
+            ("إلى تاريخ", payload["date_to"] or "مفتوح"),
+        ],
+        "columns": [
+            "النوع",
+            "الاسم",
+            "مدين الفترة",
+            "دائن الفترة",
+            "الرصيد الختامي",
+        ],
+        "rows": rows,
+        "foot": None,
+        "note": None,
+    }
+
+
 REGISTRY: dict[str, dict[str, Callable]] = {
     "day_profit": {"query": _query_day_profit, "view": _day_profit_view},
     "period_totals": {"query": _query_period_totals, "view": _period_totals_view},
@@ -497,6 +729,16 @@ REGISTRY: dict[str, dict[str, Callable]] = {
         "view": _drawer_handover_view,
     },
     "day_totals": {"query": _query_day_totals, "view": _day_totals_view},
+    "sales_invoices": {"query": _query_sales_invoices, "view": _sales_invoices_view},
+    "purchase_invoices": {
+        "query": _query_purchase_invoices,
+        "view": _purchase_invoices_view,
+    },
+    "returns_period": {
+        "query": _query_returns_period,
+        "view": _returns_period_view,
+    },
+    "party_totals": {"query": _query_party_totals, "view": _party_totals_view},
 }
 
 

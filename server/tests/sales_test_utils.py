@@ -30,12 +30,20 @@ from app.models import (
 
 BRANCH_ID = 1
 
+# Namespace every throwaway row by the pytest process id (same convention as
+# reports_test_utils): a crashed run that leaked rows can never collide with
+# the next run's fresh counter — deterministic names made every re-run hit
+# uq_drugs_drugname against yesterday's leftovers.
+import os as _os
+
+_PID = _os.getpid()
+
 _seq = [0]
 
 
 def _uniq(tag: str) -> str:
     _seq[0] += 1
-    return f"__t2_sale_{tag}_{_seq[0]}__"
+    return f"__t2_sale_{_PID}_{tag}_{_seq[0]}__"
 
 
 async def _login_token(client) -> str:

@@ -26,6 +26,11 @@ EXPECTED_CODES = {
     "stock_movements",
     "stock_expired",
     "stock_needs",
+    # S3.4 (#26)
+    "sales_invoices",
+    "purchase_invoices",
+    "returns_period",
+    "party_totals",
 }
 
 

@@ -216,22 +216,31 @@ class PrintQueueEnqueue(BaseModel):
     paper: Optional[str] = None
 
 
-def _validate_params(allowed: list[str], params: dict[str, str]) -> dict[str, str]:
-    """Snapshot params must be known catalog params carrying ISO dates.
-
-    Every param the v1 catalog declares is a date (datee / date_from /
-    date_to); a later slice adding a non-date param must extend this
-    validation (or carry a per-param type in report_catalog).
-    """
+def _validate_params(
+    code: str, allowed: list[str], params: dict[str, str]
+) -> dict[str, str]:
+    """Snapshot params must be known catalog params carrying ISO dates
+    (or one of the declared integer params, e.g. stock_expired's
+    `horizon_days`), and required params (e.g. stock_movements' `drug_id`)
+    must be present — a job that can only fail at render must not queue."""
     unknown = set(params) - set(allowed)
     if unknown:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             f"unknown params: {', '.join(sorted(unknown))}",
         )
+    missing = views.REQUIRED_PARAMS.get(code, set()) - set(params)
+    if missing:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"missing required params: {', '.join(sorted(missing))}",
+        )
     for name, raw in params.items():
         try:
-            views.parse_date(name, raw)
+            if name in views.INT_PARAMS:
+                views.parse_int(name, raw)
+            else:
+                views.parse_date(name, raw)
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     if "datee" in params and ("date_from" in params or "date_to" in params):
@@ -292,7 +301,7 @@ async def enqueue_print_job(
         # no engine behind the row → the job could never render
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown report '{code}'")
     paper = _clean_paper(body.paper or entry.paper)
-    params = _validate_params(list(entry.params or {}), body.params)
+    params = _validate_params(code, list(entry.params or {}), body.params)
     job = PrintJob(
         branch_id=_caller_branch_id(caller),
         user_id=caller.id,

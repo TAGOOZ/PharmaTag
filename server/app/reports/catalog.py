@@ -1,10 +1,10 @@
-"""The RPT report catalog (S3.1 #23 + S3.2 #24).
+"""The RPT report catalog (S3.1 #23 + S3.2 #24 + S3.3 #25).
 
 Since rev 015 the catalog lives in the `report_catalog` table — a later
-report slice (S3.2–S3.5) adds rows, not code. `SEED_CATALOG` documents the
-five rows revs 015+016 seed (kept in sync with the migrations); the
-endpoint reads the table so operators can deactivate/reorder reports
-without a deploy.
+report slice (S3.4–S3.5) adds rows, not code. `SEED_CATALOG` documents the
+rows revs 015–017 seed (kept in sync with the migrations); the endpoint
+reads the table so operators can deactivate/reorder reports without a
+deploy.
 """
 from __future__ import annotations
 
@@ -53,6 +53,38 @@ SEED_CATALOG: list[dict] = [
         "title_en": "Stock Below Minimum",
         "params": [],
         "sort": 40,
+    },
+    {
+        "code": "stock_current",
+        "category": "stock",
+        "title_ar": "رصيد الأصناف",
+        "title_en": "Current Stock",
+        "params": [],
+        "sort": 50,
+    },
+    {
+        "code": "stock_movements",
+        "category": "stock",
+        "title_ar": "تتبع تغيير الرصيد",
+        "title_en": "Drug Movement Track",
+        "params": ["drug_id", "date_from", "date_to"],
+        "sort": 60,
+    },
+    {
+        "code": "stock_expired",
+        "category": "stock",
+        "title_ar": "الادوية منتهية الصلاحية",
+        "title_en": "Expired / Expiring Stock",
+        "params": ["datee", "horizon_days"],
+        "sort": 70,
+    },
+    {
+        "code": "stock_needs",
+        "category": "stock",
+        "title_ar": "احتياجات الطلب (الحد الأدنى)",
+        "title_en": "Order Needs (Minimum-Based)",
+        "params": [],
+        "sort": 80,
     },
 ]
 

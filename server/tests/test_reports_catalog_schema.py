@@ -17,6 +17,11 @@ EXPECTED_CODES = {
     "period_totals",
     "stock_minimum",
     "drawer_handover",
+    # S3.3 (#25)
+    "stock_current",
+    "stock_movements",
+    "stock_expired",
+    "stock_needs",
 }
 
 
@@ -87,4 +92,8 @@ async def test_catalog_orders_by_sort_then_code(client):
         "day_totals",
         "period_totals",
         "stock_minimum",
+        "stock_current",
+        "stock_movements",
+        "stock_expired",
+        "stock_needs",
     ]

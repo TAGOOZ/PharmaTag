@@ -20,10 +20,12 @@ from app.models import BranchStock, Drug
 _MAX_ITEMS = 1000
 
 
-async def stock_minimum_report(
+async def _shortage_rows(
     session: AsyncSession, *, branch_id: int
-) -> dict:
-    """The shortage list for the branch (empty when nothing is below minimum)."""
+) -> tuple[int, list]:
+    """(true below-minimum count, up-to-_MAX_ITEMS (BranchStock, Drug) rows
+    ordered by shortage desc then name) — shared by stock_minimum and the
+    S3.3 needs report."""
     below = [
         BranchStock.branch_id == branch_id,
         BranchStock.qty < BranchStock.minimum,
@@ -46,6 +48,14 @@ async def stock_minimum_report(
             .limit(_MAX_ITEMS)
         )
     ).all()
+    return total, rows
+
+
+async def stock_minimum_report(
+    session: AsyncSession, *, branch_id: int
+) -> dict:
+    """The shortage list for the branch (empty when nothing is below minimum)."""
+    total, rows = await _shortage_rows(session, branch_id=branch_id)
 
     items = []
     for stock, drug in rows:

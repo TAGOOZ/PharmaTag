@@ -17,7 +17,11 @@ from app.reports.day_profit import day_profit_report
 from app.reports.day_totals import DAY_COLUMNS, day_totals_report
 from app.reports.drawer_handover import drawer_handover_report
 from app.reports.period_totals import period_totals_report
+from app.reports.stock_current import stock_current_report
+from app.reports.stock_expired import _DEFAULT_HORIZON_DAYS, stock_expired_report
 from app.reports.stock_minimum import stock_minimum_report
+from app.reports.stock_movements import stock_movements_report
+from app.reports.stock_needs import stock_needs_report
 
 # grid spec: JSON-safe, shared by template.py / exports / ReportView
 ViewSpec = dict[str, Any]
@@ -33,6 +37,37 @@ def parse_date(name: str, raw: str | None) -> date | None:
         return date.fromisoformat(raw)
     except ValueError as exc:
         raise ValueError(f"{name} must be an ISO date (YYYY-MM-DD)") from exc
+
+
+# catalog params that are integers, not dates, with their accepted bounds —
+# ONE source of truth so enqueue-time validation can never accept a value
+# the renderer would later reject
+INT_PARAM_BOUNDS: dict[str, tuple[int, int]] = {
+    "horizon_days": (0, 3650),
+    "drug_id": (1, 2_147_483_647),
+}
+INT_PARAMS = set(INT_PARAM_BOUNDS)
+
+# params a report cannot render without — the print queue refuses to enqueue
+# a job missing them (a job that can only fail at render must not queue)
+REQUIRED_PARAMS: dict[str, set[str]] = {
+    "stock_movements": {"drug_id"},
+}
+
+
+def parse_int(name: str, raw: str | None) -> int | None:
+    if name not in INT_PARAM_BOUNDS:
+        raise ValueError(f"{name} is not an integer param")
+    lo, hi = INT_PARAM_BOUNDS[name]
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if not lo <= value <= hi:
+        raise ValueError(f"{name} must be between {lo} and {hi}")
+    return value
 
 
 def require_ordered_range(date_from: date | None, date_to: date | None) -> None:
@@ -157,6 +192,136 @@ def _stock_minimum_view(payload: dict) -> ViewSpec:
     }
 
 
+def _stock_current_view(payload: dict) -> ViewSpec:
+    rows = [
+        [
+            f"{item['drugname']} ({item['drugnamear']})"
+            if item["drugnamear"]
+            else item["drugname"],
+            item["barcode"] or "—",
+            item["qty"],
+            item["value"],
+            item["price"],
+        ]
+        for item in payload["items"]
+    ]
+    note = None
+    if payload.get("truncated"):
+        note = (
+            f"هناك أصناف أخرى غير معروضة (الحد 1000) — العدد الإجمالي {payload['count']}."
+        )
+    return {
+        "meta": [("عدد الأصناف", payload["count"])],
+        "columns": ["الصنف", "الباركود", "الرصيد", "قيمة المخزون", "سعر البيع"],
+        "rows": rows,
+        # whole-branch value computed in SQL — correct even when truncated
+        "foot": ["إجمالي قيمة المخزون", "", "", payload["total_value"], ""],
+        "note": note,
+    }
+
+
+def _stock_movements_view(payload: dict) -> ViewSpec:
+    rows = [
+        [
+            day["datee"],
+            day["opening"],
+            day["purchases"],
+            day["sales"],
+            day["sales_returns"],
+            day["purchase_returns"],
+            day["adjustments"],
+            day["closing"],
+        ]
+        for day in payload["days"]
+    ]
+    return {
+        "meta": [
+            ("الصنف", payload["drugname"]),
+            ("الرصيد الحالي", payload["current_qty"]),
+        ],
+        "columns": [
+            "التاريخ",
+            "رصيد افتتاحي",
+            "مشتريات",
+            "مبيعات",
+            "مرتجع مبيعات",
+            "مرتجع مشتريات",
+            "تسويات",
+            "رصيد نهائي",
+        ],
+        "rows": rows,
+        "foot": None,
+        "note": None,
+    }
+
+
+def _stock_expired_view(payload: dict) -> ViewSpec:
+    status_ar = {"expired": "منتهي", "warning": "قارب على الانتهاء"}
+    rows = [
+        [
+            f"{item['drugname']} ({item['drugnamear']})"
+            if item["drugnamear"]
+            else item["drugname"],
+            item["barcode"] or "—",
+            item["expire"],
+            item["days_to_expiry"],
+            item["qty"],
+            item["value"],
+            status_ar[item["status"]],
+        ]
+        for item in payload["items"]
+    ]
+    note = None
+    if payload.get("truncated"):
+        note = (
+            f"هناك دفعات أخرى غير معروضة (الحد 1000) — العدد الإجمالي {payload['count']}."
+        )
+    return {
+        "meta": [
+            ("كشف حتى تاريخ", payload["datee"]),
+            ("نطاق التنبيه (أيام)", payload["horizon_days"]),
+            ("عدد الدفعات المتأثرة", payload["count"]),
+        ],
+        "columns": ["الصنف", "الباركود", "تاريخ الانتهاء", "الأيام المتبقية",
+                    "الرصيد", "القيمة", "الحالة"],
+        "rows": rows,
+        # whole-branch affected value computed in SQL — correct when truncated
+        "foot": ["إجمالي قيمة المخزون المتأثر", "", "", "",
+                 "", payload["total_value"], ""],
+        "note": note,
+    }
+
+
+def _stock_needs_view(payload: dict) -> ViewSpec:
+    rows = [
+        [
+            f"{item['drugname']} ({item['drugnamear']})"
+            if item["drugnamear"]
+            else item["drugname"],
+            item["barcode"] or "—",
+            item["qty"],
+            item["minimum"],
+            item["suggested_order"],
+            item["last_cost"] or "—",
+        ]
+        for item in payload["items"]
+    ]
+    note = None
+    if payload.get("truncated"):
+        note = (
+            f"هناك أصناف أخرى غير معروضة (الحد 1000) — العدد الإجمالي {payload['count']}."
+        )
+    return {
+        "meta": [("عدد الأصناف المطلوب تعويضها", payload["count"])],
+        "columns": ["الصنف", "الباركود", "الرصيد", "الحد الأدنى",
+                    "الكمية المقترح طلبها", "اخر سعر شراء"],
+        "rows": rows,
+        "foot": ["إجمالي الكمية المقترحة", "", "", "",
+                 payload["suggested_total"], ""],
+        "note": note,
+    }
+
+
 def _day_totals_view(payload: dict) -> ViewSpec:
     rows = [
         [day["datee"]] + [day[key] for key, _ in DAY_COLUMNS]
@@ -251,6 +416,49 @@ async def _query_stock_minimum(
     return await stock_minimum_report(session, branch_id=branch_id)
 
 
+async def _query_stock_current(
+    session: AsyncSession, branch_id: int, params: dict[str, str]
+) -> dict:
+    return await stock_current_report(session, branch_id=branch_id)
+
+
+async def _query_stock_movements(
+    session: AsyncSession, branch_id: int, params: dict[str, str]
+) -> dict:
+    drug_id = parse_int("drug_id", params.get("drug_id"))
+    if drug_id is None:
+        raise ValueError("drug_id is required")
+    date_from = parse_date("date_from", params.get("date_from"))
+    date_to = parse_date("date_to", params.get("date_to"))
+    require_ordered_range(date_from, date_to)
+    return await stock_movements_report(
+        session,
+        branch_id=branch_id,
+        drug_id=drug_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+async def _query_stock_expired(
+    session: AsyncSession, branch_id: int, params: dict[str, str]
+) -> dict:
+    datee = parse_date("datee", params.get("datee"))
+    horizon = parse_int("horizon_days", params.get("horizon_days"))
+    return await stock_expired_report(
+        session,
+        branch_id=branch_id,
+        datee=datee,
+        horizon_days=horizon if horizon is not None else _DEFAULT_HORIZON_DAYS,
+    )
+
+
+async def _query_stock_needs(
+    session: AsyncSession, branch_id: int, params: dict[str, str]
+) -> dict:
+    return await stock_needs_report(session, branch_id=branch_id)
+
+
 async def _query_day_totals(
     session: AsyncSession, branch_id: int, params: dict[str, str]
 ) -> dict:
@@ -277,6 +485,13 @@ REGISTRY: dict[str, dict[str, Callable]] = {
     "day_profit": {"query": _query_day_profit, "view": _day_profit_view},
     "period_totals": {"query": _query_period_totals, "view": _period_totals_view},
     "stock_minimum": {"query": _query_stock_minimum, "view": _stock_minimum_view},
+    "stock_current": {"query": _query_stock_current, "view": _stock_current_view},
+    "stock_movements": {
+        "query": _query_stock_movements,
+        "view": _stock_movements_view,
+    },
+    "stock_expired": {"query": _query_stock_expired, "view": _stock_expired_view},
+    "stock_needs": {"query": _query_stock_needs, "view": _stock_needs_view},
     "drawer_handover": {
         "query": _query_drawer_handover,
         "view": _drawer_handover_view,

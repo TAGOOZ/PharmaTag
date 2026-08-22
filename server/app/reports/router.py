@@ -233,10 +233,11 @@ class PrintQueueEnqueue(BaseModel):
 def _validate_params(
     code: str, allowed: list[str], params: dict[str, str]
 ) -> dict[str, str]:
-    """Snapshot params must be known catalog params carrying ISO dates
-    (or one of the declared integer params, e.g. stock_expired's
-    `horizon_days`), and required params (e.g. stock_movements' `drug_id`)
-    must be present — a job that can only fail at render must not queue."""
+    """Snapshot params must be known catalog params carrying ISO dates,
+    declared integer params (e.g. stock_expired's `horizon_days`, the
+    accounting reports' `month`/`year`), or regex-validated string params
+    (e.g. ledger_account's `account_code`), and required params must be
+    present — a job that can only fail at render must not queue."""
     unknown = set(params) - set(allowed)
     if unknown:
         raise HTTPException(
@@ -249,14 +250,15 @@ def _validate_params(
             status.HTTP_400_BAD_REQUEST,
             f"missing required params: {', '.join(sorted(missing))}",
         )
-    for name, raw in params.items():
-        try:
-            if name in views.INT_PARAMS:
-                views.parse_int(name, raw)
-            else:
-                views.parse_date(name, raw)
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    if ("month" in params or "year" in params) and (
+        "date_from" in params or "date_to" in params
+    ):
+        # mirrors the mizan's resolve_period rule: a job mixing the canonical
+        # month with a range could never render, so it must not enqueue
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "pass either month/year or a date_from/date_to range, not both",
+        )
     if "datee" in params and ("date_from" in params or "date_to" in params):
         # mirrors day_profit's resolve_window rule: a job mixing the single
         # day with a range could never render, so it must not enqueue
@@ -264,6 +266,16 @@ def _validate_params(
             status.HTTP_400_BAD_REQUEST,
             "pass either datee or a date_from/date_to range, not both",
         )
+    for name, raw in params.items():
+        try:
+            if name in views.INT_PARAMS:
+                views.parse_int(name, raw)
+            elif name in views.STR_PARAM_PATTERNS:
+                views.parse_str(name, raw)
+            else:
+                views.parse_date(name, raw)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     try:
         views.require_ordered_range(
             views.parse_date("date_from", params.get("date_from")),

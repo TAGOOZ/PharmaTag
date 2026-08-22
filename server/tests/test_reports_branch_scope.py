@@ -159,6 +159,27 @@ async def test_sales_family_reports_are_branch_scoped(client):
         assert pty.status_code == 200, pty.text
         assert pty.json()["customers"] == []
         assert pty.json()["suppliers"] == []
+
+        # S3.5 accounting codes: branch 2 inherits the chart but has no
+        # postings of its own — an empty ledger, zeroed VAT sections
+        led = await client.get(
+            "/api/v1/reports/ledger_account",
+            params={"account_code": "2100", "month": "8", "year": "2026"},
+            headers=other,
+        )
+        assert led.status_code == 200, led.text
+        assert led.json()["branch_id"] == branch_id
+        assert led.json()["movements"] == []
+        assert led.json()["closing_balance"] == "0.00"
+
+        vat = await client.get(
+            "/api/v1/reports/vat_summary",
+            params={"month": "8", "year": "2026"},
+            headers=other,
+        )
+        assert vat.status_code == 200, vat.text
+        assert vat.json()["output"]["total_vat"] == "0.00"
+        assert vat.json()["input"]["total_vat"] == "0.00"
     finally:
         await _cleanup([drug_id], invoice_ids)
         if user_id is not None and branch_id is not None:

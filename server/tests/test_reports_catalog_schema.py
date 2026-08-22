@@ -27,6 +27,8 @@ EXPECTED_CODES = {
     "purchase_invoices",
     "returns_period",
     "party_totals",
+    "ledger_account",
+    "vat_summary",
 }
 
 
@@ -105,4 +107,6 @@ async def test_catalog_orders_by_sort_then_code(client):
         "purchase_invoices",
         "returns_period",
         "party_totals",
+        "ledger_account",
+        "vat_summary",
     ]

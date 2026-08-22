@@ -31,6 +31,8 @@ EXPECTED_CODES = {
     "purchase_invoices",
     "returns_period",
     "party_totals",
+    "ledger_account",
+    "vat_summary",
 }
 
 

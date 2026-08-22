@@ -79,6 +79,22 @@ SEED_CATALOG: list[dict] = [
         "sort": 120,
     },
     {
+        "code": "ledger_account",
+        "category": "accounting",
+        "title_ar": "دفتر الأستاذ لحساب",
+        "title_en": "Ledger by Account",
+        "params": ["account_code", "month", "year", "date_from", "date_to"],
+        "sort": 130,
+    },
+    {
+        "code": "vat_summary",
+        "category": "accounting",
+        "title_ar": "ملخص ضريبة القيمة المضافة",
+        "title_en": "VAT Summary (Form 10)",
+        "params": ["month", "year", "date_from", "date_to"],
+        "sort": 140,
+    },
+    {
         "code": "stock_minimum",
         "category": "stock",
         "title_ar": "النواقص (أقل من الحد الأدنى)",

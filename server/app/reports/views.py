@@ -8,6 +8,7 @@ to add a report — the catalog row + this pair is the whole integration.
 """
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any, Awaitable, Callable
 
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.reports.day_profit import day_profit_report
 from app.reports.day_totals import DAY_COLUMNS, day_totals_report
 from app.reports.drawer_handover import drawer_handover_report
+from app.reports.ledger_account import ledger_account_report
 from app.reports.party_totals import party_totals_report
 from app.reports.period_totals import period_totals_report
 from app.reports.purchase_invoices import purchase_invoices_report
@@ -26,6 +28,7 @@ from app.reports.stock_expired import _DEFAULT_HORIZON_DAYS, stock_expired_repor
 from app.reports.stock_minimum import stock_minimum_report
 from app.reports.stock_movements import stock_movements_report
 from app.reports.stock_needs import stock_needs_report
+from app.reports.vat_summary import vat_summary_report
 
 # grid spec: JSON-safe, shared by template.py / exports / ReportView
 ViewSpec = dict[str, Any]
@@ -49,13 +52,24 @@ def parse_date(name: str, raw: str | None) -> date | None:
 INT_PARAM_BOUNDS: dict[str, tuple[int, int]] = {
     "horizon_days": (0, 3650),
     "drug_id": (1, 2_147_483_647),
+    "month": (1, 12),
+    "year": (1900, 9999),
 }
 INT_PARAMS = set(INT_PARAM_BOUNDS)
+
+# catalog params validated as strings against a regex — same single source of
+# truth contract as INT_PARAM_BOUNDS: the queue never accepts what render rejects
+STR_PARAM_PATTERNS: dict[str, str] = {
+    # chart codes are short opaque handles (seeded digits; user codes may carry
+    # dots/dashes) — anything else is a typo or injection bait
+    "account_code": r"^[0-9A-Za-z._-]{1,30}$",
+}
 
 # params a report cannot render without — the print queue refuses to enqueue
 # a job missing them (a job that can only fail at render must not queue)
 REQUIRED_PARAMS: dict[str, set[str]] = {
     "stock_movements": {"drug_id"},
+    "ledger_account": {"account_code"},
 }
 
 
@@ -72,6 +86,16 @@ def parse_int(name: str, raw: str | None) -> int | None:
     if not lo <= value <= hi:
         raise ValueError(f"{name} must be between {lo} and {hi}")
     return value
+
+
+def parse_str(name: str, raw: str | None) -> str | None:
+    if name not in STR_PARAM_PATTERNS:
+        raise ValueError(f"{name} is not a string param")
+    if raw is None or raw == "":
+        return None
+    if not re.fullmatch(STR_PARAM_PATTERNS[name], raw):
+        raise ValueError(f"{name} has an invalid format")
+    return raw
 
 
 def require_ordered_range(date_from: date | None, date_to: date | None) -> None:
@@ -636,6 +660,51 @@ async def _query_party_totals(
     )
 
 
+def _parse_period_params(params: dict[str, str]) -> tuple[int | None, int | None]:
+    return (
+        parse_int("month", params.get("month")),
+        parse_int("year", params.get("year")),
+    )
+
+
+async def _query_ledger_account(
+    session: AsyncSession, branch_id: int, params: dict[str, str]
+) -> dict:
+    account_code = parse_str("account_code", params.get("account_code"))
+    if account_code is None:
+        raise ValueError("account_code is required")
+    month, year = _parse_period_params(params)
+    date_from = parse_date("date_from", params.get("date_from"))
+    date_to = parse_date("date_to", params.get("date_to"))
+    require_ordered_range(date_from, date_to)
+    return await ledger_account_report(
+        session,
+        branch_id=branch_id,
+        account_code=account_code,
+        month=month,
+        year=year,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+async def _query_vat_summary(
+    session: AsyncSession, branch_id: int, params: dict[str, str]
+) -> dict:
+    month, year = _parse_period_params(params)
+    date_from = parse_date("date_from", params.get("date_from"))
+    date_to = parse_date("date_to", params.get("date_to"))
+    require_ordered_range(date_from, date_to)
+    return await vat_summary_report(
+        session,
+        branch_id=branch_id,
+        month=month,
+        year=year,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
 def _returns_period_view(payload: dict) -> ViewSpec:
     totals = payload["totals"]
     rows = [
@@ -713,6 +782,90 @@ def _party_totals_view(payload: dict) -> ViewSpec:
     }
 
 
+_VAT_RATE_AR = {"exempt": "معفاة", "5%": "5%", "14%": "14%"}
+
+
+def _vat_summary_view(payload: dict) -> ViewSpec:
+    rows = []
+    for section, label in (("output", "ضريبة المخرجات"), ("input", "ضريبة المدخلات")):
+        for rate in payload[section]["rates"]:
+            rows.append(
+                [
+                    f"{label} — {_VAT_RATE_AR[rate['tax_type']]}",
+                    rate["net"],
+                    rate["vat"],
+                ]
+            )
+    foot_label = (
+        "رصيد دائن (المدخلات تتجاوز المخرجات)"
+        if payload["credit_balance"]
+        else "صافي الضريبة المستحقة"
+    )
+    return {
+        "meta": _period_meta(payload["period"]),
+        "columns": ["البيان", "صافي القيمة", "الضريبة"],
+        "rows": rows,
+        "foot": [foot_label, "", payload["net_vat_payable"]],
+        "note": (
+            "المرتجعات مخصومة داخل بندها. لا يتم توزيع ضريبة المدخلات تلقائياً "
+            "على المخرجات المعفاة — القرار للمحاسب."
+        ),
+    }
+
+
+def _period_meta(period: dict) -> list[tuple[str, str]]:
+    if period["month"] is not None:
+        return [("الفترة", f"{period['month']:02d}/{period['year']}")]
+    return [
+        ("من تاريخ", period["date_from"] or "مفتوح"),
+        ("إلى تاريخ", period["date_to"] or "مفتوح"),
+    ]
+
+
+def _ledger_account_view(payload: dict) -> ViewSpec:
+    account = payload["account"]
+    name = account["name_ar"] or account["name_en"]
+    rows = [
+        [
+            movement["datee"],
+            movement["entry_no"],
+            movement["description"],
+            movement["party"] or "—",
+            movement["debit"],
+            movement["credit"],
+            movement["running_balance"],
+        ]
+        for movement in payload["movements"]
+    ]
+    return {
+        "meta": [
+            ("الحساب", f"{account['code']} — {name}" if name else account["code"]),
+            ("رصيد افتتاحي", payload["opening_balance"]),
+            *_period_meta(payload["period"]),
+        ],
+        "columns": [
+            "التاريخ",
+            "رقم القيد",
+            "البيان",
+            "الطرف",
+            "مدين",
+            "دائن",
+            "الرصيد",
+        ],
+        "rows": rows,
+        "foot": [
+            "الإجمالي",
+            "",
+            "",
+            "",
+            payload["debit_total"],
+            payload["credit_total"],
+            payload["closing_balance"],
+        ],
+        "note": None,
+    }
+
+
 REGISTRY: dict[str, dict[str, Callable]] = {
     "day_profit": {"query": _query_day_profit, "view": _day_profit_view},
     "period_totals": {"query": _query_period_totals, "view": _period_totals_view},
@@ -739,6 +892,14 @@ REGISTRY: dict[str, dict[str, Callable]] = {
         "view": _returns_period_view,
     },
     "party_totals": {"query": _query_party_totals, "view": _party_totals_view},
+    "ledger_account": {
+        "query": _query_ledger_account,
+        "view": _ledger_account_view,
+    },
+    "vat_summary": {
+        "query": _query_vat_summary,
+        "view": _vat_summary_view,
+    },
 }
 
 

@@ -12,9 +12,9 @@ JSON primitives only (strings/ints) so it survives JSON round-trips and the
 SHA-256 recompute is byte-stable. The official submission serializer shapes
 (eReceipt v1.2 / Invoice v1.0 field-perfect) are S4.2/S4.3 work on top of this.
 
-Provisional code tables (each becomes a tested table in its own slice):
-* tax T1 with subType V001 and the line's rate (T1–T20/subtypes = #29's table);
-* paymentMethod C=cash / V=card / O=other (largest split wins).
+Provisional code tables (payment method C=cash / V=card / O=other, largest
+split wins). Tax codes (T1/subtypes) come from the tested table in
+`codes.py` (#29).
 """
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from app.core.money import dec, round2, round4
+from app.einvoicing.codes import tax_code
 from app.models import Branch, EInvoiceLog, Invoice, Party
 from app.models.einvoicing import (
     KIND_CREDIT_NOTE,
@@ -176,12 +177,10 @@ def _receipt_line(view: dict) -> dict:
         "total": str(view["total"]),
         "taxableItems": [
             {
-                "taxType": "T1",
-                "subType": "V001",
+                "taxType": (code := tax_code(view["tax_type"])).tax_type,
+                "subType": code.sub_type,
                 "amount": str(view["vat"]),
-                "rate": {"exempt": "0", "5%": "5", "14%": "14"}[
-                    view["tax_type"]
-                ],
+                "rate": code.rate,
             }
         ],
     }
@@ -192,10 +191,15 @@ def _tax_totals(lines: list[dict]) -> list[dict]:
     for item in lines:
         key = item["lm"].tax_type
         buckets[key] = buckets.get(key, Decimal("0")) + item["lm"].vat
-    order = {"exempt": "0", "5%": "5", "14%": "14"}
+    order = {k: tax_code(k).rate for k in buckets}
     return [
-        {"taxType": "T1", "subType": "V001", "amount": str(v), "rate": order[k]}
-        for k, v in sorted(buckets.items(), key=lambda kv: order[kv[0]])
+        {
+            "taxType": (code := tax_code(k)).tax_type,
+            "subType": code.sub_type,
+            "amount": str(v),
+            "rate": code.rate,
+        }
+        for k, v in sorted(buckets.items(), key=lambda kv: Decimal(order[kv[0]]))
     ]
 
 

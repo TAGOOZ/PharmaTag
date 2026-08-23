@@ -41,6 +41,10 @@ LEGACY_LEVEL_FLOOR = {
     "approvals": 5,
     "reports": 9,
     "users.manage": 6,
+    # e-invoicing (S4.2, #29): every staff member sees document status; only
+    # manager-level users requeue rejected/failed submissions to ETA.
+    "einvoice.view": 1,
+    "einvoice.submit": 7,
 }
 
 

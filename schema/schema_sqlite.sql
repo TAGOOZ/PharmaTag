@@ -816,6 +816,9 @@ CREATE TABLE einvoice_log (
     payload_json   TEXT,                              -- JSON document text
     response       TEXT NOT NULL DEFAULT '',
     submitted_at   TEXT,
+    attempts       INTEGER NOT NULL DEFAULT 0,      -- S4.2 retry bookkeeping
+    next_attempt_at TEXT,                            -- backoff gate; NULL = due now
+    last_error     TEXT NOT NULL DEFAULT '',        -- last transport/ETA error
     created_at     TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (branch_id, kind, counter),
     UNIQUE (invoice_id)

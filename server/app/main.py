@@ -3,6 +3,7 @@
 Run: uvicorn app.main:app --reload   (from server/)
 """
 from contextlib import asynccontextmanager
+import asyncio
 
 from fastapi import FastAPI, status
 from fastapi.encoders import jsonable_encoder
@@ -17,6 +18,8 @@ from app.core.config import settings
 from app.core.db import SessionLocal, engine
 from app.drawer.router import router as drawer_router
 from app.drugs.router import router as drugs_router
+from app.einvoicing.router import router as einvoicing_router
+from app.einvoicing.worker import run_forever
 from app.money.months_router import router as months_router
 from app.money.opening_router import router as opening_router
 from app.money.router import router as money_router
@@ -37,7 +40,16 @@ from app.users.router import router as users_router
 async def lifespan(app: FastAPI):
     async with SessionLocal() as session:
         await registry.load(session)
+    stop = asyncio.Event()
+    worker = (
+        asyncio.create_task(run_forever(stop))
+        if settings.eta_submit_enabled
+        else None
+    )
     yield
+    if worker is not None:
+        stop.set()
+        await worker
     await engine.dispose()
 
 
@@ -69,6 +81,9 @@ def create_app() -> FastAPI:
     )
     application.include_router(
         purchases_router, prefix="/api/v1/purchases", tags=["purchases"]
+    )
+    application.include_router(
+        einvoicing_router, prefix="/api/v1/einvoicing", tags=["einvoicing"]
     )
     application.include_router(
         parties_router, prefix="/api/v1/parties", tags=["parties"]

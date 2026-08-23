@@ -196,7 +196,7 @@ async def test_A1_exempt_panadol_cash_vat_inclusive(client):
         assert _d(p["totalAmount"]) == _d(inv.totalvalue) == Decimal("20.00")
         assert _d(p["netAmount"]) == _d(p["totalAmount"])  # exempt: no VAT wedge
         assert p["taxTotals"] == [
-            {"taxType": "T1", "subType": "V001", "amount": "0.00", "rate": "0"}
+            {"taxType": "T1", "subType": "V003", "amount": "0.00", "rate": "0"}
         ]
         assert p["itemData"][0]["taxableItems"][0]["rate"] == "0"
         assert p["paymentMethod"] == "C"

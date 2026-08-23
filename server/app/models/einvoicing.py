@@ -114,6 +114,9 @@ class EInvoiceLog(Base):
     payload_json: Mapped[Optional[dict]] = mapped_column(JSON)
     response: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     submitted_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+    attempts: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )

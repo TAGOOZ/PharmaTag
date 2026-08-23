@@ -28,6 +28,14 @@ class Settings(BaseSettings):
         validation_alias="PHARMATAG_PLUGINS_DIR",
     )
 
+    # ETA e-invoice submission (S4.2, #29): live network calls stay OFF until
+    # a site configures its OAuth credentials and flips the gate (plan/05).
+    # PHARMATAG_ENVIRONMENT=preprod targets the ETA preprod hosts.
+    eta_submit_enabled: bool = False
+    eta_client_id: str = ""
+    eta_client_secret: str = ""
+    einvoice_worker_interval_seconds: int = 60
+
     jwt_secret: str = "dev-only-change-me-0123456789abcdef012345"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import ACTION_INSERT, audit, enqueue_sync
 from app.core.money import add, dec, format2, line_money, round2, round4, tax_rate
 from app.drawer.movements import SALE, record_payment_splits
+from app.einvoicing.service import einvoice_block, issue_for_invoice
 from app.models import (
     Branch,
     Drug,
@@ -237,6 +238,18 @@ async def _build_full_sale(
     )
 
     payload = _sale_payload(invoice, resolved, splits, entry_no, totals, inclusive)
+    # S4.1 (#28): the tax document is written INSIDE the same transaction
+    # (G12; STRICT per A09) and rides the outbox snapshot verbatim.
+    log = await issue_for_invoice(
+        session,
+        invoice=invoice,
+        branch=branch,
+        lines=resolved,
+        totals=totals,
+        splits=splits,
+        party=customer,
+    )
+    payload["einvoice"] = einvoice_block(log)
     await enqueue_sync(
         session,
         branch_id=branch_id,

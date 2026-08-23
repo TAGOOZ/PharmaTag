@@ -51,6 +51,7 @@ class Party(Base):
     payable_account_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("accounts.id"))
     writer: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
     randomid: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    tax_registration_no: Mapped[Optional[str]] = mapped_column(String(30), server_default="")
     datee: Mapped[Optional[date]] = mapped_column(Date)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(

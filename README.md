@@ -165,7 +165,16 @@ assets = liabilities + equity checked live, equity splitting the opening
 retained earnings from the period's own net income),
 `/api/v1/users` (user CRUD, roles/permissions, manager password
 reset), plugin registry, sales invoicing (create/list/detail/80mm print +
-offline outbox replay; gated by `sale.create`), sales returns (partial/full
+offline outbox replay; gated by `sale.create`; every full sale/return also
+issues a tax document atomically — S4.1, ticket #28: per-(branch, kind)
+gapless counter + SHA-256 UUID chain + consumer QR replicating the ETA
+Integration Toolkit (`app/einvoicing/toolkit.py`, contract-pinned against the
+official SDK serialization sample), regime-routed receipt 's' / return
+receipt 'r' / B2B invoice 'I' / credit note 'C' per ADR-0002, rows in
+`einvoice_log` stay `pending` for the S4.2 submitter within ETA's 24-hour
+window, and `GET /api/v1/sales/{id}/tax-document/print` renders the four
+legacy templates (ضريبية / مبسطة / أجل / مرتجع) with QR data-URI, RIN block,
+counter and VAT-by-rate breakdown), sales returns (partial/full
 return of a saved sale — reverses stock via a new return batch + branch_stock,
 reverses money/journal/balances at the original prices with a proportional
 refund split, snapshots the original into `invoice_versions`, new invoice_no,

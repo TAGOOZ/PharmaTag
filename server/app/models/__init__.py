@@ -38,6 +38,7 @@ from app.models.base import (
 )
 from app.models.core import AppConfig, AuditLog, Branch, SyncLog
 from app.models.drawer import DailyClose, DrawerMovement
+from app.models.einvoicing import EInvoiceCounter, EInvoiceLog
 from app.models.ledger import MonthOpenBalance, MonthlyClose
 from app.models.drugs import Drug, DrugBarcode, PriceChangeLog
 from app.models.plugins import AppPlugin, PluginBranchGrant, PluginDependencyRow, PluginSettings
@@ -61,6 +62,8 @@ __all__ = [
     "MonthlyClose",
     "Drug",
     "DrugBarcode",
+    "EInvoiceCounter",
+    "EInvoiceLog",
     "Invoice",
     "InvoiceLine",
     "InvoiceVersion",

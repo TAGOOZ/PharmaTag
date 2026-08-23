@@ -1,0 +1,146 @@
+{
+  "receipts": [
+    {
+      "name": "first-of-device sale receipt",
+      "payload": {
+        "header": {
+          "dateTimeIssued": "2026-08-23T09:15:00Z",
+          "receiptNumber": "2026-00001",
+          "uuid": "",
+          "previousUUID": "",
+          "referenceUUID": "",
+          "currency": "EGP"
+        },
+        "documentType": {
+          "receiptType": "s",
+          "typeVersion": "1.2"
+        },
+        "seller": {
+          "rin": "200173707",
+          "companyTradeName": "PharmaTag",
+          "branchCode": "0",
+          "deviceSerialNumber": "",
+          "activityCode": "4771",
+          "branchAddress": {
+            "country": "EG",
+            "governate": "Giza",
+            "regionCity": "Dokki",
+            "street": "17 St",
+            "buildingNumber": "17"
+          }
+        },
+        "buyer": {
+          "type": "P",
+          "id": "",
+          "name": ""
+        },
+        "itemData": [
+          {
+            "internalCode": "DRG-1",
+            "description": "Panadol Extra",
+            "itemType": "EGS",
+            "itemCode": "EG-DRG-1",
+            "unitType": "EA",
+            "quantity": "2",
+            "unitPrice": "50.00",
+            "netSale": "100.00",
+            "totalSale": "100.00",
+            "total": "114.00",
+            "taxableItems": [
+              {
+                "taxType": "T1",
+                "subType": "V001",
+                "amount": "14.00",
+                "rate": "14"
+              }
+            ]
+          }
+        ],
+        "totalSales": "100.00",
+        "totalCommercialDiscount": "0.00",
+        "netAmount": "100.00",
+        "totalAmount": "114.00",
+        "taxTotals": [
+          {
+            "taxType": "T1",
+            "amount": "14.00"
+          }
+        ],
+        "paymentMethod": "C"
+      },
+      "expected_uuid": "8f3beb58faefb3ffff5b864afb7380d48e465c0c591135580a4b98062b2b7408",
+      "expected_qr": "http://invoicing.eta.gov.eg/receipts/search/8f3beb58faefb3ffff5b864afb7380d48e465c0c591135580a4b98062b2b7408/share/2026-08-23T09:15Z#Total:114.00,IssuerRIN:200173707"
+    },
+    {
+      "name": "chained return receipt (references original)",
+      "payload": {
+        "header": {
+          "dateTimeIssued": "2026-08-23T10:00:00Z",
+          "receiptNumber": "2026-00002",
+          "uuid": "",
+          "previousUUID": "6308bbe3960574610bc0fd2efbe058027d81b11c3d5a2203e1db0493b177c7ae",
+          "referenceUUID": "6308bbe3960574610bc0fd2efbe058027d81b11c3d5a2203e1db0493b177c7ae",
+          "currency": "EGP"
+        },
+        "documentType": {
+          "receiptType": "r",
+          "typeVersion": "1.2"
+        },
+        "seller": {
+          "rin": "200173707",
+          "companyTradeName": "PharmaTag",
+          "branchCode": "0",
+          "deviceSerialNumber": "",
+          "activityCode": "4771",
+          "branchAddress": {
+            "country": "EG",
+            "governate": "Giza",
+            "regionCity": "Dokki",
+            "street": "17 St",
+            "buildingNumber": "17"
+          }
+        },
+        "buyer": {
+          "type": "P",
+          "id": "",
+          "name": ""
+        },
+        "itemData": [
+          {
+            "internalCode": "DRG-1",
+            "description": "Panadol Extra",
+            "itemType": "EGS",
+            "itemCode": "EG-DRG-1",
+            "unitType": "EA",
+            "quantity": "2",
+            "unitPrice": "50.00",
+            "netSale": "100.00",
+            "totalSale": "100.00",
+            "total": "114.00",
+            "taxableItems": [
+              {
+                "taxType": "T1",
+                "subType": "V001",
+                "amount": "14.00",
+                "rate": "14"
+              }
+            ]
+          }
+        ],
+        "totalSales": "100.00",
+        "totalCommercialDiscount": "0.00",
+        "netAmount": "100.00",
+        "totalAmount": "114.00",
+        "taxTotals": [
+          {
+            "taxType": "T1",
+            "amount": "14.00"
+          }
+        ],
+        "paymentMethod": "C"
+      },
+      "expected_uuid": "40ba90daeeee7f06ad9c206dae4c5c24537b5fc06cee9b685f0627f4c6994ec4",
+      "expected_qr": "http://invoicing.eta.gov.eg/receipts/search/40ba90daeeee7f06ad9c206dae4c5c24537b5fc06cee9b685f0627f4c6994ec4/share/2026-08-23T10:00Z#Total:114.00,IssuerRIN:200173707"
+    }
+  ]
+}

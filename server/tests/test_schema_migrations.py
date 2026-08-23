@@ -40,10 +40,11 @@ _CORE_ENUMS = [
     "journal_source", "account_type", "party_kind",
 ]
 
-EXPECTED_TABLES = {  # == the SQLite twin's CREATE TABLE set (42 core + host)
+EXPECTED_TABLES = {  # == the SQLite twin's CREATE TABLE set (44 core + host)
     "accounts", "app_config", "app_plugins", "audit_log", "balances",
     "branch_identities", "branch_stock", "branches", "daily_close",
     "drawer_movements", "drug_barcodes", "drug_costs", "drugs",
+    "einvoice_counters", "einvoice_log",
     "integration_config", "invoice_lines", "invoice_versions", "invoices",
     "journal_lines", "journals", "manual_journal_entries", "month_open_balances",
     "monthly_close", "parties",

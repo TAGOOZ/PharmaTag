@@ -21,7 +21,20 @@ from app.auth.rbac import require_permission
 from app.core import money
 from app.core.db import get_session
 from app.core.time import business_date
-from app.models import Branch, Drug, Invoice, InvoiceLine, Journal, JournalLine, PaymentSplit, User
+from app.einvoicing import print_templates
+from app.einvoicing.service import seller_identity
+from app.models import (
+    Branch,
+    Drug,
+    EInvoiceLog,
+    Invoice,
+    InvoiceLine,
+    Journal,
+    JournalLine,
+    Party,
+    PaymentSplit,
+    User,
+)
 from app.sales import print_html
 from app.sales.returns.schemas import ReturnCreateRequest
 from app.sales.returns.service import save_sale_return
@@ -270,6 +283,99 @@ async def get_sale(
     branch_id = _caller_branch_id(user)
     invoice = await _invoice_or_404(session, sale_id, branch_id)
     return await _serialize_sale(session, invoice, user)
+
+
+@router.get("/{sale_id}/tax-document/print", response_class=HTMLResponse)
+async def print_tax_document(
+    sale_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Printable tax document (S4.1, #28): ضريبية / مبسطة / أجل / مرتجع —
+    variant auto-routed from the invoice + its einvoice_log regime kind,
+    with QR, RIN block and VAT-by-rate breakdown."""
+    branch_id = _caller_branch_id(user)
+    invoice = await _invoice_or_404(session, sale_id, branch_id)
+    log = (
+        await session.execute(
+            select(EInvoiceLog).where(EInvoiceLog.invoice_id == invoice.id)
+        )
+    ).scalar_one_or_none()
+    if log is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "tax document not found")
+    branch = await session.get(Branch, branch_id)
+    party = (
+        await session.get(Party, invoice.party_id)
+        if invoice.party_id is not None
+        else None
+    )
+    lines = (
+        await session.execute(
+            select(InvoiceLine, Drug)
+            .join(Drug, Drug.id == InvoiceLine.drug_id)
+            .where(InvoiceLine.invoice_id == invoice.id)
+            .order_by(InvoiceLine.id)
+        )
+    ).all()
+    cashier = ""
+    if invoice.created_by is not None:
+        cashier_row = await session.get(User, invoice.created_by)
+        if cashier_row is not None:
+            cashier = cashier_row.namee or cashier_row.username
+    seller = await seller_identity(session)
+    # exclusive-VAT branches store line_total ALREADY ex-VAT — only inclusive
+    # lines need VAT subtracted to recover the taxable net
+    vat_inclusive = bool(branch.vat_inclusive_prices) if branch else True
+    reference_invoice_no = ""
+    if invoice.ref_invoice_id is not None:
+        original = await session.get(Invoice, invoice.ref_invoice_id)
+        if original is not None:
+            reference_invoice_no = original.invoice_no
+
+    def _net(line: InvoiceLine) -> str:
+        total = money.dec(line.line_total)
+        if vat_inclusive:
+            total -= money.dec(line.vat_amount)
+        return money.format2(total)
+
+    html_body = print_templates.render_tax_document(
+        branch_name=branch.pharname if branch else "",
+        invoice_no=invoice.invoice_no,
+        datee=invoice.datee,
+        cashier=cashier,
+        variant=print_templates.route_variant(invoice, log),
+        counter=int(log.counter),
+        status=log.status,
+        qr_data=log.qr_data or "",
+        seller_rin=seller["rin"],
+        seller_trade_name=seller["trade_name"],
+        branch_code=branch.pharmacyid if branch else "",
+        device_serial=log.device_serial or "",
+        buyer_name=party.namee if party else "",
+        buyer_tax_registration_no=(
+            (party.tax_registration_no or "") if party else ""
+        ),
+        reference_invoice_no=reference_invoice_no,
+        lines=[
+            {
+                "description": drug.drugnamear or drug.drugname,
+                "qty": _qty(line.qty),
+                "unit_price": money.format2(line.unit_price),
+                "vat_amount": _money(line.vat_amount),
+                "net": _net(line),
+                "line_total": _money(line.line_total),
+                "tax_type": line.tax_type,
+            }
+            for line, drug in lines
+        ],
+        subtotal=invoice.subtotal,
+        discount=invoice.discount,
+        vat=invoice.vat,
+        totalvalue=invoice.totalvalue,
+        payed=invoice.payed,
+        agel=invoice.agel,
+    )
+    return HTMLResponse(content=html_body, status_code=status.HTTP_200_OK)
 
 
 @router.get("/{sale_id}/print", response_class=HTMLResponse)

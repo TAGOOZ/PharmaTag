@@ -18,6 +18,7 @@ from app.models import (
     BranchStock,
     DrawerMovement,
     Drug,
+    EInvoiceLog,
     Invoice,
     InvoiceLine,
     Journal,
@@ -114,6 +115,10 @@ async def _cleanup(drug_ids: list[int], invoice_ids: list[int]) -> None:
             )
             await session.execute(
                 delete(DrawerMovement).where(DrawerMovement.ref_invoice_id == iid)
+            )
+            # the tax document FKs the invoice — purge it first (S4.1)
+            await session.execute(
+                delete(EInvoiceLog).where(EInvoiceLog.invoice_id == iid)
             )
             await session.execute(
                 delete(InvoiceLine).where(InvoiceLine.invoice_id == iid)

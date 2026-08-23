@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import ACTION_INSERT, audit
 from app.core.money import dec, format2, round2, tax_rate
 from app.drawer.movements import SALE_RETURN, record_payment_splits
+from app.einvoicing.service import apply_einvoice_block
 from app.models import BranchStock, Invoice, InvoiceLine, InvoiceVersion, PaymentSplit, StockBatch
 from app.money.journal import post_journal
 from app.sales.numbering import acquire_branch_lock, next_journal_entry_no
@@ -296,4 +297,10 @@ async def apply_sale_return_payload(
         contra_party_by_code={"1100": original.party_id} if original.party_id else None,
     )
     await _snapshot_original(session, original, action="sale_return", user_id=user_id)
+    # S4.1 (#28): the return's tax document rides the snapshot verbatim.
+    block = payload.get("einvoice")
+    if block:
+        await apply_einvoice_block(
+            session, branch_id=branch_id, invoice_id=invoice.id, block=block
+        )
     return invoice

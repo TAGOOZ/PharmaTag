@@ -26,7 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import money
 from app.core.db import atomic
-from app.models import BranchStock, Drug, Invoice, SyncLog
+from app.einvoicing.service import apply_einvoice_block
+from app.models import BranchStock, Drug, EInvoiceLog, Invoice, SyncLog
 from app.sales.numbering import acquire_branch_lock
 
 
@@ -174,6 +175,45 @@ async def replay_pending(
 
             invoice_no = payload.get("invoice_no", "")
             if await _invoice_exists(session, branch_id, invoice_no):
+                # S4.1 repair seam (#28): the invoice is synced, but its TAX
+                # DOCUMENT may be missing (partial restore / manual surgery).
+                # Rebuild it verbatim from the snapshot instead of skipping —
+                # an invoice without its document must not stay unrepaired.
+                block = payload.get("einvoice")
+                if block and row.entity_id is not None:
+                    doc_exists = (
+                        await session.execute(
+                            select(EInvoiceLog.id).where(
+                                EInvoiceLog.invoice_id == row.entity_id
+                            )
+                        )
+                    ).first()
+                    if doc_exists is None:
+                        try:
+                            async with session.begin_nested():
+                                await apply_einvoice_block(
+                                    session,
+                                    branch_id=branch_id,
+                                    invoice_id=row.entity_id,
+                                    block=block,
+                                )
+                            row.status = "applied"
+                            row.synced_at = datetime.now(timezone.utc)
+                            summary["applied"] += 1
+                        except HTTPException as exc:
+                            failure = exc.detail
+                            row.status = "failed"
+                            row.payload = {**payload, "failure": str(failure)}
+                            summary["failed"] += 1
+                            summary["failures"].append(
+                                {
+                                    "id": row.id,
+                                    "entity": row.entity,
+                                    "entity_id": row.entity_id,
+                                    "error": failure,
+                                }
+                            )
+                        continue
                 row.status = "applied"
                 row.synced_at = datetime.now(timezone.utc)
                 summary["skipped"] += 1

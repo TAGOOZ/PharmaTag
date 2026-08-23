@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import ACTION_INSERT, audit
 from app.core.money import dec, format2, round2, tax_rate
 from app.drawer.movements import SALE, record_payment_splits
+from app.einvoicing.service import apply_einvoice_block
 from app.models import Invoice, InvoiceLine, Party, PaymentSplit, StockBatch
 from app.receivables.service import ensure_credit_ok
 from app.sales.journal import post_sale_journal
@@ -235,4 +236,11 @@ async def apply_sale_payload(
         new_value=f"invoice_no={invoice_no} total={format2(invoice.totalvalue)} (replay)",
         typevalue=invoice_no,
     )
+    # S4.1 (#28): re-attach the tax document from the snapshot VERBATIM —
+    # same counter/uuid chain position, never re-generated (idempotent).
+    block = payload.get("einvoice")
+    if block:
+        await apply_einvoice_block(
+            session, branch_id=branch_id, invoice_id=invoice.id, block=block
+        )
     return invoice

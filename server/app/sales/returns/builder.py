@@ -46,7 +46,8 @@ from app.core.money import (
     tax_rate,
 )
 from app.drawer.movements import SALE_RETURN, record_payment_splits
-from app.models import Branch, Drug, Invoice, InvoiceLine, InvoiceVersion, PaymentSplit
+from app.einvoicing.service import einvoice_block, issue_for_invoice
+from app.models import Branch, Drug, Invoice, InvoiceLine, InvoiceVersion, Party, PaymentSplit
 from app.money.journal import post_journal
 from app.sales.numbering import next_journal_entry_no
 from app.sales.payments import _resolve_payments
@@ -528,6 +529,20 @@ async def _build_full_return(
         original.id,
         original.invoice_no,
     )
+    # S4.1 (#28): the return's tax document (receipt 'r' / credit note 'C')
+    # references the original and is written in the SAME transaction (G12).
+    log = await issue_for_invoice(
+        session,
+        invoice=invoice,
+        branch=branch,
+        lines=resolved,
+        totals=totals,
+        splits=splits,
+        party=None if original.party_id is None else await session.get(
+            Party, original.party_id
+        ),
+    )
+    payload["einvoice"] = einvoice_block(log)
     await enqueue_sync(
         session,
         branch_id=branch_id,

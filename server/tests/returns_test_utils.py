@@ -17,6 +17,7 @@ from app.models import (
     BranchStock,
     DrawerMovement,
     Drug,
+    EInvoiceLog,
     Invoice,
     InvoiceLine,
     InvoiceVersion,
@@ -33,7 +34,6 @@ from tests.sales_test_utils import (
     _journal_totals,
     _login_token,
     _make_drug_and_stock,
-    _seq,
     _stock_qty,
     _uniq,
 )
@@ -102,12 +102,16 @@ async def _journal_codes(invoice_id: int) -> set[str]:
 
 async def _make_branch(*, vat_inclusive: bool) -> int:
     """Create a throwaway branch with the given VAT pricing mode; return its id."""
-    _seq[0] += 1
+    import uuid as _uuid
+
     async with SessionLocal() as session:
+        suffix = _uuid.uuid4().hex[:10]
         branch = Branch(
-            pharmacyid=f"pt{_seq[0]}",
+            # uq_branches_pharmacyid / uq_branches_mobile: a leftover branch
+            # from a crashed run must never collide with the next one
+            pharmacyid=f"pt{suffix}",
             phar="",
-            mobile="0",
+            mobile=f"0{suffix}",
             pharname=_uniq("branch"),
             vat_inclusive_prices=vat_inclusive,
             is_active=True,
@@ -221,6 +225,10 @@ async def _cleanup(drug_ids: list[int], invoice_ids: list[int]) -> None:
                 )
                 await session.execute(
                     delete(DrawerMovement).where(DrawerMovement.ref_invoice_id == iid)
+                )
+                # the tax document FKs the invoice — purge it first (S4.1)
+                await session.execute(
+                    delete(EInvoiceLog).where(EInvoiceLog.invoice_id == iid)
                 )
                 await session.execute(
                     delete(InvoiceVersion).where(InvoiceVersion.invoice_id == iid)

@@ -111,6 +111,7 @@ CREATE TABLE drugs (
     titanid      INTEGER DEFAULT 0,
     history      TEXT DEFAULT '',
     active       INTEGER NOT NULL DEFAULT 1,
+    egs_code     TEXT,                                          -- ETA EGS code (#30; nullable until registered)
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
     lastedit     TEXT

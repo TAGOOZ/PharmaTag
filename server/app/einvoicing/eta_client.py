@@ -78,13 +78,16 @@ class EtaClient:
         self._expires_at = time.monotonic() + int(payload.get("expires_in", 3600)) - _TOKEN_SAFETY_MARGIN
         return self._access_token
 
-    async def submit_receipts(self, receipts: list[dict]) -> SubmissionResult:
-        """POST /api/v1/receiptsubmissions — one batch, signed later by #30's
-        signer (signatures stay empty until then)."""
+    async def submit_receipts(
+        self, receipts: list[dict], signatures: list[dict] | None = None
+    ) -> SubmissionResult:
+        """POST /api/v1/receiptsubmissions — one batch. ``signatures`` carries
+        the CAdES-BES entries built by #30's signer; without one (no eSeal
+        configured yet) the body keeps the historical empty list."""
         token = await self.token()
         response = await self._http.post(
             f"{self._api_base_url}/api/v1/receiptsubmissions",
-            json={"receipts": receipts, "signatures": []},
+            json={"receipts": receipts, "signatures": list(signatures or [])},
             headers={"Authorization": f"Bearer {token}", **self._pos_headers},
         )
         if response.status_code != 202:

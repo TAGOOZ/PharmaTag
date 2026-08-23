@@ -10,7 +10,9 @@ from app.models import (
     Balance,
     BranchStock,
     DrawerMovement,
+    Branch,
     Drug,
+    DrugBarcode,
     EInvoiceCounter,
     EInvoiceLog,
     Invoice,
@@ -99,6 +101,10 @@ async def _cleanup(drug_ids: list[int], invoice_ids: list[int], branch_id: int) 
             await session.execute(delete(StockBatch).where(StockBatch.drug_id == drug_id))
             await session.execute(
                 delete(BranchStock).where(BranchStock.drug_id == drug_id)
+            )
+            # #30: sales now resolve item codes from drug_barcodes
+            await session.execute(
+                delete(DrugBarcode).where(DrugBarcode.drug_id == drug_id)
             )
             await session.execute(delete(AuditLog).where(AuditLog.drug_id == drug_id))
             await session.execute(delete(Drug).where(Drug.id == drug_id))
@@ -480,3 +486,64 @@ async def _log_for_by_invoice_no(branch_id: int, invoice_no: str) -> EInvoiceLog
                 select(EInvoiceLog).where(EInvoiceLog.invoice_id == inv.id)
             )
         ).scalar_one()
+
+
+async def test_sale_item_code_resolves_gtin_egs_then_fallback(client):
+    """#30 item coding by precedence, baked into the stored document:
+    valid GTIN barcode wins over drugs.egs_code; without either the fallback
+    is EGS-{branchCode}-{drugId}. internalCode stays the drug id."""
+    from app.einvoicing.coding import gtin_check_digit
+
+    await _set_rin()
+    branch_id = await _make_branch(vat_inclusive=True)
+
+    def gtin(seed: int) -> str:
+        payload = f"0628107{seed % 100000:05d}0"[:12]
+        return payload + gtin_check_digit(payload)
+
+    async with SessionLocal() as session:
+        gtin_drug_id = await _make_drug_and_stock_branch(branch_id)
+        egs_drug_id = await _make_drug_and_stock_branch(branch_id)
+        plain_drug_id = await _make_drug_and_stock_branch(branch_id)
+        g = await session.get(Drug, gtin_drug_id)
+        g.egs_code = "EG-0-SHOULD-LOSE"
+        session.add(DrugBarcode(drug_id=gtin_drug_id, barcode=gtin(gtin_drug_id)))
+        e = await session.get(Drug, egs_drug_id)
+        e.egs_code = " EG-200173707-VITC "
+        await session.commit()
+
+    user_id = await _make_user(_uniq("u"), branch_id)
+    invoice_ids = []
+    try:
+        token = _token_for(user_id, branch_id)
+        r = await client.post(
+            "/api/v1/sales",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "lines": [
+                    {"drug_id": gtin_drug_id, "qty": "1"},
+                    {"drug_id": egs_drug_id, "qty": "1"},
+                    {"drug_id": plain_drug_id, "qty": "1"},
+                ]
+            },
+        )
+        assert r.status_code == 201, r.text
+        invoice_ids.append(r.json()["id"])
+
+        log = await _log_for(r.json()["id"])
+        lines = log.payload_json["itemData"]
+        by_internal = {line["internalCode"]: line for line in lines}
+        assert by_internal[str(gtin_drug_id)]["itemCode"] == gtin(gtin_drug_id)
+        assert by_internal[str(egs_drug_id)]["itemCode"] == "EG-200173707-VITC"
+        branch = await _branch_for(branch_id)
+        assert (
+            by_internal[str(plain_drug_id)]["itemCode"]
+            == f"EGS-{branch.pharmacyid}-{plain_drug_id}"
+        )
+    finally:
+        await _cleanup([gtin_drug_id, egs_drug_id, plain_drug_id], invoice_ids, branch_id)
+
+
+async def _branch_for(branch_id: int):
+    async with SessionLocal() as session:
+        return await session.get(Branch, branch_id)

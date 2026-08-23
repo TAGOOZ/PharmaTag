@@ -1,4 +1,4 @@
-"""The ETA submission worker (S4.2, #29).
+"""The ETA submission worker (S4.2 #29 + S4.3 #30 signing).
 
 `claim_due` selects due documents; `submit_due`/`poll_due` drive them
 through the transport and record transitions. Exclusivity across several
@@ -8,6 +8,11 @@ is immediately marked in-flight with a `next_attempt_at` lease committed
 before any network I/O. A crashed worker's lease simply expires and the row
 becomes due again. Transport failures never touch the chain identity —
 counter/uuid/qr_data are frozen (A15); only scheduling state moves.
+
+S4.3: each claimed document is turned into its wire shape (`wire.submission_
+document`), signed CAdES-BES over the toolkit serialization (#30), and the
+signature rides `signatures[]`. A missing/broken eSeal refuses the whole
+pass (defer + audit, retry budgets untouched) instead of crashing the loop.
 """
 from __future__ import annotations
 
@@ -19,13 +24,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import ACTION_UPDATE, audit
 from app.einvoicing.eta_client import EtaSubmissionError
-from app.einvoicing.wire import receipt_document
+from app.einvoicing.signer import SignerUnavailable, load_signer
+from app.einvoicing.toolkit import serialize
+from app.einvoicing.wire import signature_entry, submission_document
 from app.models import EInvoiceLog
 
 MAX_ATTEMPTS = 10  # with the backoff cap below this spans ~8h inside ETA's 24h window
 _BACKOFF_CAP = timedelta(minutes=60)
 _IN_FLIGHT_LEASE = timedelta(minutes=5)  # per ROW, > worst-case HTTP timeout (30s)
 _RIN_REFUSAL_BACKOFF = timedelta(minutes=1)
+_SIGNER_REFUSAL_BACKOFF = timedelta(minutes=1)
 _DUP_SUBMISSION_BACKOFF = timedelta(minutes=11)  # ETA dedups identical payloads for 10
 _RATE_LIMIT_BACKOFF = timedelta(seconds=15)
 
@@ -89,8 +97,8 @@ async def submit_due(
     limit: int = 20,
     branch_id: int | None = None,
 ) -> int:
-    """Claim due pending documents and push them to ETA. Returns the count
-    of rows that reached a decision (submitted or failed-terminal)."""
+    """Claim due pending documents, sign and push them to ETA. Returns the
+    count of rows that reached a decision (submitted or failed-terminal)."""
     from app.einvoicing.service import seller_identity
 
     identity = await seller_identity(session)
@@ -108,6 +116,23 @@ async def submit_due(
         await session.commit()
         return 0
 
+    try:
+        signer = load_signer()
+    except SignerUnavailable as exc:
+        # No eSeal (or a broken one): refuse the whole PASS — the documents
+        # are not at fault, so their retry budget stays untouched; Ops gets
+        # one audit row per due document pointing at the key configuration.
+        claimed = await claim_due(session, limit=limit, branch_id=branch_id)
+        retry_after = datetime.now(timezone.utc) + _SIGNER_REFUSAL_BACKOFF
+        for log in claimed:
+            log.last_error = str(exc)[:2000]
+            log.next_attempt_at = retry_after
+            await _audit_transition(
+                session, log, detail=f"refused: eSeal unavailable ({exc})"
+            )
+        await session.commit()
+        return 0
+
     claimed = await claim_due(session, limit=limit, branch_id=branch_id)
     if not claimed:
         return 0
@@ -117,7 +142,7 @@ async def submit_due(
     handled = 0
     for log in claimed:
         try:
-            document = receipt_document(log)
+            document = submission_document(log)
         except ValueError as exc:  # permanent payload problem — fail fast, don't burn ETA calls
             log.status = "failed"
             log.attempts += 1
@@ -128,7 +153,25 @@ async def submit_due(
             continue
 
         try:
-            result = await client.submit_receipts([document])
+            # ITIDA procedure: canonicalize the wire document (toolkit
+            # algorithm) → SHA-256 inside the signer → CAdES-BES → base64.
+            signature = signer.sign(serialize(document))
+        except Exception as exc:  # malformed key material surfacing late
+            log.attempts += 1
+            log.last_error = f"signing failed: {exc}"[:2000]
+            if log.attempts >= MAX_ATTEMPTS:
+                log.status = "failed"
+            else:
+                log.next_attempt_at = _backoff(log.attempts)
+            await _audit_transition(session, log, detail=f"signing failed: {log.last_error[:120]}")
+            await session.commit()
+            handled += 1
+            continue
+
+        try:
+            result = await client.submit_receipts(
+                [document], signatures=[signature_entry(signature)]
+            )
         except Exception as exc:
             if isinstance(exc, EtaSubmissionError):
                 if exc.status_code == 429:  # throttled — not the document's fault

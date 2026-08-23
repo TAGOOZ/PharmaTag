@@ -51,6 +51,9 @@ class Drug(Base):
     titanid: Mapped[Optional[int]] = mapped_column(Integer, server_default="0")
     history: Mapped[Optional[str]] = mapped_column(Text(), server_default="")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    # EGS code registered with ETA for this drug (#30): nullable until Ops
+    # registers it; item coding prefers a GS1 GTIN barcode, then this.
+    egs_code: Mapped[Optional[str]] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )

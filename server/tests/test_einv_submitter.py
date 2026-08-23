@@ -7,13 +7,17 @@ serves every branch); tests therefore filter to their throwaway branch.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import select
 
 from app.core.db import SessionLocal
 from app.einvoicing.submitter import claim_due, poll_due, submit_due
-from app.models import EInvoiceLog
+from app.models import AuditLog, EInvoiceLog
 from tests.einv_test_utils import _make_user, _set_rin, _uniq
 from tests.sales_test_utils import _token_for
 from tests.test_einv_issue import _cleanup
@@ -25,10 +29,17 @@ from tests.returns_test_utils import (
 import pytest
 
 
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "einvoicing"
+
+
 @pytest.fixture(autouse=True)
-async def _rin_configured():
-    """Every submission behavior assumes the seller identity is configured;
-    the RIN-refusal test deletes it and relies on this fixture to restore."""
+async def _rin_configured(monkeypatch):
+    """Every submission behavior assumes the seller identity AND an eSeal are
+    configured (#30); the refusal tests override and rely on restore."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "eta_key_path", str(FIXTURES / "pinned-test-key.pem"))
+    monkeypatch.setattr(settings, "eta_cert_path", str(FIXTURES / "pinned-test-cert.pem"))
     await _set_rin()
     yield
     await _set_rin()
@@ -614,5 +625,120 @@ async def test_poll_errors_never_fail_a_received_document(client):
                 )
             ).scalar_one()
             assert log.status == "submitted"  # still in flight, never failed
+    finally:
+        await _cleanup([drug_id], [invoice_id], branch_id)
+
+
+async def _forbidden_handler(request):
+    raise AssertionError("no HTTP call expected when the signer is unavailable")
+
+
+async def test_submit_attaches_cades_signature_and_fills_uuid(client, monkeypatch):
+    """#30: with an eSeal configured the worker signs the serialized wire
+    document and posts it in signatures[] alongside the uuid-filled receipt."""
+    import base64  # noqa: F401
+    import hashlib  # noqa: F401
+    import json
+
+    import httpx
+
+    from app.core.config import settings
+    from app.einvoicing.eta_client import EtaClient
+    from app.einvoicing.toolkit import serialize
+
+    assert settings.eta_key_path and settings.eta_cert_path  # autouse fixture
+    seen = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/token":
+            return httpx.Response(200, json={"access_token": "jwt", "expires_in": 3600})
+        if request.url.path == "/api/v1/receiptsubmissions":
+            seen["body"] = json.loads(request.content)
+            return httpx.Response(202, json={
+                "submissionUUID": "SUB-SIGNED",
+                "acceptedDocuments": [],
+                "rejectedDocuments": [],
+            })
+        return httpx.Response(404)
+
+    branch_id, drug_id, user_id = await _setup_branch()
+    invoice_id = await _sale(client, branch_id, user_id, drug_id)
+    try:
+        eta = EtaClient(
+            httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+            identity_base_url="https://fake", api_base_url="https://fake",
+            client_id="c", client_secret="s",
+        )
+        async with SessionLocal() as session:
+            handled = await submit_due(session, client=eta, branch_id=branch_id)
+        assert handled == 1
+
+        log = (
+            await session.execute(
+                select(EInvoiceLog).where(EInvoiceLog.invoice_id == invoice_id)
+            )
+        ).scalar_one()
+        body = seen["body"]
+        receipt = body["receipts"][0]
+        assert receipt["header"]["uuid"] == log.uuid
+        (sig_entry,) = body["signatures"]
+        assert sig_entry["signatureType"] == "I"
+        # the value is a real CAdES-BES over THIS document's serialization
+        from asn1crypto import cms as asn1cms
+
+        info = asn1cms.ContentInfo.load(base64.b64decode(sig_entry["value"]))
+        si = info["content"]["signer_infos"][0]
+        digest = hashlib.sha256(
+            serialize(receipt).encode("utf-8")
+        ).digest()
+        attrs = {str(a["type"]): a for a in si["signed_attrs"]}
+        assert attrs["1.2.840.113549.1.9.4"]["values"][0].native == digest
+        assert log.status == "submitted" and "SUB-SIGNED" in log.response
+    finally:
+        await _cleanup([drug_id], [invoice_id], branch_id)
+
+
+async def test_submit_without_eseal_defers_pass_with_audit_not_attempts(client, monkeypatch):
+    """No key configured ⇒ the whole pass refuses: rows deferred shortly with
+    a signed audit row, retry budget untouched, worker loop unharmed."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "eta_key_path", None)
+    monkeypatch.setattr(settings, "eta_cert_path", None)
+    branch_id, drug_id, user_id = await _setup_branch()
+    invoice_id = await _sale(client, branch_id, user_id, drug_id)
+    try:
+        import httpx as _httpx
+
+        from app.einvoicing.eta_client import EtaClient
+
+        eta = EtaClient(
+            _httpx.AsyncClient(transport=_httpx.MockTransport(_forbidden_handler)),
+            identity_base_url="https://fake", api_base_url="https://fake",
+            client_id="c", client_secret="s",
+        )
+        async with SessionLocal() as session:
+            handled = await submit_due(session, client=eta, branch_id=branch_id)
+        assert handled == 0
+
+        async with SessionLocal() as session:
+            log = (
+                await session.execute(
+                    select(EInvoiceLog).where(EInvoiceLog.invoice_id == invoice_id)
+                )
+            ).scalar_one()
+            assert log.status == "pending"
+            assert log.attempts == 0
+            assert log.next_attempt_at is not None
+            assert "eSeal" in log.last_error or "signer" in log.last_error.lower()
+            audits = (
+                await session.execute(
+                    select(AuditLog).where(
+                        AuditLog.entity == "einvoice_log",
+                        AuditLog.entity_id == log.id,
+                    )
+                )
+            ).scalars().all()
+            assert any("eSeal" in (a.new_value or "") for a in audits)
     finally:
         await _cleanup([drug_id], [invoice_id], branch_id)

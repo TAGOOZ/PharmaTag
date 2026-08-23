@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 from app.core.money import dec, round2, round4
 from app.einvoicing.codes import tax_code
+from app.einvoicing.coding import fallback_code
 from app.models import Branch, EInvoiceLog, Invoice, Party
 from app.models.einvoicing import (
     KIND_CREDIT_NOTE,
@@ -71,7 +72,7 @@ def _payment_method(splits: list[tuple[str, Any]]) -> str:
     return {"cash": "C", "card": "V"}.get(best_method, "O")
 
 
-def _line_view(item: dict, *, inclusive: bool) -> dict:
+def _line_view(item: dict, *, inclusive: bool, item_code: str) -> dict:
     drug = item["drug"]
     lm = item["lm"]
     # ETA receipt base structure: netSale = post-discount PRE-tax base,
@@ -86,7 +87,7 @@ def _line_view(item: dict, *, inclusive: bool) -> dict:
     return {
         "internalCode": str(drug.id),
         "description": drug.drugnamear or drug.drugname or str(drug.id),
-        "itemCode": f"EG-PH-{drug.id}",
+        "itemCode": item_code,
         "quantity": lm.qty,
         "unitPrice": lm.unit_price,
         "discount": lm.discount,
@@ -112,12 +113,29 @@ def build_document(
     previous_uuid: str,
     reference_uuid: str = "",
     original_buyer: Optional[dict] = None,
+    item_codes: Optional[dict[int, str]] = None,
 ) -> dict:
     """Build the canonical document (hash base). All money values are exact
     decimal STRINGS; names follow the receipt base structure so receipts hash
-    exactly like the official toolkit expects."""
+    exactly like the official toolkit expects.
+
+    ``item_codes`` maps drug id → ETA itemCode (#30 precedence: GTIN →
+    drugs.egs_code → EGS-{branchCode}-{id}); missing ids fall back.
+    """
     inclusive = bool(branch.vat_inclusive_prices)
-    items = [_receipt_line(_line_view(l, inclusive=inclusive)) for l in lines]
+    resolved_codes = item_codes or {}
+    items = [
+        _receipt_line(
+            _line_view(
+                l,
+                inclusive=inclusive,
+                item_code=resolved_codes.get(
+                    l["drug"].id, fallback_code(branch.pharmacyid, l["drug"].id)
+                ),
+            )
+        )
+        for l in lines
+    ]
     doc: dict[str, Any] = {
         "header": {
             "dateTimeIssued": _iso_z(invoice.datetimee),

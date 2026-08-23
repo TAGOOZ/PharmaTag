@@ -1,0 +1,210 @@
+{
+  "canonical": {
+    "header": {
+      "dateTimeIssued": "2026-08-23T09:15:00Z",
+      "receiptNumber": "2026-000512",
+      "uuid": "",
+      "previousUUID": "",
+      "referenceUUID": "",
+      "currency": "EGP"
+    },
+    "documentType": {
+      "documentType": "I",
+      "typeVersion": "1.0"
+    },
+    "seller": {
+      "rin": "200173707",
+      "companyTradeName": "صيدلية الشفاء",
+      "branchCode": "0",
+      "deviceSerialNumber": "",
+      "activityCode": "4771",
+      "branchAddress": {
+        "country": "EG",
+        "governate": "Giza",
+        "regionCity": "Dokki",
+        "street": "17 شارع التحرير",
+        "buildingNumber": "17"
+      }
+    },
+    "buyer": {
+      "type": "B",
+      "id": "313717919",
+      "name": "شركة النيل للتوزيع"
+    },
+    "itemData": [
+      {
+        "internalCode": "501",
+        "description": "بانادول إكسترا ٢٤ قرص",
+        "itemType": "GS1",
+        "itemCode": "0628107026141",
+        "unitType": "EA",
+        "quantity": "2",
+        "unitPrice": "50.00",
+        "totalSale": "100.00",
+        "commercialDiscountData": [
+          {
+            "amount": "5.00",
+            "description": "خصم"
+          }
+        ],
+        "netSale": "95.00",
+        "total": "108.30",
+        "taxableItems": [
+          {
+            "taxType": "T1",
+            "subType": "V009",
+            "amount": "13.30",
+            "rate": "14"
+          }
+        ]
+      },
+      {
+        "internalCode": "502",
+        "description": "Vitamin C Effervescent 20",
+        "itemType": "EGS",
+        "itemCode": "EGS-0-502",
+        "unitType": "EA",
+        "quantity": "3",
+        "unitPrice": "10.00",
+        "totalSale": "30.00",
+        "commercialDiscountData": [],
+        "netSale": "30.00",
+        "total": "30.00",
+        "taxableItems": [
+          {
+            "taxType": "T3",
+            "subType": "V003",
+            "amount": "0.00",
+            "rate": "0"
+          }
+        ]
+      }
+    ],
+    "totalSales": "130.00",
+    "totalCommercialDiscount": "5.00",
+    "netAmount": "125.00",
+    "totalAmount": "138.30",
+    "taxTotals": [
+      {
+        "taxType": "T1",
+        "subType": "V009",
+        "amount": "13.30",
+        "rate": "14"
+      },
+      {
+        "taxType": "T3",
+        "subType": "V003",
+        "amount": "0.00",
+        "rate": "0"
+      }
+    ],
+    "paymentMethod": "C",
+    "counter": 7
+  },
+  "wire_expected": {
+    "issuer": {
+      "address": {
+        "branchID": "0",
+        "country": "EG",
+        "governate": "Giza",
+        "regionCity": "Dokki",
+        "street": "17 شارع التحرير",
+        "buildingNumber": "17"
+      },
+      "type": "B",
+      "id": "200173707",
+      "name": "صيدلية الشفاء"
+    },
+    "receiver": {
+      "address": {
+        "country": "EG",
+        "governate": "",
+        "regionCity": "",
+        "street": "",
+        "buildingNumber": ""
+      },
+      "type": "B",
+      "id": "313717919",
+      "name": "شركة النيل للتوزيع"
+    },
+    "documentType": "I",
+    "documentTypeVersion": "1.0",
+    "dateTimeIssued": "2026-08-23T09:15:00Z",
+    "taxpayerActivityCode": "4771",
+    "internalID": "2026-000512",
+    "invoiceLines": [
+      {
+        "description": "بانادول إكسترا ٢٤ قرص",
+        "itemType": "GS1",
+        "itemCode": "0628107026141",
+        "unitType": "EA",
+        "quantity": "2",
+        "internalCode": "501",
+        "salesTotal": "100.00",
+        "total": "108.30",
+        "valueDifference": "0",
+        "totalTaxableFees": "0",
+        "netTotal": "95.00",
+        "itemsDiscount": "0",
+        "unitValue": {
+          "currencySold": "EGP",
+          "amountEGP": "50.00"
+        },
+        "discount": {
+          "amount": "5.00"
+        },
+        "taxableItems": [
+          {
+            "taxType": "T1",
+            "subType": "V009",
+            "amount": "13.30",
+            "rate": "14"
+          }
+        ]
+      },
+      {
+        "description": "Vitamin C Effervescent 20",
+        "itemType": "EGS",
+        "itemCode": "EGS-0-502",
+        "unitType": "EA",
+        "quantity": "3",
+        "internalCode": "502",
+        "salesTotal": "30.00",
+        "total": "30.00",
+        "valueDifference": "0",
+        "totalTaxableFees": "0",
+        "netTotal": "30.00",
+        "itemsDiscount": "0",
+        "unitValue": {
+          "currencySold": "EGP",
+          "amountEGP": "10.00"
+        },
+        "taxableItems": [
+          {
+            "taxType": "T3",
+            "subType": "V003",
+            "amount": "0.00",
+            "rate": "0"
+          }
+        ]
+      }
+    ],
+    "totalDiscountAmount": "5.00",
+    "totalSalesAmount": "130.00",
+    "netAmount": "125.00",
+    "taxTotals": [
+      {
+        "taxType": "T1",
+        "amount": "13.30"
+      },
+      {
+        "taxType": "T3",
+        "amount": "0.00"
+      }
+    ],
+    "totalAmount": "138.30",
+    "extraDiscountAmount": "0",
+    "totalItemsDiscountAmount": "0"
+  },
+  "note": "hand-written from sdk.invoicing.eta.gov.eg Invoice v1.0 + postman Submit Export Invoice v1.0 field order (#30)"
+}

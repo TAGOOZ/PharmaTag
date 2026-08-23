@@ -88,3 +88,33 @@ async def test_expired_token_is_renewed_not_reused():
         client = EtaClient(http, identity_base_url="https://fake", client_id="c", client_secret="s")
         assert await client.token() == "jwt-1"
         assert await client.token() == "jwt-2"
+
+
+async def test_submit_receipts_carries_signature_entries_when_provided():
+    """#30: the CAdES-BES entry rides the submission body; without one the
+    body keeps the historical empty list (pre-cert behavior)."""
+    seen = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/token":
+            return httpx.Response(200, json={"access_token": "jwt", "expires_in": 3600})
+        if request.url.path == "/api/v1/receiptsubmissions":
+            seen["body"] = json.loads(request.content)
+            return httpx.Response(202, json={"submissionUUID": "S", "acceptedDocuments": [], "rejectedDocuments": []})
+        return httpx.Response(404)
+
+    async with _fake_eta(handler) as http:
+        client = EtaClient(http, identity_base_url="https://fake", client_id="c", client_secret="s")
+        await client.submit_receipts(
+            [{"header": {}}],
+            signatures=[{"signatureType": "I", "value": "QQ=="}],
+        )
+    assert seen["body"] == {
+        "receipts": [{"header": {}}],
+        "signatures": [{"signatureType": "I", "value": "QQ=="}],
+    }
+
+    async with _fake_eta(handler) as http:
+        client = EtaClient(http, identity_base_url="https://fake", client_id="c", client_secret="s")
+        await client.submit_receipts([{"header": {}}])
+    assert seen["body"]["signatures"] == []

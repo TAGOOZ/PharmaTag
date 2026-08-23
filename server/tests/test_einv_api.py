@@ -14,6 +14,21 @@ from tests.einv_test_utils import _make_user, _uniq
 from tests.sales_test_utils import _token_for
 from tests.einv_test_utils import _set_rin as _ensure_rin
 from tests.test_einv_issue import _cleanup
+
+import pytest
+
+from pathlib import Path as _Path
+
+_FIXTURES = _Path(__file__).resolve().parent / "fixtures" / "einvoicing"
+
+
+@pytest.fixture(autouse=True)
+def _eseal_configured(monkeypatch):
+    """#30: submission now signs; API-level tests assume a configured eSeal."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "eta_key_path", str(_FIXTURES / "pinned-test-key.pem"))
+    monkeypatch.setattr(settings, "eta_cert_path", str(_FIXTURES / "pinned-test-cert.pem"))
 from tests.returns_test_utils import _make_branch
 from tests.test_einv_submitter import (
     _INVALID_DETAILS,

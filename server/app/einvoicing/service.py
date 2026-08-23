@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import ACTION_INSERT, audit
+from app.einvoicing.coding import resolve_item_codes
 from app.einvoicing.documents import build_document, canonical, route_kind
 from app.models.einvoicing import KIND_CREDIT_NOTE, KIND_RETURN_RECEIPT
 from app.einvoicing.toolkit import (
@@ -140,6 +141,9 @@ async def issue_for_invoice(
         previous_uuid=previous_uuid,
         reference_uuid=reference_uuid,
         original_buyer=original_buyer,
+        item_codes=await resolve_item_codes(
+            session, branch_code=str(branch.pharmacyid), drugs=[l["drug"] for l in lines]
+        ),
     ))
     uuid = receipt_uuid(document)
     qr_data = qr_string(

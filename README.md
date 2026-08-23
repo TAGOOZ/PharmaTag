@@ -47,6 +47,17 @@ PHARMATAG_DB_URL=postgresql+psycopg://pharmatag_test:pharmatag_test@localhost:54
 
 **Non-dev deployments:** set `PHARMATAG_JWT_SECRET` to a strong random value — the compiled-in default (`server/app/core/config.py`) is a dev-only placeholder.
 
+**ETA eSeal key management (S4.3, #30; plan/06 R5/D17):** the CAdES-BES signer
+loads PEM key + X.509 cert from two settings paths — `PHARMATAG_ETA_KEY_PATH`
+and `PHARMATAG_ETA_CERT_PATH` — pointing at files on the shop server
+(recommended: `/etc/pharmatag/eta/eseal.{key,crt}`, root-owned dir, chmod 600
+files). Key material lives ONLY in `app/einvoicing/signer.py`; it is never in
+the DB. With no key configured (or an unreadable/malformed/non-RSA one) the
+submission worker refuses the whole pass: due rows are deferred ~1 minute with
+an audit row, retry budgets untouched, and the loop keeps running. Until the
+real eSeal arrives, development runs against the pinned self-signed test pair
+in `server/tests/fixtures/einvoicing/pinned-test-*`.
+
 **SQLite twin + parity guard** (the desktop uses the SQLite twin; keep it in sync):
 
 ```bash
@@ -147,7 +158,7 @@ the ticket ships.
 | desktop | login / sync / branch bootstrap | not implemented — SQLite is seeded directly | #39 |
 | API | money endpoints | drawer + day close are real (`/api/v1/drawer/*`, ticket #14), except `vat_expenses`, which snapshots 0 — no expense-VAT data source exists yet (documented in `app/drawer/movements.py`); manual journal entries are real (`/api/v1/journals/manual`, ticket #17); كشف حساب + supplier payables are real (`/api/v1/parties/{id}/statement` + `/api/v1/parties/payables`, ticket #18); receivables + settlement vouchers (سند قبض/صرف) are real (`/api/v1/receivables/*`, ticket #19); ميزان المراجعة + الميزانية العمومية are real (`/api/v1/accounts/trial-balance` + `/api/v1/accounts/balance-sheet`, JSON or A4 HTML via `format=html`, ticket #20); month close + month_open_balances (تقفيل الشهر, `month_open_balances` start-data) are real (`/api/v1/months/*`, ticket #21): `POST /months/{year}/{month}/close` (gated by `months.close`, legacy floor 7 — admin/accountant/manager) snapshots `monthly_close` + seeds the next month's opening debit/credit per account from cumulative `journal_lines` through the end of the closed month (the `monthy\start-data` archive) + audit; a closed month rejects further journal posts at the shared engine (sales/purchases/returns/settlements/manual journals, 409) until a manager (perm ≥7) reopens (`POST /months/{year}/{month}/reopen`) with a reversal audit — re-close regenerates the start-data; `GET /months` (list), `GET /months/{y}/{m}` (detail + next open balances) and `GET /months/{y}/{m}/open-balances` (the FOR-month start-data) are branch-scoped reads open to any authenticated user; opening balances (الأرصدة الافتتاحية, `month_open_balances` cutover, ticket #22) are real (`/api/v1/opening-balances/{year}/{month}`): `POST` (gated by `opening_balances.manage`, legacy floor 7) creates a balanced `journals` entry (source=opening, dated day-before-opening-month so the مزان shows it as افتتاحي) + a `month_open_balances` snapshot for that month, atomically with audit under the branch advisory lock; a target month that is already `closed` or already has an opening rejects 409; `GET` (single period or list) and `DELETE` (manager ≥7, 409 if month closed) are branch-scoped; the مزان and `GET /months/.../open-balances` both reflect the opening (trial-balance `opening_debit/credit` per code and the archive start-data) | #22 |
 | API | settings endpoints | not implemented — no branch-settings API exists | #38 |
-| API | e-invoice submission (`/api/v1/einvoicing/*`) | status listing + manual resubmit + background submit/poll worker are real (#29), but the wire body comes from `app/einvoicing/wire.py`, a PROVISIONAL passthrough of the canonical document — the field-perfect eReceipt v1.2 / Invoice v1.0 serializer and CAdES-BES signature are S4.3; live ETA calls are additionally gated OFF until `PHARMATAG_ETA_SUBMIT_ENABLED=true` + OAuth credentials are configured (preprod hosts via `PHARMATAG_ENVIRONMENT=preprod`) | #30 |
+| API | e-invoice submission (`/api/v1/einvoicing/*`) | status listing + manual resubmit + background submit/poll worker are real (#29); the wire layer is REAL since #30: `app/einvoicing/wire.py` emits the field-perfect eReceipt v1.2 / Invoice v1.0 documents (golden-fixture pinned) and `app/einvoicing/signer.py` attaches the CAdES-BES signature per ITIDA — but B2B invoice/credit-note rows still ride #29's receipt-submission chain (routing them to `documentsubmissions` + taxpayer OAuth is deferred), and preprod sandbox acceptance is gated on Ops delivering the real eSeal X.509; live ETA calls are additionally gated OFF until `PHARMATAG_ETA_SUBMIT_ENABLED=true` + OAuth credentials are configured (preprod hosts via `PHARMATAG_ENVIRONMENT=preprod`) | #30 (transport follow-up) |
 | data | CC0 drug catalog download | documented, not bundled — the importer (`server/app/drugs/importer.py`, CLI `python -m app.drugs.importer <file>`) is real and de-dupes/idempotent, but the 24k-medicine source (CC0 `karem505/egyptian-drug-database`) is fetched at import time, not shipped. A sample fixture lives in `server/tests/fixtures/cc0_catalog_sample.csv`. | #8 (shipped) |
 
 Real so far: `/api/v1/auth/*` (login, me, reset-password), `/api/v1/drugs`

@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     eta_client_secret: str = ""
     einvoice_worker_interval_seconds: int = 60
 
+    # ETA eSeal signing material (S4.3, #30; plan/06 R5/D17): PEM files on the
+    # shop server — root-owned directory (e.g. /etc/pharmatag/eta/, chmod 600),
+    # loaded only by app.einvoicing.signer. Unset ⇒ submissions defer with an
+    # audit row; nothing signs without a key.
+    eta_key_path: Path | None = Field(default=None, validation_alias="PHARMATAG_ETA_KEY_PATH")
+    eta_cert_path: Path | None = Field(default=None, validation_alias="PHARMATAG_ETA_CERT_PATH")
+
     jwt_secret: str = "dev-only-change-me-0123456789abcdef012345"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30

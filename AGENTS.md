@@ -3,7 +3,7 @@
 ## Agent skills
 
 ### Issue tracker
-GitHub issues on TAGOOZ/PharmaTag via the `gh` CLI (pass `--repo TAGOOZ/PharmaTag` explicitly — the repo is also the code repo). See `docs/agents/issue-tracker.md`.
+GitHub issues on TAGOOZ/PharmaTag via the `gh` CLI (pass `--repo TAGOOZ/PharmaTag` explicitly — the repo is also the code repo). **Read issues via the REST API (`gh api repos/TAGOOZ/PharmaTag/issues/N`) — NOT `gh issue view`, whose GraphQL path fails on this repo.** See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 Default vocabulary: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.

@@ -5,11 +5,13 @@ Issues and PRDs for this project live as GitHub issues on **TAGOOZ/PharmaTag**, 
 ## Conventions
 
 - **Create an issue**: `gh issue create --repo TAGOOZ/PharmaTag --title "..." --body "..."`. Use a heredoc for multi-line bodies.
-- **Read an issue**: `gh issue view <number> --repo TAGOOZ/PharmaTag --comments`, filtering comments by `jq` and also fetching labels.
-- **List issues**: `gh issue list --repo TAGOOZ/PharmaTag --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
-- **Comment on an issue**: `gh issue comment <number> --repo TAGOOZ/PharmaTag --body "..."`
-- **Apply / remove labels**: `gh issue edit <number> --repo TAGOOZ/PharmaTag --add-label "..."` / `--remove-label "..."`
-- **Close**: `gh issue close <number> --repo TAGOOZ/PharmaTag --comment "..."` — close the ticket when its acceptance criteria are implemented AND verified (both twins green where relevant), with a comment summarizing what was done and referencing the commit. Also remove the `ready-for-agent` label so it isn't re-grabbed. Don't close on "written but not verified".
+- **Read an issue**: use the **REST API, not `gh issue view`** — the GraphQL path breaks on this repo ("Projects (classic) is being deprecated"):
+  `gh api repos/TAGOOZ/PharmaTag/issues/<number> --jq '{title, state, labels: [.labels[].name], body}'`.
+  Comments: `gh api repos/TAGOOZ/PharmaTag/issues/<number>/comments --jq '.[] | .body'`. Post via `gh api .../comments -f body="..."`.
+- **List issues**: `gh api "repos/TAGOOZ/PharmaTag/issues?state=open&per_page=100" --jq '.[] | select(.pull_request == null) | "#\(.number) \(.title) [\([.labels[].name] | join(","))]"'` (add `&labels=` to filter; REST returns PRs too, hence the select).
+- **Comment on an issue**: `gh issue comment <number> --repo TAGOOZ/PharmaTag --body "..."`, or the REST form above for full control.
+- **Apply / remove labels**: `gh api repos/TAGOOZ/PharmaTag/issues/<number> -X PATCH -f 'labels[]=...'` or `gh issue edit <number> --repo TAGOOZ/PharmaTag --add-label "..."` / `--remove-label "..."`
+- **Close**: `gh issue close <number> --repo TAGOOZ/PharmaTag --comment "..."`, or REST: `gh api repos/TAGOOZ/PharmaTag/issues/<number> -X PATCH -f state=closed` after posting the close comment — close the ticket when its acceptance criteria are implemented AND verified (both twins green where relevant), with a comment summarizing what was done and referencing the commit. Also remove the `ready-for-agent` label so it isn't re-grabbed. Don't close on "written but not verified".
 - **Edge-case pass (required before close)**: after the ACs are green, run an explicit edge-case pass on the ticket's deliverable before closing. Enumerate the slice's edge cases and cover the important ones with tests; fix whatever the tests expose:
   - data: empty result set, missing/null fields, duplicates, boundary values, deleted/inactive rows;
   - auth/permission: unauthenticated, wrong/expired token, insufficient `permission_level` / granular permission, cross-branch access;
@@ -24,4 +26,6 @@ Create a GitHub issue with `gh issue create --repo TAGOOZ/PharmaTag`.
 
 ## When a skill says "fetch the relevant ticket"
 
-Run `gh issue view <number> --repo TAGOOZ/PharmaTag --comments`.
+Use the REST API (NOT `gh issue view` — GraphQL breaks on this repo):
+`gh api repos/TAGOOZ/PharmaTag/issues/<number> --jq '{title, state, labels: [.labels[].name], body}'`
+and `gh api repos/TAGOOZ/PharmaTag/issues/<number>/comments` for the discussion.

@@ -21,6 +21,7 @@ from typing import Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import Integer, func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import ACTION_INSERT, ACTION_UPDATE, audit, enqueue_sync
@@ -56,8 +57,25 @@ SAME_BRANCH = HTTPException(
 )
 
 
+def _is_sqlite(session: AsyncSession) -> bool:
+    """True when the session runs on the SQLite desktop twin."""
+    try:
+        bind = session.get_bind()
+    except Exception:
+        return False
+    return getattr(getattr(bind, "dialect", None), "name", "") == "sqlite"
+
+
 async def acquire_branch_lock(session: AsyncSession, branch_id: int) -> None:
-    """Serialize transfer writes for a source branch (int8 advisory xact lock)."""
+    """Serialize transfer writes for a source branch (int8 advisory xact lock).
+
+    SQLite twin (#55): pg_advisory_xact_lock does not exist there — the call
+    is skipped and monotonic numbering leans on
+    UNIQUE(source_branch_id, transfer_no) with the bounded savepoint retry in
+    create_draft instead.
+    """
+    if _is_sqlite(session):
+        return
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:ns), :branch_id)"),
         {"ns": _LOCK_NAMESPACE, "branch_id": branch_id},
@@ -153,7 +171,21 @@ def public_transfer(transfer: Transfer, lines: list[TransferLine]) -> dict:
 
 
 async def _snapshot_payload(transfer: Transfer, lines: list[TransferLine]) -> dict:
-    """JSON-primitive snapshot of the transfer at its current state (outbox)."""
+    """JSON-primitive snapshot of the transfer at its current state (outbox).
+
+    Carries an ISO8601 `updated_at` LWW watermark (plan/00 G10): the latest
+    transition timestamp — received > dispatched > cancelled > created,
+    whichever was set last. Wire/public API unchanged; payload-only."""
+    stamps = [
+        ts
+        for ts in (
+            transfer.received_at,
+            transfer.dispatched_at,
+            transfer.cancelled_at,
+            transfer.created_at,
+        )
+        if ts is not None
+    ]
     return {
         "kind": ENTITY,
         "id": transfer.id,
@@ -162,6 +194,7 @@ async def _snapshot_payload(transfer: Transfer, lines: list[TransferLine]) -> di
         "target_branch_id": transfer.target_branch_id,
         "status": transfer.status,
         "legacy_fatid": transfer.legacy_fatid,
+        "updated_at": max(stamps).isoformat() if stamps else None,
         "lines": [
             {
                 "drug_id": line.drug_id,
@@ -288,17 +321,50 @@ async def create_draft(
                 _, existing_lines = await get_transfer(session, existing.id)
                 return existing, existing_lines, True
 
-        transfer = Transfer(
-            source_branch_id=caller.branch_id,
-            target_branch_id=target_branch_id,
-            transfer_no=await next_transfer_no(session, caller.branch_id),
-            status="draft",
-            legacy_fatid=legacy_fatid,
-            note=note,
-            created_by=caller.id,
-        )
-        session.add(transfer)
-        await session.flush()
+        if _is_sqlite(session):
+            # SQLite twin (offline desktop): no advisory lock held the
+            # numbering, so a stale MAX+1 collides on
+            # UNIQUE(source_branch_id, transfer_no). Retry on a SAVEPOINT:
+            # rollback the failed insert, recompute, retry (≤3 attempts).
+            transfer = None
+            for attempt in range(3):
+                try:
+                    async with session.begin_nested():
+                        transfer = Transfer(
+                            source_branch_id=caller.branch_id,
+                            target_branch_id=target_branch_id,
+                            transfer_no=await next_transfer_no(
+                                session, caller.branch_id
+                            ),
+                            status="draft",
+                            legacy_fatid=legacy_fatid,
+                            note=note,
+                            created_by=caller.id,
+                            created_at=datetime.now(timezone.utc),
+                        )
+                        session.add(transfer)
+                        await session.flush()
+                    break
+                except IntegrityError:
+                    transfer = None
+                    if attempt == 2:
+                        raise
+        else:
+            # PG path: numbered under the advisory lock — unchanged
+            transfer = Transfer(
+                source_branch_id=caller.branch_id,
+                target_branch_id=target_branch_id,
+                transfer_no=await next_transfer_no(session, caller.branch_id),
+                status="draft",
+                legacy_fatid=legacy_fatid,
+                note=note,
+                created_by=caller.id,
+                # stamped in Python so the outbox snapshot's LWW watermark is
+                # available before commit (server_default now() stays backstop)
+                created_at=datetime.now(timezone.utc),
+            )
+            session.add(transfer)
+            await session.flush()
 
         created: list[TransferLine] = []
         for line in lines:

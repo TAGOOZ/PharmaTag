@@ -317,19 +317,20 @@ async def dispatch_line(
     )
 
 
-async def receive_line(
+async def land_target_lots(
     session: AsyncSession,
     *,
-    source_branch_id: int,
     target_branch_id: int,
     user_id: Optional[int],
     drug_id: int,
     allocations: list[Allocation],
     received_qty: Decimal,
     transfer_no: str,
-) -> Decimal:
-    """Land `received_qty` on the target branch; auto-return the shortfall to
-    the source batches. Returns the received quantity."""
+) -> None:
+    """TARGET side of a receive (#55): walk the allocations head-first and
+    create/add lots up to `received_qty` with cost/expire/vat/price preserved
+    VERBATIM (`typee='transfer_in'`), then bump target branch_stock. Never
+    touches the source side."""
     remaining = received_qty
     for alloc in allocations:
         if remaining <= 0:
@@ -395,48 +396,95 @@ async def receive_line(
         transfer_no=transfer_no,
     )
 
-    # shortfall auto-returns to the source batches ("the driver brings it back")
+
+async def restore_source_shortfall(
+    session: AsyncSession,
+    *,
+    source_branch_id: int,
+    user_id: Optional[int],
+    drug_id: int,
+    allocations: list[Allocation],
+    received_qty: Decimal,
+    transfer_no: str,
+) -> None:
+    """SOURCE side of a receive (#55): auto-return the shortfall (allocated −
+    received) to the exact source batches head-first in allocation order
+    ("the driver brings it back"). Never touches the target side."""
     shortfall = sum((a.take for a in allocations), Decimal("0")) - received_qty
-    if shortfall > 0:
-        rest = shortfall
-        for alloc in allocations:
-            if rest <= 0:
-                break
-            give_back = min(alloc.take, rest)
-            rest -= give_back
-            batch = (
-                await session.execute(
-                    select(StockBatch)
-                    .where(StockBatch.id == alloc.batch_id)
-                    .with_for_update()
-                )
-            ).scalar_one_or_none()
-            if batch is None:
-                raise MISSING_BATCH
-            old = dec(batch.qty)
-            batch.qty = old + give_back
-            batch.oldstock = old
-            session.add(batch)
-            await audit(
-                session,
-                branch_id=source_branch_id,
-                user_id=user_id,
-                entity="stock_batches",
-                entity_id=batch.id,
-                field="qty",
-                old_value=str(old),
-                new_value=str(old + give_back),
-                drug_id=drug_id,
-                action="transfer_shortage_return",
-                typevalue=transfer_no,
+    if shortfall <= 0:
+        return
+    rest = shortfall
+    for alloc in allocations:
+        if rest <= 0:
+            break
+        give_back = min(alloc.take, rest)
+        rest -= give_back
+        batch = (
+            await session.execute(
+                select(StockBatch).where(StockBatch.id == alloc.batch_id).with_for_update()
             )
-        await _adjust_branch_stock(
+        ).scalar_one_or_none()
+        if batch is None:
+            raise MISSING_BATCH
+        old = dec(batch.qty)
+        batch.qty = old + give_back
+        batch.oldstock = old
+        session.add(batch)
+        await audit(
             session,
             branch_id=source_branch_id,
             user_id=user_id,
+            entity="stock_batches",
+            entity_id=batch.id,
+            field="qty",
+            old_value=str(old),
+            new_value=str(old + give_back),
             drug_id=drug_id,
-            delta=shortfall,
             action="transfer_shortage_return",
-            transfer_no=transfer_no,
+            typevalue=transfer_no,
         )
+    await _adjust_branch_stock(
+        session,
+        branch_id=source_branch_id,
+        user_id=user_id,
+        drug_id=drug_id,
+        delta=shortfall,
+        action="transfer_shortage_return",
+        transfer_no=transfer_no,
+    )
+
+
+async def receive_line(
+    session: AsyncSession,
+    *,
+    source_branch_id: int,
+    target_branch_id: int,
+    user_id: Optional[int],
+    drug_id: int,
+    allocations: list[Allocation],
+    received_qty: Decimal,
+    transfer_no: str,
+) -> Decimal:
+    """Live dispatch→receive bookkeeping: land `received_qty` on the target
+    branch AND auto-return the shortfall to the source batches. The offline
+    replay applies the two halves separately per peer copy (#55 gap fix);
+    a live receive always runs both."""
+    await land_target_lots(
+        session,
+        target_branch_id=target_branch_id,
+        user_id=user_id,
+        drug_id=drug_id,
+        allocations=allocations,
+        received_qty=received_qty,
+        transfer_no=transfer_no,
+    )
+    await restore_source_shortfall(
+        session,
+        source_branch_id=source_branch_id,
+        user_id=user_id,
+        drug_id=drug_id,
+        allocations=allocations,
+        received_qty=received_qty,
+        transfer_no=transfer_no,
+    )
     return received_qty

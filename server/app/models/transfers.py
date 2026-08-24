@@ -19,6 +19,7 @@ from sqlalchemy import (
     Column,
     ForeignKey,
     Identity,
+    Integer,
     Numeric,
     String,
     UniqueConstraint,
@@ -54,6 +55,10 @@ class Transfer(Base):
     )
     transfer_no: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(12), nullable=False, server_default="draft")
+    # monotonic revision watermark (#55 gap fix): bumped IN the transition
+    # transaction — draft=1, dispatched=2, received/cancelled=3. Ordering
+    # authority for versioned offline replay; updated_at stays diagnostics-only.
+    rev: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     legacy_fatid: Mapped[Optional[str]] = mapped_column(String(50))
     note: Mapped[str] = mapped_column(String(200), nullable=False, server_default="")
     created_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))

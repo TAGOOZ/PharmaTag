@@ -840,6 +840,7 @@ CREATE TABLE transfers (
     transfer_no      TEXT NOT NULL,
     status           TEXT NOT NULL DEFAULT 'draft'
                      CHECK (status IN ('draft','dispatched','received','cancelled')),
+    rev              INTEGER NOT NULL DEFAULT 1,  -- rev 030 (#55): version watermark for replay ordering
     legacy_fatid     TEXT,
     note             TEXT NOT NULL DEFAULT '',
     created_by       INTEGER REFERENCES users(id),

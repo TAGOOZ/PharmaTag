@@ -14,13 +14,15 @@ entities replay:
 * `branch_stock` (S1.7, ticket #13) — the payload carries the absolute balance
   (`qty`), so LWW is trivially idempotent. A drug that no longer exists on the
   target store is recorded failed, never lost.
-* `transfer` (#55) — dedupe keys on the SOURCE namespace
-  UNIQUE(source_branch_id, transfer_no) because BOTH branches receive the same
-  payload copy; sync_log.branch_id must never take part in the check. Effects
-  are applied verbatim from the snapshot's allocations (lot-exact, no FEFO
-  re-run). Unlike invoices, a failing transfer row stays PENDING with the
-  failure recorded in its payload — retryable on a later pass, never silently
-  dropped (G10).
+* `transfer` (#55, versioned since the gap fix) — dedupe keys on the SOURCE
+  namespace UNIQUE(source_branch_id, transfer_no) because BOTH branches
+  receive the same payload copy; ordering authority is the monotonic `rev`
+  watermark: stale/duplicate/out-of-order copies (rev <= local) are skipped,
+  higher-rev payloads upgrade by folding the legal stage chain with effects
+  BRANCH-FILTERED to this peer's copy (sync_log.branch_id). Effects are
+  applied verbatim from the snapshot's allocations (lot-exact, no FEFO
+  re-run). A failing transfer row stays PENDING with the failure recorded in
+  its payload — retryable on a later pass, never silently dropped (G10).
 """
 from __future__ import annotations
 
@@ -36,7 +38,7 @@ from app.core.db import atomic
 from app.einvoicing.service import apply_einvoice_block
 from app.models import BranchStock, Drug, EInvoiceLog, Invoice, SyncLog
 from app.sales.numbering import acquire_branch_lock
-from app.transfers.replay import apply_transfer_payload, transfer_exists
+from app.transfers.replay import apply_transfer_versioned
 
 
 async def _apply_row(
@@ -182,21 +184,23 @@ async def replay_pending(
                 continue
 
             if row.entity == "transfer":
-                # dedupe on the SOURCE namespace — both branches hold the same
-                # payload copy, so sync_log.branch_id must not take part
-                if await transfer_exists(session, payload):
-                    row.status = "applied"
-                    row.synced_at = datetime.now(timezone.utc)
-                    summary["skipped"] += 1
-                    continue
+                # VERSIONED apply (#55 gap fix): ordering authority is the
+                # payload's `rev` watermark against the local row — stale/
+                # duplicate/out-of-order copies (rev <= local) are skipped,
+                # higher-rev payloads fold the legal stage chain with effects
+                # BRANCH-FILTERED to this peer (row.branch_id). Dedupe still
+                # keys on the SOURCE namespace inside the applier.
                 try:
                     async with session.begin_nested():
-                        await apply_transfer_payload(
-                            session, payload=payload, user_id=user_id
+                        outcome = await apply_transfer_versioned(
+                            session,
+                            payload=payload,
+                            peer_branch_id=row.branch_id,
+                            user_id=user_id,
                         )
                     row.status = "applied"
                     row.synced_at = datetime.now(timezone.utc)
-                    summary["applied"] += 1
+                    summary["applied" if outcome == "applied" else "skipped"] += 1
                 except Exception as exc:
                     # a poisoned/blocked row fails ALONE (its savepoint rolled
                     # back) and stays pending for a later pass — recorded in

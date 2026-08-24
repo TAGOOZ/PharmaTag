@@ -151,8 +151,9 @@ async def _pick_row(branch_id: int, status: str) -> int:
 
 
 async def _only_pending(*keep_ids: int) -> None:
-    """Mark every other entity='transfer' row applied so a replay sees only
-    the seeded scenario."""
+    """Make exactly `keep_ids` the only PENDING entity='transfer' rows so a
+    replay sees just the seeded scenario (re-forcing them pending lets a
+    later phase redeliver a copy a previous phase marked applied)."""
     async with SessionLocal() as s:
         await s.execute(
             update(SyncLog)
@@ -162,6 +163,12 @@ async def _only_pending(*keep_ids: int) -> None:
             )
             .values(status="applied")
         )
+        if keep_ids:
+            await s.execute(
+                update(SyncLog)
+                .where(SyncLog.entity == "transfer", SyncLog.id.in_(keep_ids))
+                .values(status="pending")
+            )
         await s.commit()
 
 
@@ -295,15 +302,19 @@ async def test_replay_recreates_target_side_byte_identical(world):
 
 
 async def test_replay_shortfall_restores_source_batches(world):
-    draft = await _flow(world, "6")  # 4-unit shortfall auto-returned live
+    """Branch-filtered replay (#55 gap fix): the TARGET copy of a received row
+    reproduces only the target landing; the SOURCE copy carries the shortfall
+    auto-return to its own batches. Each phase simulates one peer's own DB."""
+    await _flow(world, "6")  # 4-unit shortfall auto-returned live
     before = await _batch_snapshot(world["tgt"], world["drug"])
     # target lots ordered by source-batch randomid: lot A (4 taken) and
     # lot B (2 taken) landed head-first from the allocations
     assert [b["qty"] for b in before] == ["4.0000", "2.0000"]
-    row_id = await _pick_row(world["tgt"], "received")
+    tgt_row = await _pick_row(world["tgt"], "received")
+    src_row = await _pick_row(world["src"], "received")
 
-    # wipe target landing AND revert the source side to post-dispatch state
-    # (shortfall not yet returned), so replay must reproduce BOTH sides
+    # ---- target peer: revert the source side to post-dispatch (shortfall not
+    # yet returned) and wipe the landing — its copy must rebuild the TARGET side
     async with SessionLocal() as s:
         await s.execute(
             update(StockBatch.__table__)
@@ -317,27 +328,43 @@ async def test_replay_shortfall_restores_source_batches(world):
             update(BranchStock.__table__)
             .where(
                 BranchStock.branch_id == world["src"],
-                BranchStock.drug_id == world["drug"],
+                StockBatch.drug_id == world["drug"],
             )
             .values(qty=0)
         )
         await s.commit()
     await _wipe_target_side(world)
-    await _only_pending(row_id)
+    await _only_pending(tgt_row)
 
     summary = await replay_pending(SessionLocal(), branch_id=world["tgt"])
     assert summary["applied"] == 1
     assert summary["failed"] == 0
 
-    # target side reproduced
+    # target side reproduced …
     assert await _batch_snapshot(world["tgt"], world["drug"]) == before
     assert await u._stock_qty(world["tgt"], world["drug"]) == Decimal("6")
-
-    # source side restored head-first in allocation order: batch A gets the
-    # whole 4-unit shortfall back, batch B stays empty
+    # … but the SOURCE side is NOT the target copy's business (branch filter)
     src_batches = await u._batches(world["src"], world["drug"])
+    assert [str(b.qty) for b in src_batches] == ["0.0000", "0.0000"]
+    assert await u._stock_qty(world["src"], world["drug"]) == Decimal("0")
+
+    # ---- source peer: fresh local world at pre-dispatch (draft levels, no
+    # local row) — ITS copy folds dispatch-decrement + shortfall restore
+    await _delete_transfers_for_drug(world["drug"])
+    await _reset_stock(
+        world, src_batches=DRAFT_SRC_BATCHES, src_stock="10", wipe_tgt=True
+    )
+    await _only_pending(src_row)
+
+    summary = await replay_pending(SessionLocal(), branch_id=world["src"])
+    assert summary["applied"] == 1
+    assert summary["failed"] == 0
+    src_batches = await u._batches(world["src"], world["drug"])
+    # batch A gets the whole 4-unit shortfall back, batch B stays empty
     assert [str(b.qty) for b in src_batches] == ["4.0000", "0.0000"]
     assert await u._stock_qty(world["src"], world["drug"]) == Decimal("4")
+    # target landing untouched by the source copy
+    assert await _batch_snapshot(world["tgt"], world["drug"]) == []
 
 
 async def test_concurrent_double_replay_applies_once(world):
@@ -520,3 +547,449 @@ async def test_poisoned_row_isolated_and_stays_pending(world):
     assert bad.payload.get("failure")
     # the good row's effects landed despite the poisoned sibling
     assert await _transfers_count(world["src"], draft["transfer_no"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Versioned apply (rev watermark) — #55 gap fix
+# ---------------------------------------------------------------------------
+
+DRAFT_SRC_BATCHES = ["4.0000", "6.0000"]  # batch A / batch B before dispatch
+DISPATCHED_SRC_BATCHES = ["0.0000", "0.0000"]  # after dispatch took everything
+
+
+async def _latest_payload(branch_id: int, status: str) -> dict:
+    async with SessionLocal() as s:
+        rows = (
+            await s.execute(
+                select(SyncLog)
+                .where(
+                    SyncLog.entity == "transfer",
+                    SyncLog.branch_id == branch_id,
+                )
+                .order_by(SyncLog.id)
+            )
+        ).scalars().all()
+    matched = [x for x in rows if (x.payload or {}).get("status") == status]
+    assert matched, f"no {status} outbox row for branch {branch_id}"
+    return dict(matched[-1].payload)
+
+
+async def _seed_pending(branch_id: int, payload: dict) -> int:
+    async with SessionLocal() as s:
+        row = SyncLog(
+            branch_id=branch_id,
+            entity="transfer",
+            entity_id=None,
+            action="update",
+            payload=dict(payload),
+        )
+        s.add(row)
+        await s.flush()
+        row_id = row.id
+        await s.commit()
+        return row_id
+
+
+async def _delete_transfers_for_drug(drug_id: int) -> None:
+    async with SessionLocal() as s:
+        tids = (
+            await s.execute(
+                select(TransferLine.transfer_id).where(
+                    TransferLine.drug_id == drug_id
+                )
+            )
+        ).scalars().all()
+        await s.execute(
+            delete(TransferLine.__table__).where(TransferLine.drug_id == drug_id)
+        )
+        if tids:
+            await s.execute(delete(Transfer.__table__).where(Transfer.id.in_(tids)))
+        await s.commit()
+
+
+async def _reset_stock(
+    world,
+    *,
+    src_batches: list[str],
+    src_stock: str,
+    wipe_tgt: bool = True,
+) -> None:
+    """Force the source batches/branch_stock to an exact state; optionally
+    wipe every target-side trace of the drug."""
+    async with SessionLocal() as s:
+        rows = (
+            await s.execute(
+                select(StockBatch)
+                .where(
+                    StockBatch.branch_id == world["src"],
+                    StockBatch.drug_id == world["drug"],
+                )
+                .order_by(StockBatch.id)
+            )
+        ).scalars().all()
+        assert len(rows) == len(src_batches)
+        for batch, qty in zip(rows, src_batches):
+            batch.qty = Decimal(qty)
+            batch.oldstock = Decimal(qty)
+        branch = (
+            await s.execute(
+                select(BranchStock).where(
+                    BranchStock.branch_id == world["src"],
+                    BranchStock.drug_id == world["drug"],
+                )
+            )
+        ).scalar_one()
+        branch.qty = Decimal(src_stock)
+        if wipe_tgt:
+            await s.execute(
+                delete(StockBatch.__table__).where(
+                    StockBatch.branch_id == world["tgt"],
+                    StockBatch.drug_id == world["drug"],
+                )
+            )
+            await s.execute(
+                delete(BranchStock.__table__).where(
+                    BranchStock.branch_id == world["tgt"],
+                    StockBatch.drug_id == world["drug"],
+                )
+            )
+        await s.commit()
+
+
+async def _seed_local_transfer(
+    world,
+    *,
+    transfer_no: str,
+    status: str,
+    rev: int,
+) -> int:
+    """Insert a local transfers row as a peer that saw exactly `status`."""
+    async with SessionLocal() as s:
+        transfer = Transfer(
+            source_branch_id=world["src"],
+            target_branch_id=world["tgt"],
+            transfer_no=transfer_no,
+            status=status,
+            rev=rev,
+            created_at=datetime.now(timezone.utc),
+        )
+        s.add(transfer)
+        await s.flush()
+        s.add(
+            TransferLine(
+                transfer_id=transfer.id,
+                drug_id=world["drug"],
+                sent_qty=Decimal("10"),
+            )
+        )
+        tid = transfer.id
+        await s.commit()
+        return tid
+
+
+async def test_offline_whole_flow_jump_target_peer(world):
+    """A target peer that only ever saw the DRAFT converges to received from
+    ONE rev=3 copy — and never touches the source side's stock."""
+    await _flow(world, "6")
+    payload = await _latest_payload(world["tgt"], "received")
+    assert payload["rev"] == 3
+
+    await _delete_transfers_for_drug(world["drug"])
+    await _reset_stock(
+        world, src_batches=DRAFT_SRC_BATCHES, src_stock="10", wipe_tgt=True
+    )
+    row_id = await _seed_pending(world["tgt"], payload)
+    await _only_pending(row_id)
+
+    summary = await replay_pending(SessionLocal(), branch_id=world["tgt"])
+    assert summary["applied"] == 1
+    assert summary["failed"] == 0
+
+    transfer, lines = await _transfer_by_no(world["src"], payload["transfer_no"])
+    assert transfer.status == "received"
+    assert transfer.rev == 3
+    assert str(lines[0].received_qty) == "6.0000"
+
+    # target landed lot-exact
+    after = await _batch_snapshot(world["tgt"], world["drug"])
+    assert [b["qty"] for b in after] == ["4.0000", "2.0000"]
+    assert await u._stock_qty(world["tgt"], world["drug"]) == Decimal("6")
+
+    # SOURCE untouched by the target copy (branch-filtered effects)
+    src_batches = await u._batches(world["src"], world["drug"])
+    assert [str(b.qty) for b in src_batches] == DRAFT_SRC_BATCHES
+    assert await u._stock_qty(world["src"], world["drug"]) == Decimal("10")
+
+    # duplicate redelivery after convergence → skipped, stock unchanged
+    async with SessionLocal() as s:
+        await s.execute(
+            update(SyncLog).where(SyncLog.id == row_id).values(status="pending")
+        )
+        await s.commit()
+    second = await replay_pending(SessionLocal(), branch_id=world["tgt"])
+    assert second["skipped"] == 1
+    assert second["applied"] == 0
+    assert await _batch_snapshot(world["tgt"], world["drug"]) == after
+
+
+async def test_offline_whole_flow_jump_source_peer(world):
+    """A source peer that only ever saw the DRAFT folds dispatch-decrement AND
+    shortfall restore from ONE rev=3 copy — without landing any target lots."""
+    await _flow(world, "6")
+    payload = await _latest_payload(world["src"], "received")
+    assert payload["rev"] == 3
+
+    await _delete_transfers_for_drug(world["drug"])
+    await _reset_stock(
+        world, src_batches=DRAFT_SRC_BATCHES, src_stock="10", wipe_tgt=True
+    )
+    row_id = await _seed_pending(world["src"], payload)
+    await _only_pending(row_id)
+
+    summary = await replay_pending(SessionLocal(), branch_id=world["src"])
+    assert summary["applied"] == 1
+    assert summary["failed"] == 0
+
+    transfer, _ = await _transfer_by_no(world["src"], payload["transfer_no"])
+    assert transfer.status == "received"
+    assert transfer.rev == 3
+
+    # source side: dispatch decremented everything, receive restored the
+    # 4-unit shortfall head-first into batch A
+    src_batches = await u._batches(world["src"], world["drug"])
+    assert [str(b.qty) for b in src_batches] == ["4.0000", "0.0000"]
+    assert await u._stock_qty(world["src"], world["drug"]) == Decimal("4")
+
+    # TARGET untouched by the source copy (branch-filtered effects)
+    assert await _batch_snapshot(world["tgt"], world["drug"]) == []
+    assert await u._stock_qty(world["tgt"], world["drug"]) is None
+
+
+async def test_dispatch_upgrade_from_local_draft_on_each_peer(world):
+    """peer-at-draft + rev=2 dispatched copy: the SOURCE peer decrements its
+    batches; the TARGET peer flips header-only and touches nothing."""
+    client = world["client"]
+    r = await client.post(
+        "/api/v1/transfers",
+        headers=u._headers(world["src_token"]),
+        json={
+            "target_branch_id": world["tgt"],
+            "lines": [{"drug_id": world["drug"], "qty": "10"}],
+        },
+    )
+    draft = r.json()
+    world["_transfer_ids"].append(draft["id"])
+    await client.post(
+        f"/api/v1/transfers/{draft['id']}/dispatch",
+        headers=u._headers(world["src_token"]),
+        json={},
+    )
+    p_src = await _latest_payload(world["src"], "dispatched")
+    p_tgt = await _latest_payload(world["tgt"], "dispatched")
+    assert p_src["rev"] == 2 and p_tgt["rev"] == 2
+    transfer_no = p_src["transfer_no"]
+
+    # ---- source peer: local draft + rev=2 copy → decrement source batches
+    await _delete_transfers_for_drug(world["drug"])
+    await _reset_stock(
+        world, src_batches=DRAFT_SRC_BATCHES, src_stock="10", wipe_tgt=True
+    )
+    await _seed_local_transfer(world, transfer_no=transfer_no, status="draft", rev=1)
+    await _seed_pending(world["src"], p_src)
+
+    summary = await replay_pending(SessionLocal(), branch_id=world["src"])
+    assert summary["applied"] == 1
+    assert summary["failed"] == 0
+
+    transfer, _ = await _transfer_by_no(world["src"], transfer_no)
+    assert transfer.status == "dispatched"
+    assert transfer.rev == 2
+    src_batches = await u._batches(world["src"], world["drug"])
+    assert [str(b.qty) for b in src_batches] == DISPATCHED_SRC_BATCHES
+    assert await u._stock_qty(world["src"], world["drug"]) == Decimal("0")
+    assert await _batch_snapshot(world["tgt"], world["drug"]) == []
+
+    # ---- target peer: same local draft + ITS rev=2 copy → header only
+    await _delete_transfers_for_drug(world["drug"])
+    await _reset_stock(
+        world, src_batches=DRAFT_SRC_BATCHES, src_stock="10", wipe_tgt=True
+    )
+    await _seed_local_transfer(world, transfer_no=transfer_no, status="draft", rev=1)
+    await _seed_pending(world["tgt"], p_tgt)
+
+    summary = await replay_pending(SessionLocal(), branch_id=world["tgt"])
+    assert summary["applied"] == 1
+    assert summary["failed"] == 0
+
+    transfer, _ = await _transfer_by_no(world["src"], transfer_no)
+    assert transfer.status == "dispatched"
+    assert transfer.rev == 2
+    # no stock moved anywhere: dispatch effects belong to the source copy only
+    src_batches = await u._batches(world["src"], world["drug"])
+    assert [str(b.qty) for b in src_batches] == DRAFT_SRC_BATCHES
+    assert await u._stock_qty(world["src"], world["drug"]) == Decimal("10")
+    assert await _batch_snapshot(world["tgt"], world["drug"]) == []
+
+
+async def test_receive_upgrade_shortfall_on_each_peer(world):
+    """local dispatched (rev=2) + rev=3 received copy: the TARGET peer lands
+    the lots; the SOURCE peer restores the shortfall — each on its side only."""
+    await _flow(world, "6")
+    p_tgt = await _latest_payload(world["tgt"], "received")
+    p_src = await _latest_payload(world["src"], "received")
+    transfer_no = p_src["transfer_no"]
+
+    # ---- target peer upgrade: dispatched → received lands the lots
+    await _delete_transfers_for_drug(world["drug"])
+    await _reset_stock(
+        world, src_batches=DISPATCHED_SRC_BATCHES, src_stock="0", wipe_tgt=True
+    )
+    await _seed_local_transfer(
+        world, transfer_no=transfer_no, status="dispatched", rev=2
+    )
+    await _seed_pending(world["tgt"], p_tgt)
+
+    summary = await replay_pending(SessionLocal(), branch_id=world["tgt"])
+    assert summary["applied"] == 1
+    assert summary["failed"] == 0
+
+    transfer, lines = await _transfer_by_no(world["src"], transfer_no)
+    assert transfer.status == "received"
+    assert transfer.rev == 3
+    assert str(lines[0].received_qty) == "6.0000"
+    assert [b["qty"] for b in await _batch_snapshot(world["tgt"], world["drug"])] == [
+        "4.0000",
+        "2.0000",
+    ]
+    assert await u._stock_qty(world["tgt"], world["drug"]) == Decimal("6")
+    # source side untouched by the target copy
+    src_batches = await u._batches(world["src"], world["drug"])
+    assert [str(b.qty) for b in src_batches] == DISPATCHED_SRC_BATCHES
+    assert await u._stock_qty(world["src"], world["drug"]) == Decimal("0")
+
+    # ---- source peer upgrade: dispatched → received restores the shortfall
+    await _delete_transfers_for_drug(world["drug"])
+    await _reset_stock(
+        world, src_batches=DISPATCHED_SRC_BATCHES, src_stock="0", wipe_tgt=True
+    )
+    await _seed_local_transfer(
+        world, transfer_no=transfer_no, status="dispatched", rev=2
+    )
+    await _seed_pending(world["src"], p_src)
+
+    summary = await replay_pending(SessionLocal(), branch_id=world["src"])
+    assert summary["applied"] == 1
+    assert summary["failed"] == 0
+
+    transfer, _ = await _transfer_by_no(world["src"], transfer_no)
+    assert transfer.status == "received"
+    assert transfer.rev == 3
+    src_batches = await u._batches(world["src"], world["drug"])
+    assert [str(b.qty) for b in src_batches] == ["4.0000", "0.0000"]
+    assert await u._stock_qty(world["src"], world["drug"]) == Decimal("4")
+    # target side untouched by the source copy
+    assert await _batch_snapshot(world["tgt"], world["drug"]) == []
+    assert await u._stock_qty(world["tgt"], world["drug"]) is None
+
+
+async def test_out_of_order_rev3_before_rev2_converges_then_skips_stale(world):
+    """Deliver the rev=3 received copy BEFORE the rev=2 dispatched copy: the
+    first fully converges the source side, the stale rev=2 arrives later and
+    must be skipped without double-moving stock."""
+    await _flow(world, "6")
+    p_recv = await _latest_payload(world["src"], "received")
+    p_disp = await _latest_payload(world["src"], "dispatched")
+
+    await _delete_transfers_for_drug(world["drug"])
+    await _reset_stock(
+        world, src_batches=DRAFT_SRC_BATCHES, src_stock="10", wipe_tgt=True
+    )
+    recv_row = await _seed_pending(world["src"], p_recv)
+    disp_row = await _seed_pending(world["src"], p_disp)
+    await _only_pending(recv_row, disp_row)
+
+    summary = await replay_pending(SessionLocal(), branch_id=world["src"])
+    assert summary["applied"] == 1  # the rev=3 row
+    assert summary["skipped"] == 1  # the stale rev=2 row
+    assert summary["failed"] == 0
+
+    transfer, _ = await _transfer_by_no(world["src"], p_recv["transfer_no"])
+    assert transfer.status == "received"
+    assert transfer.rev == 3
+    # converged exactly once — no double dispatch-decrement
+    src_batches = await u._batches(world["src"], world["drug"])
+    assert [str(b.qty) for b in src_batches] == ["4.0000", "0.0000"]
+    assert await u._stock_qty(world["src"], world["drug"]) == Decimal("4")
+
+
+async def test_illegal_transition_is_poisoned_and_state_unchanged(world):
+    """local received (terminal) vs an edited cancelled payload with a higher
+    rev: not a legal chain → the row fails ALONE and stays pending; local
+    state and stock are untouched."""
+    await _flow(world, "10")
+    payload = await _latest_payload(world["tgt"], "received")
+
+    await _delete_transfers_for_drug(world["drug"])
+    await _reset_stock(world, src_batches=DRAFT_SRC_BATCHES, src_stock="10")
+    await _seed_pending(world["tgt"], payload)
+    await replay_pending(SessionLocal(), branch_id=world["tgt"])
+    before = await _batch_snapshot(world["tgt"], world["drug"])
+
+    evil = {**payload, "status": "cancelled", "rev": 4}
+    row_id = await _seed_pending(world["tgt"], evil)
+
+    summary = await replay_pending(SessionLocal(), branch_id=world["tgt"])
+    assert summary["failed"] == 1
+    assert summary["applied"] == 0
+
+    async with SessionLocal() as s:
+        row = await s.get(SyncLog, row_id)
+    assert row.status == "pending"
+    assert row.payload.get("failure")
+
+    transfer, _ = await _transfer_by_no(world["src"], payload["transfer_no"])
+    assert transfer.status == "received"
+    assert transfer.rev == 3
+    assert await _batch_snapshot(world["tgt"], world["drug"]) == before
+
+
+async def test_mid_upgrade_failure_rolls_back_atomically(world):
+    """A crash MID-upgrade leaves NO partial stock: a second line whose drug
+    FK explodes after the first line's lots already landed rolls the whole
+    fold back — header stays at dispatched/rev2, zero batches, row
+    retryable-pending."""
+    await _flow(world, "6")
+    payload = await _latest_payload(world["tgt"], "received")
+    transfer_no = payload["transfer_no"]
+
+    await _delete_transfers_for_drug(world["drug"])
+    await _reset_stock(
+        world, src_batches=DISPATCHED_SRC_BATCHES, src_stock="0", wipe_tgt=True
+    )
+    await _seed_local_transfer(
+        world, transfer_no=transfer_no, status="dispatched", rev=2
+    )
+
+    good_line = dict(payload["lines"][0])
+    poisoned = {
+        **good_line,
+        "drug_id": 99999999,  # FK violation — but only AFTER line 1 landed
+    }
+    broken = {**payload, "lines": [good_line, poisoned]}
+    row_id = await _seed_pending(world["tgt"], broken)
+    await _only_pending(row_id)
+
+    summary = await replay_pending(SessionLocal(), branch_id=world["tgt"])
+    assert summary["failed"] == 1
+    assert summary["applied"] == 0
+
+    async with SessionLocal() as s:
+        row = await s.get(SyncLog, row_id)
+    assert row.status == "pending"
+    assert row.payload.get("failure")
+
+    transfer, _ = await _transfer_by_no(world["src"], transfer_no)
+    assert transfer.status == "dispatched"  # flip rolled back with the stock
+    assert transfer.rev == 2
+    assert await _batch_snapshot(world["tgt"], world["drug"]) == []
+    assert await u._stock_qty(world["tgt"], world["drug"]) is None

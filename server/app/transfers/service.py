@@ -34,6 +34,13 @@ ENTITY = "transfer"
 _LOCK_NAMESPACE = "pharmatag:branch-transfers"
 _RECEIVE_LOCK_NAMESPACE = "pharmatag:transfer-receive"
 
+# monotonic revision per state transition (#55 gap fix): the ordering
+# authority for versioned offline replay — bumped IN the same atomic txn as
+# the state flip (G12)
+REV_CREATE = 1
+REV_DISPATCH = 2
+REV_TERMINAL = 3  # received and cancelled
+
 
 def _qty4(value) -> str:
     """Wire format for quantities: exact 4-dp string (money.py rule)."""
@@ -140,6 +147,7 @@ def public_transfer(transfer: Transfer, lines: list[TransferLine]) -> dict:
         "source_branch_id": transfer.source_branch_id,
         "target_branch_id": transfer.target_branch_id,
         "status": transfer.status,
+        "rev": transfer.rev,
         "note": transfer.note,
         "legacy_fatid": transfer.legacy_fatid,
         "created_at": transfer.created_at.isoformat() if transfer.created_at else None,
@@ -193,6 +201,9 @@ async def _snapshot_payload(transfer: Transfer, lines: list[TransferLine]) -> di
         "source_branch_id": transfer.source_branch_id,
         "target_branch_id": transfer.target_branch_id,
         "status": transfer.status,
+        # ordering authority for versioned replay (#55); updated_at above is
+        # diagnostics-only and never compared for decisions
+        "rev": int(transfer.rev or 1),
         "legacy_fatid": transfer.legacy_fatid,
         "updated_at": max(stamps).isoformat() if stamps else None,
         "lines": [
@@ -337,6 +348,7 @@ async def create_draft(
                                 session, caller.branch_id
                             ),
                             status="draft",
+                            rev=REV_CREATE,
                             legacy_fatid=legacy_fatid,
                             note=note,
                             created_by=caller.id,
@@ -356,6 +368,7 @@ async def create_draft(
                 target_branch_id=target_branch_id,
                 transfer_no=await next_transfer_no(session, caller.branch_id),
                 status="draft",
+                rev=REV_CREATE,
                 legacy_fatid=legacy_fatid,
                 note=note,
                 created_by=caller.id,
@@ -460,6 +473,7 @@ async def dispatch(
             line.alloc_json = [a.to_json() for a in per_line[line.id]]
 
         transfer.status = "dispatched"
+        transfer.rev = REV_DISPATCH
         transfer.dispatched_by = caller.id
         transfer.dispatched_at = datetime.now(timezone.utc)
         session.add(transfer)
@@ -524,6 +538,7 @@ async def receive(
             )
 
         transfer.status = "received"
+        transfer.rev = REV_TERMINAL
         transfer.received_by = caller.id
         transfer.received_at = datetime.now(timezone.utc)
         session.add(transfer)
@@ -552,6 +567,7 @@ async def cancel(session: AsyncSession, *, caller: User, transfer: Transfer) -> 
         if transfer.status != "draft":
             raise BAD_STATE
         transfer.status = "cancelled"
+        transfer.rev = REV_TERMINAL
         transfer.cancelled_by = caller.id
         transfer.cancelled_at = datetime.now(timezone.utc)
         session.add(transfer)

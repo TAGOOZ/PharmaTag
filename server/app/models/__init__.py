@@ -46,6 +46,7 @@ from app.models.receivables import SettlementVoucher
 from app.models.reports import PrintJob, ReportCatalog
 from app.models.sales import Invoice, InvoiceLine, InvoiceVersion, PaymentSplit
 from app.models.stock import BranchStock, StockBatch, StockCorrectionRequest
+from app.models.transfers import Transfer, TransferLine
 
 __all__ = [
     "Account",
@@ -85,6 +86,8 @@ __all__ = [
     "StockBatch",
     "StockCorrectionRequest",
     "SyncLog",
+    "Transfer",
+    "TransferLine",
     "User",
     "account_type_enum",
     "batch_type_enum",

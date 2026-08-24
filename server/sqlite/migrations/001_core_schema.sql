@@ -86,7 +86,7 @@ CREATE TABLE drugs (
     vat          INTEGER NOT NULL DEFAULT 0,                    -- rate ×100
     units        INTEGER NOT NULL DEFAULT 0,
     unitsmall    INTEGER NOT NULL DEFAULT 0,
-    price        INTEGER DEFAULT 0,                             -- ×10000
+    price        INTEGER DEFAULT 0 CHECK (price >= 0),          -- ×10000 (#57: ck_drugs_prices_nonneg twin)
     price_now    INTEGER DEFAULT 0,
     disco        INTEGER DEFAULT 0,                             -- rate ×100
     pricechanged INTEGER DEFAULT 0,

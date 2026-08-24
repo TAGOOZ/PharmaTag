@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import audit
-from app.core.money import dec
+from app.core.money import dec, format2, format4
 from app.models import BranchStock, StockBatch
 
 INSUFFICIENT_STOCK = HTTPException(status.HTTP_409_CONFLICT, "insufficient stock")
@@ -42,14 +42,18 @@ class Allocation:
     price: Decimal
 
     def to_json(self) -> dict:
+        """Canonical wire form (#57): qty/cost/price exactly-4dp strings,
+        vat exactly-2dp (slabs exempt/5%/14% -> '0.00'/'5.00'/'14.00'),
+        expire ISO date or None — never raw str(Decimal) scale leakage.
+        from_json still parses legacy rows of any scale."""
         return {
             "batch_id": self.batch_id,
             "randomid": self.randomid,
-            "qty": str(self.take),
-            "cost": str(self.cost),
+            "qty": format4(self.take),
+            "cost": format4(self.cost),
             "expire": self.expire.isoformat() if self.expire else None,
-            "vat": str(self.vat),
-            "price": str(self.price),
+            "vat": format2(self.vat),
+            "price": format4(self.price),
         }
 
     @staticmethod

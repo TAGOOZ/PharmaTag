@@ -103,7 +103,7 @@ CREATE TABLE drugs (
     vat          INTEGER NOT NULL DEFAULT 0,                    -- rate ×100
     units        INTEGER NOT NULL DEFAULT 0,
     unitsmall    INTEGER NOT NULL DEFAULT 0,
-    price        INTEGER DEFAULT 0,                             -- ×10000
+    price        INTEGER DEFAULT 0 CHECK (price >= 0),          -- ×10000 (#57: ck_drugs_prices_nonneg twin)
     price_now    INTEGER DEFAULT 0,
     disco        INTEGER DEFAULT 0,                             -- rate ×100
     pricechanged INTEGER DEFAULT 0,
@@ -189,7 +189,7 @@ CREATE TABLE stock_batches (
     branch_id    INTEGER NOT NULL REFERENCES branches(id),
     drug_id      INTEGER NOT NULL REFERENCES drugs(id),
     randomid     TEXT NOT NULL,
-    qty          INTEGER NOT NULL DEFAULT 0,                     -- ×10000
+    qty          INTEGER NOT NULL DEFAULT 0 CONSTRAINT ck_stock_batches_qty_nonneg CHECK (qty >= 0),  -- ×10000 (#57)
     expire       TEXT,
     cost         INTEGER NOT NULL DEFAULT 0,                     -- ×10000
     vat          INTEGER NOT NULL DEFAULT 0,                     -- rate ×100
@@ -406,7 +406,7 @@ CREATE TABLE daily_close (
 CREATE TABLE branch_stock (
     branch_id INTEGER NOT NULL REFERENCES branches(id),
     drug_id   INTEGER NOT NULL REFERENCES drugs(id),
-    qty       INTEGER NOT NULL DEFAULT 0,                        -- ×10000
+    qty       INTEGER NOT NULL DEFAULT 0 CONSTRAINT ck_branch_stock_qty_nonneg CHECK (qty >= 0),  -- ×10000 (#57)
     minimum   INTEGER NOT NULL DEFAULT 0,
     silsilaid TEXT DEFAULT '',
     classy    TEXT DEFAULT '',

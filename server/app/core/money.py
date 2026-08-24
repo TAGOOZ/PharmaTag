@@ -38,6 +38,7 @@ __all__ = [
     "round2",
     "round4",
     "format2",
+    "format4",
     "tax_rate",
     "split_vat",
     "line_money",
@@ -92,6 +93,15 @@ def format2(value) -> str:
     12.345 must surface as '12.35'.
     """
     return format(round_half_up(value, 2), "f")
+
+
+def format4(value) -> str:
+    """Exact 4-dp string for qty/unit-cost wire (same half-up rule as format2).
+
+    Canonical transfer-allocation form (#57): `str(Decimal)` leaks the stored
+    scale ('4' vs '4.0000' vs '4.00005'); quantities print to 4dp like invoices.
+    """
+    return format(round_half_up(value, 4), "f")
 
 
 def tax_rate(tax_type: str) -> Decimal:

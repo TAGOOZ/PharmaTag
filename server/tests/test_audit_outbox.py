@@ -354,16 +354,18 @@ async def test_adjust_stock_zero_delta_is_still_audited(stock_drug):
     assert len(await _rows_for(drug_id, SyncLog, key="entity_id")) == 1
 
 
-async def test_adjust_stock_negative_delta_can_go_below_zero(stock_drug):
-    """branch_stock.qty has no NOT-NEGATIVE constraint; a negative delta may take
-    it below zero (allowed by design — insufficient-stock rejection belongs to
-    the sales slice, not this generic adjustment seam)."""
+async def test_adjust_stock_negative_delta_past_zero_rejected_atomically(stock_drug):
+    """rev 029 backstops patterns.md's 'stock never goes negative' invariant:
+    a delta past zero trips ck_branch_stock_qty_nonneg at the DB and the whole
+    mutation (stock + audit + outbox) rolls back atomically. Insufficient-stock
+    business rejection still belongs to callers — the DB is now the hard floor."""
     drug_id = stock_drug
     async with SessionLocal() as session:
-        await adjust_stock(
-            session, branch_id=BRANCH_ID, user_id=USER_ID,
-            drug_id=drug_id, qty_delta=-15,
-        )
+        with pytest.raises(IntegrityError):
+            await adjust_stock(
+                session, branch_id=BRANCH_ID, user_id=USER_ID,
+                drug_id=drug_id, qty_delta=-15,
+            )
     async with SessionLocal() as session:
         row = (
             await session.execute(
@@ -373,7 +375,9 @@ async def test_adjust_stock_negative_delta_can_go_below_zero(stock_drug):
                 )
             )
         ).scalar_one()
-        assert row.qty == Decimal("-5.0000")
+        assert row.qty == Decimal("10")
+    assert len(await _rows_for(drug_id, AuditLog, key="drug_id")) == 0
+    assert len(await _rows_for(drug_id, SyncLog, key="entity_id")) == 0
 
 
 async def test_adjust_stock_huge_delta_overflows_and_rolls_back(stock_drug):

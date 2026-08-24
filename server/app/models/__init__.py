@@ -36,7 +36,7 @@ from app.models.base import (
     tax_type_enum,
     user_roles_table,
 )
-from app.models.core import AppConfig, AuditLog, Branch, SyncLog
+from app.models.core import AppConfig, AuditLog, Branch, BranchIdentity, SyncLog
 from app.models.drawer import DailyClose, DrawerMovement
 from app.models.einvoicing import EInvoiceCounter, EInvoiceLog
 from app.models.ledger import MonthOpenBalance, MonthlyClose
@@ -55,6 +55,7 @@ __all__ = [
     "Balance",
     "Base",
     "Branch",
+    "BranchIdentity",
     "BranchStock",
     "DailyClose",
     "DrawerMovement",

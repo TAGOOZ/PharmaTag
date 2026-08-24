@@ -210,9 +210,12 @@ async def _make_other_branch() -> int:
     _seq[0] += 1
     async with SessionLocal() as session:
         branch = Branch(
-            pharmacyid=f"pt{_seq[0]}",
+            # pid-namespaced natural keys: uq_branches_pharmacyid/mobile are
+            # hard constraints — a leaked branch from a crashed run must never
+            # collide with the next run's counter (or with a sibling branch).
+            pharmacyid=f"pt{_PID % 1_000_000}{_seq[0]}"[:15],
             phar="",
-            mobile="0",
+            mobile=f"0{_PID % 1_000_000}{_seq[0]}"[:15],
             pharname=_uniq("branch"),
             is_active=True,
         )

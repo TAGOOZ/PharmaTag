@@ -37,6 +37,7 @@ LEGACY_LEVEL_FLOOR = {
     "journals.manage": 7,  # manual journal entries (S2.2, ticket #17 — ledger area, plan/02 §3 ≥7)
     "receivables.manage": 7,  # settlements سند قبض/سند صرف (S2.4, ticket #19 — ledger area, plan/02 §3 ≥7)
     "months.close": 7,        # month close تقفيل الشهر (S2.6, #21 — ledger area, plan/02 §3 ≥7)
+    "branches.manage": 7,  # branch registry إدارة الفروع (S5.1, #31 — admin area, main-device tier)
     "opening_balances.manage": 7,  # opening balances الأرصدة الافتتاحية (S2.7, #22 — ledger area, plan/02 §3 ≥7)
     "approvals": 5,
     "reports": 9,

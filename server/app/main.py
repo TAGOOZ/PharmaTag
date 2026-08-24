@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from app.auth.router import router as auth_router
 from app.accounts.router import router as accounts_router
+from app.branches.router import router as branches_router
 from app.core.config import settings
 from app.core.db import SessionLocal, engine
 from app.drawer.router import router as drawer_router
@@ -75,6 +76,9 @@ def create_app() -> FastAPI:
     )
     application.include_router(
         users_router, prefix="/api/v1/users", tags=["users"]
+    )
+    application.include_router(
+        branches_router, prefix="/api/v1/branches", tags=["branches"]
     )
     application.include_router(
         sales_router, prefix="/api/v1/sales", tags=["sales"]

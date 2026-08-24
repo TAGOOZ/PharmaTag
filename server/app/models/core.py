@@ -57,6 +57,21 @@ class Branch(Base):
     )
 
 
+class BranchIdentity(Base):
+    """`branch_identities` — alias map from a legacy natural key
+    (table, column, value), e.g. (wzphar, pharmacyid, 'X'), to the one
+    canonical branch id. Keeps ETL/chain replay from duplicating branches."""
+
+    __tablename__ = "branch_identities"
+
+    legacy_table: Mapped[str] = mapped_column(String(50), primary_key=True)
+    legacy_column: Mapped[str] = mapped_column(String(50), primary_key=True)
+    legacy_value: Mapped[str] = mapped_column(String(100), primary_key=True)
+    branch_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("branches.id"), nullable=False
+    )
+
+
 class AuditLog(Base):
     """`audit_log` — one row per audited mutation (G12), written in the same
     transaction as the mutation it records."""

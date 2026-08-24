@@ -136,13 +136,18 @@ async def _make_user(username: str, permission_level: int, branch_id=None, activ
 
 
 async def _make_other_branch() -> int:
-    """Create a throwaway branch (the seed DB has no branch 2) and return its id."""
+    """Create a throwaway branch (the seed DB has no branch 2) and return its id.
+
+    pharmacyid/mobile are pid-namespaced like every other throwaway row here —
+    a crashed run that leaked a branch can never collide with the next run's
+    counter (uq_branches_pharmacyid/mobile are hard unique constraints).
+    """
     _seq[0] += 1
     async with SessionLocal() as session:
         branch = Branch(
-            pharmacyid=f"pt{_seq[0]}",
+            pharmacyid=f"pt{_PID % 1_000_000}{_seq[0]}"[:15],
             phar="",
-            mobile=f"0{_seq[0]}",
+            mobile=f"0{_PID % 1_000_000}{_seq[0]}"[:15],
             pharname=_uniq("branch"),
             is_active=True,
         )

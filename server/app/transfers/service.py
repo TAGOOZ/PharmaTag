@@ -283,6 +283,11 @@ async def dispatch(
         transfer, lines = await get_transfer(session, transfer.id, lock=True)
         if transfer.status != "draft":
             raise BAD_STATE  # re-read post-lock truth
+        # target (and source) may have been deactivated between draft and dispatch
+        for bid in (transfer.source_branch_id, transfer.target_branch_id):
+            b = await session.get(Branch, bid)
+            if b is None or not b.is_active:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "source or target branch is inactive")
 
         per_line: dict[int, list[tstock.Allocation]] = {}
         explicit_ids = set(explicit or {})
@@ -360,6 +365,10 @@ async def receive(
         transfer, lines = await get_transfer(session, transfer.id, lock=True)
         if transfer.status != "dispatched":
             raise BAD_STATE
+        for bid in (transfer.source_branch_id, transfer.target_branch_id):
+            b = await session.get(Branch, bid)
+            if b is None or not b.is_active:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "source or target branch is inactive")
         if set(receipts) != {line.id for line in lines}:
             raise LINE_NOT_COVERED
         for line in lines:

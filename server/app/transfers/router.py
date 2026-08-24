@@ -22,7 +22,6 @@ from app.core.db import get_session
 from app.core.money import dec
 from app.models import Transfer, User
 from app.transfers import service
-from app.transfers.stock import Allocation
 
 router = APIRouter()
 
@@ -126,6 +125,8 @@ async def dispatch_transfer(
     caller: User = Depends(MANAGE_TRANSFERS),
     session: AsyncSession = Depends(get_session),
 ):
+    if body.lines and len(body.lines) != len({e.line_id for e in body.lines}):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "duplicate line_id")
     transfer, _ = await service.get_transfer(session, transfer_id)
     explicit = (
         {
@@ -163,6 +164,8 @@ async def receive_transfer(
     caller: User = Depends(MANAGE_TRANSFERS),
     session: AsyncSession = Depends(get_session),
 ):
+    if len(body.lines) != len({e.line_id for e in body.lines}):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "duplicate line_id")
     transfer, _ = await service.get_transfer(session, transfer_id)
     receipts = {entry.line_id: dec(entry.received_qty) for entry in body.lines}
     lines = await service.receive(

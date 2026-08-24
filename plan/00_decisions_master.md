@@ -170,3 +170,41 @@ external input (data samples / vendor specs).
 - **2026-08-16 — Repo home:** `TAGOOZ/PharmaTag` doubles as the code repo. The `testTLS/` workspace (plans, AGENTS.md, docs, schema drafts, legacy corpus) is its initial commit; `TITAN.W1B.exe` is gitignored (source of truth is `titan_decompile/`). Tickets T01/T04 scaffold the monorepo on top.
 - **2026-08-16 — DB deployment portability:** deployment target is PostgreSQL (self-hosted server OR Supabase — decision deferred). Convex ruled out. Consequence: core schema/migrations stay **portable plain Postgres** — no Supabase-only features (no `auth.uid()` coupling, no RLS-as-the-only guard); branch-scoping + audit enforcement stays in the app layer (plan/01 §5.4). If Supabase is chosen later, RLS/auth become optional add-ons, not prerequisites.- **2026-08-23 — VAT chart presentation (S3.5 #27; informs #44):** the chart keeps ONE `2100` VAT account. The tax summary derives **direction from journal provenance** — source `sale`/`sale_return` legs are ضريبة المخرجات (output), `purchase`/`purchase_return` legs are ضريبة المدخلات (input) — and presents them as separate Form-10-style sections regardless of ledger structure. Rate-level splits come from `invoice_lines.tax_type`, never from the chart. Rationale: Egyptian pharmacy output is mostly exempt, so a chart split buys little while costing a historical-line migration; deriving is reversible (a future split migrates lines by source deterministically). See docs/adr/0001-vat-single-account-derived-direction.md.
 - **2026-08-23 — E-invoice foundations (S4.1 #28; informs #29/#30):** (1) regime routing is per document — retail/customer sales issue **eReceipt v1.2**, credit sales to tax-registered parties issue **B2B eInvoice v1.0 (`i`)**, returns issue receipt `r` or credit note `C` (references original, never exceeds it); أجل is a payment term, not a document type. (2) QR + UUID replicate **ETA's official Integration Toolkit algorithms** in pure Python with golden-fixture contract tests against the preprod toolkit — Egypt is NOT ZATCA-TLV; the consumer QR links to the ETA verification page and the receipt UUID is SHA-256 over the canonical base structure **+ previousUUID**. (3) The chain is **per POS device**: `einvoice_counters` keys `(branch_id, kind)` + nullable `device_serial` now so S5.1 multi-device needs no migration; monotonic, gapless, never reset in fiscal year (A15 stands). (4) Offline rides the legal **24-hour submission window**: G12 outbox atomicity + pending→submitted→accepted|rejected|failed backoff, STRICT counters per A09; tables mirror to the SQLite twin. (5) S4.1 ships print templates only (ضريبية/مبسطة/أجل/مرتجع, QR as data-URI); payload JSON is S4.2/S4.3. Receipt `contractor` field kept (insurer-pays-part) as the future insurance seam (#48); T1–T20/subtype mapping becomes a tested table in S4.2 (wrong tax codes = #1 ETA rejection reason). See docs/adr/0002-einvoice-foundations-regime-routing-toolkit-qr-device-chain.md.
+
+---
+
+## Ticket #32 decision note (2026-08-24, appended — no history rewrite)
+
+**S5.2 Inter-pharmacy transfers — implementation decisions** (research: titaninn/delivery.phy
+p-code archaeology + Egypt pharmacy-chain ERP market scan):
+
+* **T1 — Core shipping (ADR-0002 precedent).** `transfers`/`transfer_lines` DDL ships in
+core alembic rev `027_transfers` (public schema; SQLite twin mirrored); parity guard's
+PLUGIN_TABLES skip-list updated with justification. The pharmatag-chain plugin scaffold +
+real per-plugin schema/migration machinery is deferred until a second plugin needs it —
+building a plugin-migration runner for one table is YAGNI; legacy `itemsasstring` is DEAD
+code in the binary (0 p-code refs — validated decoder), so `transfer_lines` is designed
+fresh, not inherited.
+* **T2 — State machine** `draft → dispatched → received`, `cancelled` reachable only from
+draft. delivery.phy (55 B, UNKNOWN_LAYOUT, likely driver-jobs data — not transfer state)
+is NOT mapped to transfer status; legacy_import keeps its placeholder honest. Dispatch =
+source stock decrement with explicit batch allocations (FEFO suggested, server-validated
+under `FOR UPDATE`); receive = per-line `received_qty <= sent_qty`, target batches created
+with cost/expire preserved verbatim (EDA traceability), shortfall auto-restored to source
+stock with audit action `transfer_shortage_return` (the "driver returns it" default;
+a true shrinkage-write-off flow is a future correction-request variant).
+* **T3 — No GL posting in S5.2.** Quantities move; stock VALUE stays on the source book.
+Per-branch COAs make a single mixed-branch journal impossible and a transit-account design
+is unsettled — inter-branch accounting is deferred to a dedicated ledger decision
+(revisit trigger: first chain customer reconciling per-branch ميزان stock values).
+* **T4 — Provenance in stock_batches** (wzgard philosophy): dispatch writes `transfer_out`
+movement rows, receive writes `transfer_in` rows, both with `oldstock` snapshots; no third
+table; replays reproduce exact batches/costs (patterns.md rule).
+* **T5 — Numbering:** per-SOURCE-branch monotonic `transfer_no`, advisory-lock assigned,
+`UNIQUE(source_branch_id, transfer_no)` (G07 pattern); `legacy_fatid` nullable passthrough
+for ETL idempotency.
+* **T6 — Permissions:** new `transfers.manage` seeded to admin/pharmacist/manager,
+legacy floor 3 (stock area, matches stock.adjust/drugs.manage).
+* **T7 — Transition authority:** dispatch requires caller branch == source_branch_id;
+receive requires caller branch == target_branch_id (self-receive prevented); cancels
+draft-only, any managing party of either branch.

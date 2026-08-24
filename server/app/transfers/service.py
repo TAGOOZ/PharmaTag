@@ -210,6 +210,12 @@ async def _record(
         )
 
 
+FATID_CONFLICT = HTTPException(
+    status.HTTP_409_CONFLICT,
+    "legacy_fatid already used by a transfer to a different target",
+)
+
+
 async def create_draft(
     session: AsyncSession,
     *,
@@ -218,7 +224,19 @@ async def create_draft(
     lines: list[dict],
     legacy_fatid: Optional[str] = None,
     note: str = "",
-) -> tuple[Transfer, list[TransferLine]]:
+) -> tuple[Transfer, list[TransferLine], bool]:
+    """Create a draft; returns `(transfer, lines, replayed)`.
+
+    ETL idempotency (#56): when `legacy_fatid` is set, a re-import of the
+    same FAT row converges instead of minting a second transfer (whose
+    dispatch would double-move stock). Checked AFTER the per-source advisory
+    lock so even racing creates see each other:
+
+    * same (source, fatid) already exists for this target → return the
+      EXISTING transfer with `replayed=True`, whatever its status;
+    * same fatid bound to a DIFFERENT target → `FATID_CONFLICT` (409);
+    * NULL fatid rows are exempt from all of this.
+    """
     if caller.branch_id is None:
         raise FORBIDDEN_BRANCH
     if int(target_branch_id) == int(caller.branch_id):
@@ -251,6 +269,25 @@ async def create_draft(
             )
 
         await acquire_branch_lock(session, caller.branch_id)
+
+        # ETL idempotency (#56): after the lock, so a racing re-import
+        # observes the first create committed and replays it instead of
+        # colliding on the partial unique index with a 500.
+        if legacy_fatid is not None:
+            existing = (
+                await session.execute(
+                    select(Transfer).where(
+                        Transfer.source_branch_id == caller.branch_id,
+                        Transfer.legacy_fatid == legacy_fatid,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                if int(existing.target_branch_id) != int(target_branch_id):
+                    raise FATID_CONFLICT
+                _, existing_lines = await get_transfer(session, existing.id)
+                return existing, existing_lines, True
+
         transfer = Transfer(
             source_branch_id=caller.branch_id,
             target_branch_id=target_branch_id,
@@ -281,7 +318,7 @@ async def create_draft(
             old_status=None,
             action=ACTION_INSERT,
         )
-        return transfer, created
+        return transfer, created, False
 
 
 async def dispatch(

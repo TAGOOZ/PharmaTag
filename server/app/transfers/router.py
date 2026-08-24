@@ -11,7 +11,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,10 +47,23 @@ class CreateTransferRequest(BaseModel):
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_transfer(
     body: CreateTransferRequest,
+    response: Response,
     caller: User = Depends(MANAGE_TRANSFERS),
     session: AsyncSession = Depends(get_session),
 ):
-    transfer, lines = await service.create_draft(
+    """Create a transfer draft (201) or replay an existing one (200).
+
+    Idempotent ETL contract (#56): when `legacy_fatid` is provided, a
+    re-import of the same legacy FAT row converges instead of minting a
+    second transfer:
+
+    * same (source, fatid, target) → the EXISTING transfer is returned with
+      **200** and its current body, whatever its status;
+    * same fatid bound to a DIFFERENT target branch → **409** conflict;
+    * different source branches may reuse one fatid freely;
+    * omitted/null fatid → plain create (201), unlimited drafts.
+    """
+    transfer, lines, replayed = await service.create_draft(
         session,
         caller=caller,
         target_branch_id=body.target_branch_id,
@@ -58,6 +71,8 @@ async def create_transfer(
         legacy_fatid=body.legacy_fatid,
         note=body.note,
     )
+    if replayed:
+        response.status_code = status.HTTP_200_OK
     return service.public_transfer(transfer, lines)
 
 

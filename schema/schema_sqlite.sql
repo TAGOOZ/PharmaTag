@@ -868,4 +868,10 @@ CREATE TABLE transfer_lines (
 
 CREATE INDEX ix_transfer_lines_transfer ON transfer_lines (transfer_id);
 
+-- rev 028 (#56): legacy_fatid ETL idempotency — one transfer per
+-- (source_branch_id, legacy_fatid); NULL fatid drafts are exempt.
+CREATE UNIQUE INDEX uq_transfers_source_fatid
+    ON transfers (source_branch_id, legacy_fatid)
+    WHERE legacy_fatid IS NOT NULL;
+
 COMMIT;

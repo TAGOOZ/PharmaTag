@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import select, text
 
 from app.core.db import SessionLocal
-from app.models import BranchStock, StockBatch, user_roles_table
+from app.models import Branch, BranchStock, StockBatch, user_roles_table
 
 from tests import transfers_test_utils as u
 
@@ -386,3 +386,91 @@ async def test_concurrent_receive_same_randomid_merges_into_one_row(world):
     assert len(landed) == 1, "same-randomid receives must merge into ONE row"
     assert float(landed[0].qty) == 12.0
     assert float(await u._stock_qty(world["tgt"], world["drug_a"])) == 12.0
+
+
+# ---------- VA-9: inactive SOURCE branch cannot create drafts ----------
+
+async def test_inactive_source_branch_cannot_create_draft(world):
+    client = world["client"]
+    async with SessionLocal() as s:
+        src = await s.get(Branch, world["src"])
+        src.is_active = False
+        await s.commit()
+    r = await client.post(
+        "/api/v1/transfers",
+        headers=u._headers(world["src_token"]),
+        json={
+            "target_branch_id": world["tgt"],
+            "lines": [{"drug_id": world["drug_a"], "qty": "1"}],
+        },
+    )
+    assert r.status_code == 400 and "inactive" in r.json()["detail"]
+
+
+# ---------- CC-3: opposite-order multi-line dispatches never deadlock ----------
+
+async def test_concurrent_opposite_order_multiline_dispatch(world):
+    """Two same-source transfers whose lines were created in opposite drug
+    order must both dispatch: lock order is deterministic (sorted by drug_id),
+    so the second waits instead of cross-locking."""
+    client = world["client"]
+    drug_b = await u._make_drug_with_stock(
+        branch_id=world["src"], stock_qty="10", batches=[("10", "8", "2027-09-01")]
+    )
+    world["_drug_ids"].append(drug_b)
+
+    drafts = []
+    for order in [(world["drug_a"], drug_b), (drug_b, world["drug_a"])]:
+        r = await client.post(
+            "/api/v1/transfers",
+            headers=u._headers(world["src_token"]),
+            json={
+                "target_branch_id": world["tgt"],
+                "lines": [
+                    {"drug_id": d, "qty": "2" if d == world["drug_a"] else "3"}
+                    for d in order
+                ],
+            },
+        )
+        assert r.status_code == 201, r.text
+        drafts.append(r.json())
+        world["_transfer_ids"].append(r.json()["id"])
+    # line ids really are in opposite drug order across the two transfers
+    order_1 = [ln["drug_id"] for ln in sorted(drafts[0]["lines"], key=lambda l: l["id"])]
+    order_2 = [ln["drug_id"] for ln in sorted(drafts[1]["lines"], key=lambda l: l["id"])]
+    assert order_1 != order_2
+
+    results = await asyncio.gather(*[
+        client.post(
+            f"/api/v1/transfers/{d['id']}/dispatch",
+            headers=u._headers(world["src_token"]),
+            json={},
+        )
+        for d in drafts
+    ])
+    assert all(r.status_code == 200 for r in results), [r.text for r in results]
+    assert await u._stock_qty(world["src"], world["drug_a"]) == 16
+    assert await u._stock_qty(world["src"], drug_b) == 4
+
+
+# ---------- RB-4: level-2 on own branch can READ (writes stay blocked) ----------
+
+async def test_level2_own_branch_reads_allowed_writes_blocked(world):
+    client = world["client"]
+    name = u._uniq("l2reader")
+    uid = await u._make_user(name, level=2, branch_id=world["src"])
+    world["_user_ids"].append(uid)
+    tok = await u._login_token(client, name)
+    tid = (await _draft(world))["id"]
+
+    r = await client.get("/api/v1/transfers", headers=u._headers(tok))
+    assert r.status_code == 200
+    assert len(r.json()["transfers"]) == 1
+
+    r = await client.get(f"/api/v1/transfers/{tid}", headers=u._headers(tok))
+    assert r.status_code == 200
+
+    r = await client.post(
+        f"/api/v1/transfers/{tid}/dispatch", headers=u._headers(tok), json={}
+    )
+    assert r.status_code == 403

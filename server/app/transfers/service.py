@@ -230,6 +230,11 @@ async def create_draft(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "qty must be positive")
 
     async with atomic(session):
+        source = await session.get(Branch, caller.branch_id)
+        if source is None or not source.is_active:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "source branch is inactive"
+            )
         target = await session.get(Branch, target_branch_id)
         if target is None or not target.is_active:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "target branch not found")
@@ -311,7 +316,11 @@ async def dispatch(
         if explicit is not None and (explicit_ids - line_ids or not explicit_ids):
             # a typo'd id must never silently fall back to full-FEFO
             raise LINE_NOT_COVERED
-        for line in lines:
+        # deterministic lock order: two same-source transfers whose lines were
+        # created in opposite drug order would otherwise lock BranchStock rows
+        # in opposite sequence and can deadlock under concurrency
+        ordered = sorted(lines, key=lambda l: l.drug_id)
+        for line in ordered:
             takes = (explicit or {}).get(line.id)
             if takes is None:
                 allocations = await tstock.suggest_fefo(
@@ -335,8 +344,8 @@ async def dispatch(
                     )
             per_line[line.id] = allocations
 
-        # apply only after every line validated
-        for line in lines:
+        # apply only after every line validated (same deterministic order)
+        for line in ordered:
             await tstock.dispatch_line(
                 session,
                 source_branch_id=transfer.source_branch_id,

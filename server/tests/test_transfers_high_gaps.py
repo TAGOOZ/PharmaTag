@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.core.db import SessionLocal
-from app.models import AuditLog, BranchStock, Journal, StockBatch, SyncLog
+from app.models import AuditLog, Balance, BranchStock, DrawerMovement, Journal, JournalLine, StockBatch, SyncLog
 
 from tests import transfers_test_utils as u
 
@@ -227,6 +227,16 @@ async def test_concurrent_drafts_number_monotonically_per_source(world):
 
 async def test_no_journals_through_full_transfer_flow(world):
     client = world["client"]
+
+    async def _counts(s):
+        tables = (Journal, JournalLine, DrawerMovement, Balance)
+        return [
+            (await s.execute(select(func.count()).select_from(t))).scalar_one()
+            for t in tables
+        ]
+
+    async with SessionLocal() as s:
+        before = await _counts(s)
     r = await client.post(
         "/api/v1/transfers",
         headers=u._headers(world["src_token"]),
@@ -249,7 +259,11 @@ async def test_no_journals_through_full_transfer_flow(world):
         json={"lines": [{"line_id": line_id, "received_qty": "3"}]},
     )
     async with SessionLocal() as s:
-        assert (await s.execute(select(func.count()).select_from(Journal))).scalar_one() == 0
+        after = await _counts(s)
+        # T3 no-GL: no journal header/line, drawer movement, or balance row may
+        # be created by any transfer transition (balances may pre-exist as
+        # seed data — the invariant is a ZERO DELTA)
+        assert after == before
 
 
 # ---------- SM-4 cancel vs dispatch race ----------

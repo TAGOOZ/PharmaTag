@@ -75,9 +75,18 @@ async def next_transfer_no(session: AsyncSession, source_branch_id: int) -> str:
 
 
 async def get_transfer(
-    session: AsyncSession, transfer_id: int
+    session: AsyncSession, transfer_id: int, *, lock: bool = False
 ) -> tuple[Transfer, list[TransferLine]]:
-    transfer = await session.get(Transfer, transfer_id)
+    query = select(Transfer).where(Transfer.id == transfer_id)
+    if lock:
+        # serialize concurrent transitions of ONE transfer (double-click /
+        # client retry): the second transaction blocks here until the first
+        # commits, then its status re-check sees the new state → 409.
+        # populate_existing: the router already loaded this row UNLOCKED into
+        # the identity map — without this the ORM hands back the stale
+        # pre-lock attributes and the status guard passes twice.
+        query = query.with_for_update().execution_options(populate_existing=True)
+    transfer = (await session.execute(query)).scalar_one_or_none()
     if transfer is None:
         raise NOT_FOUND
     lines = (
@@ -271,11 +280,16 @@ async def dispatch(
     old_status = transfer.status
 
     async with atomic(session):
-        transfer, lines = await get_transfer(session, transfer.id)
+        transfer, lines = await get_transfer(session, transfer.id, lock=True)
         if transfer.status != "draft":
             raise BAD_STATE  # re-read post-lock truth
 
         per_line: dict[int, list[tstock.Allocation]] = {}
+        explicit_ids = set(explicit or {})
+        line_ids = {line.id for line in lines}
+        if explicit is not None and (explicit_ids - line_ids or not explicit_ids):
+            # a typo'd id must never silently fall back to full-FEFO
+            raise LINE_NOT_COVERED
         for line in lines:
             takes = (explicit or {}).get(line.id)
             if takes is None:
@@ -343,14 +357,19 @@ async def receive(
     old_status = transfer.status
 
     async with atomic(session):
-        transfer, lines = await get_transfer(session, transfer.id)
+        transfer, lines = await get_transfer(session, transfer.id, lock=True)
         if transfer.status != "dispatched":
             raise BAD_STATE
         if set(receipts) != {line.id for line in lines}:
             raise LINE_NOT_COVERED
         for line in lines:
             qty = receipts[line.id]
-            if qty < 0 or qty > dec(line.sent_qty):
+            if qty < 0:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "received_qty must not be negative",
+                )
+            if qty > dec(line.sent_qty):
                 raise RECEIVE_TOO_MUCH
 
         for line in lines:
@@ -391,7 +410,7 @@ async def cancel(session: AsyncSession, *, caller: User, transfer: Transfer) -> 
     old_status = transfer.status
 
     async with atomic(session):
-        transfer, lines = await get_transfer(session, transfer.id)
+        transfer, lines = await get_transfer(session, transfer.id, lock=True)
         if transfer.status != "draft":
             raise BAD_STATE
         transfer.status = "cancelled"

@@ -221,6 +221,19 @@ async def validate_explicit(
     (server-validated explicit dispatch — never trust the payload blindly).
     """
     total = sum((qty for _, qty in takes), Decimal("0"))
+    seen: set[int] = set()
+    for batch_id, qty in takes:
+        # a non-positive take would mint phantom units on a batch (e.g.
+        # [(real, +20), (empty, -10)] sums correctly but fabricates stock)
+        if qty <= 0:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "allocation qty must be positive"
+            )
+        if batch_id in seen:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "duplicate batch allocation"
+            )
+        seen.add(batch_id)
     branch = (
         await session.execute(
             select(BranchStock)

@@ -8,6 +8,7 @@ caller's branch participates in.
 """
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -31,8 +32,10 @@ NOT_FOUND = HTTPException(status.HTTP_404_NOT_FOUND, "transfer not found")
 
 
 class DraftLine(BaseModel):
-    drug_id: int
-    qty: str = Field(min_length=1)
+    drug_id: int = Field(gt=0)
+    # typed at the boundary (purchases pattern): "abc"/"NaN" die here with a
+    # clean 400 via the app-wide RequestValidationError handler, never a 500
+    qty: Decimal = Field(gt=0, max_digits=18, decimal_places=4)
 
 
 class CreateTransferRequest(BaseModel):
@@ -100,8 +103,8 @@ async def get_transfer(
 
 
 class BatchTake(BaseModel):
-    batch_id: int
-    qty: str = Field(min_length=1)
+    batch_id: int = Field(gt=0)
+    qty: Decimal = Field(gt=0, max_digits=18, decimal_places=4)
 
 
 class DispatchLine(BaseModel):
@@ -144,7 +147,9 @@ async def dispatch_transfer(
 
 class ReceiveLine(BaseModel):
     line_id: int
-    received_qty: str = Field(min_length=1)
+    # ge=0 on purpose: a fully-lost shipment receives zero and everything
+    # auto-returns to the source; the ≤ sent_qty ceiling stays in the service
+    received_qty: Decimal = Field(ge=0, max_digits=18, decimal_places=4)
 
 
 class ReceiveRequest(BaseModel):

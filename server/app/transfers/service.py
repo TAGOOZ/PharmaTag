@@ -31,6 +31,7 @@ from app.transfers import stock as tstock
 
 ENTITY = "transfer"
 _LOCK_NAMESPACE = "pharmatag:branch-transfers"
+_RECEIVE_LOCK_NAMESPACE = "pharmatag:transfer-receive"
 
 
 def _qty4(value) -> str:
@@ -60,6 +61,21 @@ async def acquire_branch_lock(session: AsyncSession, branch_id: int) -> None:
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:ns), :branch_id)"),
         {"ns": _LOCK_NAMESPACE, "branch_id": branch_id},
+    )
+
+
+async def acquire_receive_lock(session: AsyncSession, target_branch_id: int) -> None:
+    """Serialize stock-landing receives for a TARGET branch (int8 advisory).
+
+    receive_line merges into an existing target batch by `randomid`
+    (select-then-insert) and may create a missing `BranchStock` row —
+    both are check-then-act on a gap `FOR UPDATE` cannot lock. Holding
+    one advisory lock per receiving branch makes the second concurrent
+    receive wait, so the merge/creation sees the first commit.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:ns), :branch_id)"),
+        {"ns": _RECEIVE_LOCK_NAMESPACE, "branch_id": target_branch_id},
     )
 
 
@@ -355,16 +371,17 @@ async def receive(
 ) -> list[TransferLine]:
     """dispatched → received: per-line received_qty ≤ sent_qty; shortfall
     auto-returns to the source batches."""
-    if transfer.status != "dispatched":
-        raise BAD_STATE
     if caller.branch_id is None or caller.branch_id != transfer.target_branch_id:
         raise FORBIDDEN_BRANCH
+    if transfer.status != "dispatched":
+        raise BAD_STATE
     old_status = transfer.status
 
     async with atomic(session):
         transfer, lines = await get_transfer(session, transfer.id, lock=True)
         if transfer.status != "dispatched":
             raise BAD_STATE
+        await acquire_receive_lock(session, transfer.target_branch_id)
         for bid in (transfer.source_branch_id, transfer.target_branch_id):
             b = await session.get(Branch, bid)
             if b is None or not b.is_active:

@@ -40,7 +40,7 @@ _CORE_ENUMS = [
     "journal_source", "account_type", "party_kind",
 ]
 
-EXPECTED_TABLES = {  # == the SQLite twin's CREATE TABLE set (46 core + host)
+EXPECTED_TABLES = {  # == the SQLite twin's CREATE TABLE set (49 core + host)
     "accounts", "app_config", "app_plugins", "audit_log", "balances",
     "branch_identities", "branch_stock", "branches", "daily_close",
     "drawer_movements", "drug_barcodes", "drug_costs", "drugs",
@@ -51,6 +51,7 @@ EXPECTED_TABLES = {  # == the SQLite twin's CREATE TABLE set (46 core + host)
     "payment_splits", "permissions", "plugin_branch_grants",
     "plugin_dependencies", "plugin_settings", "price_change_log",
     "print_jobs", "report_catalog", "role_permissions", "roles",
+    "needs", "purchase_order_lines", "purchase_orders",
     "settlement_vouchers", "shifts", "shortage_flags", "stock_batches",
     "stock_correction_requests", "sync_log", "transfer_lines", "transfers",
     "unit_conversions", "user_roles",
@@ -63,13 +64,14 @@ EXPECTED_COUNTS = {
     "branches": 1,
     "users": 1,
     "roles": 5,
-    "permissions": 24,           # 16 seeded + drugs.manage (rev 005) +
+    "permissions": 25,           # 16 seeded + drugs.manage (rev 005) +
                                  # accounts.manage (rev 009) + journals.manage (rev 011) +
                                  # receivables.manage (rev 012) + months.close (rev 013) +
                                  # opening_balances.manage (rev 014) +
                                  # branches.manage (rev 026) +
-                                 # transfers.manage (rev 027)
-    "role_permissions": 46,      # admin->all 16 + manager 6 + accountant 2 +
+                                 # transfers.manage (rev 027) +
+                                 # needs.manage (rev 031)
+    "role_permissions": 49,      # admin->all 16 + manager 6 + accountant 2 +
                                  # pharmacist 1 + cashier 1 + 005 admin grant +
                                  # 009 admin + accountant accounts.manage grants +
                                  # 011 journals.manage grants to roles 1, 4, 5 +
@@ -77,7 +79,8 @@ EXPECTED_COUNTS = {
                                  # 013 months.close grants to roles 1, 4, 5 +
                                  # 014 opening_balances.manage grants to roles 1, 4, 5 +
                                  # 026 branches.manage grants to roles 1, 5 +
-                                 # 027 transfers.manage grants to roles 1, 2, 5
+                                 # 027 transfers.manage grants to roles 1, 2, 5 +
+                                 # 031 needs.manage grants to roles 1, 2, 5
     "user_roles": 1,
     "accounts": 23,              # 12 seeded + 11 rev-009 tree nodes
     "app_plugins": 2,

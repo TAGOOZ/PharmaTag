@@ -38,6 +38,8 @@ from app.core.db import atomic
 from app.einvoicing.service import apply_einvoice_block
 from app.models import BranchStock, Drug, EInvoiceLog, Invoice, SyncLog
 from app.sales.numbering import acquire_branch_lock
+from app.needs.replay import apply_need_versioned
+from app.purchase_orders.replay import apply_po_versioned
 from app.transfers.replay import apply_transfer_versioned
 
 
@@ -149,7 +151,9 @@ async def replay_pending(
                 select(SyncLog)
                 .where(
                     SyncLog.branch_id == branch_id,
-                    SyncLog.entity.in_(("invoice", "branch_stock", "transfer")),
+                    SyncLog.entity.in_(
+                    ("invoice", "branch_stock", "transfer", "need", "purchase_order")
+                ),
                     SyncLog.status == "pending",
                 )
                 .order_by(SyncLog.id)
@@ -216,6 +220,40 @@ async def replay_pending(
                         {
                             "id": row.id,
                             "entity": "transfer",
+                            "entity_id": row.entity_id,
+                            "error": failure,
+                        }
+                    )
+                continue
+
+            if row.entity in ("need", "purchase_order"):
+                # VERSIONED verbatim state restore (#33): needs/POs are
+                # non-money records; the rev watermark orders stale/dupes.
+                try:
+                    async with session.begin_nested():
+                        if row.entity == "need":
+                            outcome = await apply_need_versioned(
+                                session, payload=payload, user_id=user_id
+                            )
+                        else:
+                            outcome = await apply_po_versioned(
+                                session, payload=payload, user_id=user_id
+                            )
+                    row.status = "applied"
+                    row.synced_at = datetime.now(timezone.utc)
+                    summary["applied" if outcome == "applied" else "skipped"] += 1
+                except Exception as exc:
+                    failure = (
+                        exc.detail
+                        if isinstance(exc, HTTPException)
+                        else f"{type(exc).__name__}: {exc}"
+                    )
+                    row.payload = {**payload, "failure": str(failure)}
+                    summary["failed"] += 1
+                    summary["failures"].append(
+                        {
+                            "id": row.id,
+                            "entity": row.entity,
                             "entity_id": row.entity_id,
                             "error": failure,
                         }

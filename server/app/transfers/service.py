@@ -550,6 +550,21 @@ async def receive(
             old_status=old_status,
             action=ACTION_UPDATE,
         )
+        # S5.3 (#33): any needs linked to this transfer auto-fulfill in the SAME
+        # transaction (G12). Lazy import — app.needs imports this module's
+        # create_draft for the handoff, so a top-level import would cycle.
+        from app.needs.service import fulfill_needs_for_transfer
+
+        full_delivery = all(
+            receipts[line.id] == dec(line.sent_qty)
+            for line in lines
+        )
+        await fulfill_needs_for_transfer(
+            session,
+            caller_id=caller.id,
+            transfer=transfer,
+            full_delivery=full_delivery,
+        )
         return lines
 
 

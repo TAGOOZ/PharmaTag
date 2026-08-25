@@ -36,6 +36,7 @@ from app.models.base import (
     tax_type_enum,
     user_roles_table,
 )
+from app.models.chain import Need, PurchaseOrder, PurchaseOrderLine
 from app.models.core import AppConfig, AuditLog, Branch, BranchIdentity, SyncLog
 from app.models.drawer import DailyClose, DrawerMovement
 from app.models.einvoicing import EInvoiceCounter, EInvoiceLog
@@ -61,6 +62,7 @@ __all__ = [
     "DailyClose",
     "DrawerMovement",
     "MonthOpenBalance",
+    "Need",
     "MonthlyClose",
     "Drug",
     "DrugBarcode",
@@ -76,6 +78,8 @@ __all__ = [
     "PaymentSplit",
     "Permission",
     "PrintJob",
+    "PurchaseOrder",
+    "PurchaseOrderLine",
     "PluginBranchGrant",
     "PluginDependencyRow",
     "PluginSettings",

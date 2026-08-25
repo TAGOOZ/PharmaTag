@@ -103,7 +103,7 @@ CREATE TABLE drugs (
     vat          INTEGER NOT NULL DEFAULT 0,                    -- rate ×100
     units        INTEGER NOT NULL DEFAULT 0,
     unitsmall    INTEGER NOT NULL DEFAULT 0,
-    price        INTEGER DEFAULT 0,                             -- ×10000
+    price        INTEGER DEFAULT 0 CHECK (price >= 0),          -- ×10000 (#57: ck_drugs_prices_nonneg twin)
     price_now    INTEGER DEFAULT 0,
     disco        INTEGER DEFAULT 0,                             -- rate ×100
     pricechanged INTEGER DEFAULT 0,
@@ -111,6 +111,7 @@ CREATE TABLE drugs (
     titanid      INTEGER DEFAULT 0,
     history      TEXT DEFAULT '',
     active       INTEGER NOT NULL DEFAULT 1,
+    egs_code     TEXT,                                          -- ETA EGS code (#30; nullable until registered)
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
     lastedit     TEXT
@@ -188,7 +189,7 @@ CREATE TABLE stock_batches (
     branch_id    INTEGER NOT NULL REFERENCES branches(id),
     drug_id      INTEGER NOT NULL REFERENCES drugs(id),
     randomid     TEXT NOT NULL,
-    qty          INTEGER NOT NULL DEFAULT 0,                     -- ×10000
+    qty          INTEGER NOT NULL DEFAULT 0 CONSTRAINT ck_stock_batches_qty_nonneg CHECK (qty >= 0),  -- ×10000 (#57)
     expire       TEXT,
     cost         INTEGER NOT NULL DEFAULT 0,                     -- ×10000
     vat          INTEGER NOT NULL DEFAULT 0,                     -- rate ×100
@@ -405,7 +406,7 @@ CREATE TABLE daily_close (
 CREATE TABLE branch_stock (
     branch_id INTEGER NOT NULL REFERENCES branches(id),
     drug_id   INTEGER NOT NULL REFERENCES drugs(id),
-    qty       INTEGER NOT NULL DEFAULT 0,                        -- ×10000
+    qty       INTEGER NOT NULL DEFAULT 0 CONSTRAINT ck_branch_stock_qty_nonneg CHECK (qty >= 0),  -- ×10000 (#57)
     minimum   INTEGER NOT NULL DEFAULT 0,
     silsilaid TEXT DEFAULT '',
     classy    TEXT DEFAULT '',
@@ -530,7 +531,25 @@ CREATE TABLE manual_journal_entries (
     amount      INTEGER NOT NULL DEFAULT 0,                      -- ×100
     source_file TEXT DEFAULT 'daily-manual.phy',
     journal_id  INTEGER REFERENCES journals(id),
+    reverses_entry_id INTEGER REFERENCES manual_journal_entries(id),
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE settlement_vouchers (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch_id   INTEGER NOT NULL REFERENCES branches(id),
+    voucher_no  INTEGER NOT NULL,
+    voucher_type TEXT NOT NULL CHECK (voucher_type IN ('receipt','payment')),
+    party_id    INTEGER NOT NULL REFERENCES parties(id),
+    datee       TEXT NOT NULL,
+    method      TEXT NOT NULL CHECK (method IN ('cash','network')),
+    amount      INTEGER NOT NULL DEFAULT 0 CHECK (amount > 0),   -- ×100
+    journal_id  INTEGER NOT NULL REFERENCES journals(id),
+    description TEXT DEFAULT '',
+    reverses_voucher_id INTEGER REFERENCES settlement_vouchers(id),
+    created_by  INTEGER REFERENCES users(id),
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (branch_id, voucher_no)
 );
 
 CREATE TABLE app_config (
@@ -630,20 +649,40 @@ VALUES ('admin', 'Administrator', 'changeme', 9, 1, 1);
 INSERT INTO user_roles (user_id, role_id)
 SELECT u.id, r.id FROM users u, roles r WHERE u.username = 'admin' AND r.name = 'admin';
 
--- default chart of accounts (per-branch template)
-INSERT INTO accounts (branch_id, code, name_ar, type, is_active) VALUES
-    (1, '1000', 'اصول.متداولة.خزينة/درج', 'asset', 1),
-    (1, '1100', 'اصول.متداولة.عملاء', 'asset', 1),
-    (1, '1200', 'اصول.متداولة.مخزون', 'asset', 1),
-    (1, '1300', 'اصول.ثابتة', 'asset', 1),
-    (1, '2000', 'خصوم.متداولة.موردين', 'liability', 1),
-    (1, '2100', 'خصوم.ضريبة.مبيعات', 'liability', 1),
-    (1, '2110', 'خصوم.ضريبة.مشتريات', 'liability', 1),
-    (1, '3000', 'حقوق ملكية.راس المال', 'equity', 1),
-    (1, '4000', 'ايرادات.مبيعات', 'income', 1),
-    (1, '5000', 'مصروفات', 'expense', 1),
-    (1, '5900', 'مصروفات.جرد وتعديل الارصدة', 'expense', 1),
-    (1, '6000', 'تكلفة المبيعات', 'expense', 1);
+-- default chart of accounts (per-branch template; rev 009 hierarchical legacy tree)
+INSERT INTO accounts (branch_id, code, name_ar, name_en, type, is_active) VALUES
+    (1, '100',  'اصول',                          'Assets',                'asset', 1),
+    (1, '110',  'اصول.متداولة',                  'Current Assets',        'asset', 1),
+    (1, '200',  'خصوم',                          'Liabilities',           'liability', 1),
+    (1, '210',  'خصوم.متداولة',                  'Current Liabilities',   'liability', 1),
+    (1, '220',  'خصوم.ثابتة',                    'Fixed Liabilities',     'liability', 1),
+    (1, '300',  'حقوق ملكية',                    'Equity',                'equity', 1),
+    (1, '400',  'ايرادات',                       'Revenue',               'income', 1),
+    (1, '500',  'مصروفات',                       'Expenses',              'expense', 1),
+    (1, '1000', 'اصول.متداولة.خزينة/درج',       'Cash Drawer',           'asset', 1),
+    (1, '1001', 'اصول.متداولة.نقدية.شبكة',      'Network Cash',          'asset', 1),
+    (1, '1010', 'اصول.متداولة.بنوك',            'Banks',                 'asset', 1),
+    (1, '1100', 'اصول.متداولة.عملاء',           'Customers (AR)',        'asset', 1),
+    (1, '1110', 'اصول.متداولة.ضريبة.قيمة مضافة','Input VAT',             'asset', 1),
+    (1, '1200', 'اصول.متداولة.مخزون',           'Inventory',             'asset', 1),
+    (1, '1300', 'اصول.ثابتة',                   'Fixed Assets',          'asset', 1),
+    (1, '2000', 'خصوم.متداولة.موردين',          'Suppliers (AP)',        'liability', 1),
+    (1, '2100', 'خصوم.ضريبة.مبيعات',            'Output VAT (Sales)',    'liability', 1),
+    (1, '2110', 'خصوم.ضريبة.مشتريات',           'Output VAT (Purchases)','liability', 1),
+    (1, '3000', 'حقوق ملكية.راس المال',         'Capital',               'equity', 1),
+    (1, '4000', 'ايرادات.مبيعات',               'Sales Revenue',         'income', 1),
+    (1, '5000', 'مصروفات',                      'Expenses',              'expense', 1),
+    (1, '5900', 'مصروفات.جرد وتعديل الارصدة',  'Stock Corrections',     'expense', 1),
+    (1, '6000', 'تكلفة المبيعات',               'Cost of Goods Sold',    'expense', 1);
+
+-- parent wiring by code (rev 009)
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '100') WHERE branch_id = 1 AND code IN ('110','1300');
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '110') WHERE branch_id = 1 AND code IN ('1000','1001','1010','1100','1110','1200');
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '200') WHERE branch_id = 1 AND code IN ('210','220');
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '210') WHERE branch_id = 1 AND code IN ('2000','2100','2110');
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '300') WHERE branch_id = 1 AND code = '3000';
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '400') WHERE branch_id = 1 AND code = '4000';
+UPDATE accounts SET parent_id = (SELECT id FROM accounts p WHERE p.branch_id = 1 AND p.code = '500') WHERE branch_id = 1 AND code IN ('5000','5900','6000');
 
 -- pilot plugins registered (A10), disabled until the plugin ships
 INSERT INTO app_plugins (slug, name_ar, name_en, version, core_requires, sdk_version, status)
@@ -669,5 +708,236 @@ UPDATE drugs SET price_wholesale = price WHERE price_wholesale = 0;
 INSERT INTO permissions (code, name_ar) VALUES ('drugs.manage', 'الأصناف والمخزون');
 INSERT INTO role_permissions (role_id, permission_id)
     SELECT 1, id FROM permissions WHERE code = 'drugs.manage';
+
+-- rev 009: accounts.manage gates chart-of-accounts writes (admin + accountant).
+INSERT INTO permissions (code, name_ar) VALUES ('accounts.manage', 'إدارة شجرة الحسابات');
+INSERT INTO role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM roles r, permissions p
+    WHERE p.code = 'accounts.manage' AND r.id IN (1, 4);
+
+-- rev 011: journals.manage gates manual-journal posting (admin + accountant + manager).
+INSERT INTO permissions (code, name_ar) VALUES ('journals.manage', 'ترحيل قيود يومية');
+INSERT INTO role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM roles r, permissions p
+    WHERE p.code = 'journals.manage' AND r.id IN (1, 4, 5);
+
+-- rev 012: receivables.manage gates settlements (admin + accountant + manager).
+INSERT INTO permissions (code, name_ar) VALUES ('receivables.manage', 'تحصيل وسداد الآجل');
+INSERT INTO role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM roles r, permissions p
+    WHERE p.code = 'receivables.manage' AND r.id IN (1, 4, 5);
+
+-- rev 013: monthly_close + month_open_balances (S2.6, #21) — monthy\moves + start-data.
+-- status default 'open' mirrors daily_close and spec plan/01 §3.5; absent row = open
+CREATE TABLE monthly_close (
+    branch_id INTEGER NOT NULL REFERENCES branches(id),
+    year      INTEGER NOT NULL,
+    month     INTEGER NOT NULL,
+    status    TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','reopened')),
+    closed_by INTEGER REFERENCES users(id),
+    closed_at TEXT,
+    PRIMARY KEY (branch_id, year, month),
+    CHECK (month BETWEEN 1 AND 12)
+);
+
+CREATE TABLE month_open_balances (
+    branch_id  INTEGER NOT NULL REFERENCES branches(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    year       INTEGER NOT NULL,
+    month      INTEGER NOT NULL,
+    debit      INTEGER NOT NULL DEFAULT 0 CHECK (1=1),
+    credit     INTEGER NOT NULL DEFAULT 0 CHECK (1=1),
+    PRIMARY KEY (branch_id, account_id, year, month),
+    CHECK (month BETWEEN 1 AND 12)
+);
+
+INSERT INTO permissions (code, name_ar) VALUES ('months.close', 'تقفيل الشهر');
+INSERT INTO role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM roles r, permissions p
+    WHERE p.code = 'months.close' AND r.id IN (1, 4, 5);
+
+-- rev 015: report_catalog + print_jobs (S3.1, #23) — RPT menu/dispatch key +
+-- durable print queue; seeds mirror alembic 015.
+CREATE TABLE report_catalog (
+    code     TEXT PRIMARY KEY,
+    category TEXT NOT NULL,
+    title_ar TEXT NOT NULL,
+    title_en TEXT NOT NULL,
+    params   TEXT NOT NULL DEFAULT '[]',           -- JSON array of param names
+    paper    TEXT NOT NULL DEFAULT 'A4' CHECK (paper IN ('A4', 'A5')),
+    sort     INTEGER NOT NULL DEFAULT 0,
+    active   INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1))
+);
+
+CREATE TABLE print_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch_id   INTEGER NOT NULL REFERENCES branches(id),
+    user_id     INTEGER REFERENCES users(id),
+    report_code TEXT NOT NULL REFERENCES report_catalog(code),
+    params      TEXT NOT NULL DEFAULT '{}',          -- JSON object snapshot
+    paper       TEXT NOT NULL DEFAULT 'A4' CHECK (paper IN ('A4', 'A5')),
+    status      TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'done', 'failed')),
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    done_at     TEXT
+);
+
+INSERT INTO report_catalog (code, category, title_ar, title_en, params, paper, sort) VALUES
+    ('drawer_handover', 'money', 'تسليم الدرج', 'Drawer Handover', '["date_from", "date_to"]', 'A4', 10),
+    ('day_profit', 'money', 'ربح اليوم', 'Day Profit', '["datee"]', 'A4', 20),
+    ('period_totals', 'money', 'ملخص المبيعات والمشتريات', 'Sales & Purchases Summary', '["date_from", "date_to"]', 'A4', 30),
+    ('stock_minimum', 'stock', 'النواقص (أقل من الحد الأدنى)', 'Stock Below Minimum', '[]', 'A4', 40);
+
+-- rev 023: einvoice foundations (S4.1, #28; ADR-0002) — per-device UUID/counter
+-- chain + tax-document log; payload_json TEXT keeps document key order verbatim
+-- (PG side uses `json`, NOT jsonb) so the receipt UUID recomputes identically.
+CREATE TABLE einvoice_counters (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch_id     INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+    kind          TEXT NOT NULL CHECK (kind IN ('receipt','return_receipt','invoice','credit_note')),
+    last_counter  INTEGER NOT NULL DEFAULT 0,
+    last_uuid     TEXT NOT NULL DEFAULT '',
+    device_serial TEXT,
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (branch_id, kind)
+);
+
+CREATE TABLE einvoice_log (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id     INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    branch_id      INTEGER NOT NULL REFERENCES branches(id),
+    kind           TEXT NOT NULL CHECK (kind IN ('receipt','return_receipt','invoice','credit_note')),
+    status         TEXT NOT NULL DEFAULT 'pending'
+                   CHECK (status IN ('pending','submitted','accepted','rejected','failed')),
+    counter        INTEGER NOT NULL,
+    uuid           TEXT NOT NULL DEFAULT '',
+    previous_uuid  TEXT NOT NULL DEFAULT '',
+    reference_uuid TEXT NOT NULL DEFAULT '',
+    device_serial  TEXT,
+    qr_data        TEXT NOT NULL DEFAULT '',
+    payload_json   TEXT,                              -- JSON document text
+    response       TEXT NOT NULL DEFAULT '',
+    submitted_at   TEXT,
+    attempts       INTEGER NOT NULL DEFAULT 0,      -- S4.2 retry bookkeeping
+    next_attempt_at TEXT,                            -- backoff gate; NULL = due now
+    last_error     TEXT NOT NULL DEFAULT '',        -- last transport/ETA error
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (branch_id, kind, counter),
+    UNIQUE (invoice_id)
+);
+
+CREATE INDEX ix_einvoice_log_status ON einvoice_log (status);
+
+ALTER TABLE parties ADD COLUMN tax_registration_no TEXT NOT NULL DEFAULT '';
+
+-- rev 027: inter-pharmacy transfers (S5.2, #32; T1–T7) — state machine
+-- draft → dispatched → received, cancelled only from draft; per-source
+-- monotonic transfer_no with UNIQUE backstop; alloc_json TEXT holds the
+-- dispatch batch allocations verbatim so replays reproduce exact batches/costs.
+CREATE TABLE transfers (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_branch_id INTEGER NOT NULL REFERENCES branches(id),
+    target_branch_id INTEGER NOT NULL REFERENCES branches(id),
+    transfer_no      TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'draft'
+                     CHECK (status IN ('draft','dispatched','received','cancelled')),
+    rev              INTEGER NOT NULL DEFAULT 1,  -- rev 030 (#55): version watermark for replay ordering
+    legacy_fatid     TEXT,
+    note             TEXT NOT NULL DEFAULT '',
+    created_by       INTEGER REFERENCES users(id),
+    dispatched_by    INTEGER REFERENCES users(id),
+    received_by      INTEGER REFERENCES users(id),
+    cancelled_by     INTEGER REFERENCES users(id),
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    dispatched_at    TEXT,
+    received_at      TEXT,
+    cancelled_at     TEXT,
+    UNIQUE (source_branch_id, transfer_no),
+    CHECK (source_branch_id <> target_branch_id)
+);
+
+CREATE INDEX ix_transfers_target ON transfers (target_branch_id);
+
+CREATE TABLE transfer_lines (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    transfer_id  INTEGER NOT NULL REFERENCES transfers(id) ON DELETE CASCADE,
+    drug_id      INTEGER NOT NULL REFERENCES drugs(id),
+    sent_qty     INTEGER NOT NULL CHECK (sent_qty > 0),  -- ×10000
+    received_qty INTEGER,                                -- ×10000
+    alloc_json   TEXT,                                   -- JSON allocations text
+    UNIQUE (transfer_id, drug_id)
+);
+
+CREATE INDEX ix_transfer_lines_transfer ON transfer_lines (transfer_id);
+
+-- rev 028 (#56): legacy_fatid ETL idempotency — one transfer per
+-- (source_branch_id, legacy_fatid); NULL fatid drafts are exempt.
+CREATE UNIQUE INDEX uq_transfers_source_fatid
+    ON transfers (source_branch_id, legacy_fatid)
+    WHERE legacy_fatid IS NOT NULL;
+
+
+-- rev 031: needs + purchase orders (S5.3, #33; N1–N6) — titanneed
+-- inter-pharmacy requests (pending→fulfilled|cancelled) with transfer_id
+-- handoff link; legacy `orders` header ('saved'=done) + invented itemized
+-- lines. BY DEFAULT identities let replay insert the outbox payload's id.
+CREATE TABLE needs (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch_id        INTEGER NOT NULL REFERENCES branches(id),
+    drug_id          INTEGER NOT NULL REFERENCES drugs(id),
+    qty              INTEGER NOT NULL DEFAULT 0,      -- ×10000
+    datee            TEXT,
+    sender_branch_id INTEGER REFERENCES branches(id),
+    target_branch_id INTEGER REFERENCES branches(id),
+    legacy_sender    TEXT NOT NULL DEFAULT '',
+    legacy_target    TEXT NOT NULL DEFAULT '',
+    status           TEXT NOT NULL DEFAULT 'pending'
+                     CHECK (status IN ('pending','fulfilled','cancelled')),
+    transfer_id      INTEGER REFERENCES transfers(id),
+    rev              INTEGER NOT NULL DEFAULT 1,
+    created_by       INTEGER REFERENCES users(id),
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    fulfilled_at     TEXT
+);
+
+CREATE INDEX ix_needs_sender ON needs (sender_branch_id, status);
+CREATE INDEX ix_needs_target ON needs (target_branch_id, status);
+
+CREATE TABLE purchase_orders (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch_id    INTEGER NOT NULL REFERENCES branches(id),
+    party_id     INTEGER REFERENCES parties(id),
+    orderid      TEXT NOT NULL DEFAULT '',
+    orderdate    TEXT,
+    datee        TEXT,
+    status       TEXT NOT NULL DEFAULT 'pending'
+                 CHECK (status IN ('pending','saved','received','cancelled')),
+    rev          INTEGER NOT NULL DEFAULT 1,
+    created_by   INTEGER REFERENCES users(id),
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    saved_at     TEXT,
+    received_at  TEXT,
+    cancelled_at TEXT
+);
+
+CREATE INDEX ix_purchase_orders_branch ON purchase_orders (branch_id);
+
+CREATE TABLE purchase_order_lines (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id     INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    drug_id      INTEGER NOT NULL REFERENCES drugs(id),
+    qty          INTEGER NOT NULL CHECK (qty > 0),   -- ×10000
+    unit_cost    INTEGER,                            -- ×10000
+    received_qty INTEGER,                            -- ×10000
+    UNIQUE (order_id, drug_id)
+);
+
+CREATE INDEX ix_po_lines_order ON purchase_order_lines (order_id);
+
+INSERT INTO permissions (code, name_ar)
+VALUES ('needs.manage', 'إدارة النواقص والطلبات');
+
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r, permissions p
+WHERE p.code = 'needs.manage' AND r.id IN (1, 2, 5);
 
 COMMIT;

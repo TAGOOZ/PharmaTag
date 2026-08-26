@@ -4,10 +4,11 @@ dispatches a pending 'invoice' row to apply_purchase_payload when its kind is
 (branch_id, invoice_no)), and failures are recorded without rolling back the
 rest. Replaying twice must never double stock-up.
 """
+import pytest
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app.core.db import SessionLocal
 from app.core.audit import enqueue_sync
@@ -28,6 +29,21 @@ from app.sync.service import replay_pending
 from tests.drawer_test_utils import _cleanup_movements_for_invoice
 from tests.purchase_test_utils import _make_supplier
 
+
+
+@pytest.fixture(autouse=True)
+async def _isolate_replay_queue():
+    """Foreign pending rows on BRANCH_ID's queue (left by other tests or a
+    crashed run) would be applied and counted by replay_pending alongside
+    this file's own rows — park them before each test."""
+    async with SessionLocal() as session:
+        await session.execute(
+            update(SyncLog)
+            .where(SyncLog.status == "pending")
+            .values(status="applied")
+        )
+        await session.commit()
+    yield
 BRANCH_ID = 1
 
 _seq = [0]
@@ -264,7 +280,11 @@ async def test_replay_applies_outbox_purchase_and_is_idempotent():
             assert line.cost == Decimal("8.7720")
             row = (
                 await session.execute(
-                    select(SyncLog).where(SyncLog.branch_id == BRANCH_ID)
+                    select(SyncLog).where(
+                        SyncLog.branch_id == BRANCH_ID,
+                        # the queue carries registry fan-out rows too (#34)
+                        SyncLog.entity == "invoice",
+                    )
                 )
             ).scalars().all()
             by_no = {r.payload["invoice_no"]: r for r in row}

@@ -7,6 +7,7 @@ the document (ref_invoice_id). Credit never touches the drawer.
 """
 from datetime import date
 
+import pytest
 from sqlalchemy import select
 
 from app.core.audit import enqueue_sync
@@ -26,6 +27,7 @@ from tests.purchase_returns_test_utils import (
     _return as _purchase_return,
 )
 from tests.purchase_test_utils import _make_drug, _make_supplier
+
 from tests.returns_test_utils import _cleanup as _return_cleanup
 from tests.sales_test_utils import _cleanup, _make_drug_and_stock
 from tests.test_sales_replay import (
@@ -38,6 +40,23 @@ from tests.test_sales_replay import (
     _replay,
     _stock_qty as _replay_stock_qty,
 )
+
+
+@pytest.fixture(autouse=True)
+async def _isolate_replay_queue():
+    """Same isolation as test_sales_replay: replay must only see THIS test's
+    pending rows, never foreign ones left on branch 1's queue."""
+    from sqlalchemy import update as _update
+    from app.models import SyncLog as _SyncLog
+
+    async with SessionLocal() as session:
+        await session.execute(
+            _update(_SyncLog)
+            .where(_SyncLog.status == "pending")
+            .values(status="applied")
+        )
+        await session.commit()
+    yield
 
 
 async def test_cash_and_card_sale_write_drawer_movements(client):

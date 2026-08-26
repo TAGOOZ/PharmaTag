@@ -3,12 +3,13 @@ every pending 'invoice' row for a branch using its explicit allocations (FIFO
 is NOT re-run), dedupes by (branch_id, invoice_no), and marks failures without
 rolling back the rest. Replaying twice must never double-decrement stock.
 """
+import pytest
 from datetime import date
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app.core.db import SessionLocal
 from app.core.audit import enqueue_sync
@@ -30,6 +31,21 @@ from app.models import (
 from app.sync.service import replay_pending
 from tests.drawer_test_utils import _cleanup_movements_for_invoice
 
+
+
+@pytest.fixture(autouse=True)
+async def _isolate_replay_queue():
+    """Foreign pending rows on BRANCH_ID's queue (left by other tests or a
+    crashed run) would be applied and counted by replay_pending alongside
+    this file's own rows — park them before each test."""
+    async with SessionLocal() as session:
+        await session.execute(
+            update(SyncLog)
+            .where(SyncLog.status == "pending")
+            .values(status="applied")
+        )
+        await session.commit()
+    yield
 BRANCH_ID = 1
 
 _seq = [0]

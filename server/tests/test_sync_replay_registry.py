@@ -657,3 +657,110 @@ async def test_legacy_row_without_watermark_applies_not_poisoned(client):
             assert not (applied_row.payload or {}).get("failure")
     finally:
         await _cleanup()
+
+
+@pytest.mark.asyncio
+async def test_legacy_row_cannot_clobber_newer_local_state(client):
+    """A pre-#34 snapshot (no watermark) arriving at a peer whose local row
+    IS watermarked must be SKIPPED-and-recorded — LWW cannot order them and
+    the local watermark proves newer authorship."""
+    try:
+        headers = await _admin_headers(client)
+        r = await client.post(
+            "/api/v1/branches",
+            headers=headers,
+            json={
+                "pharmacyid": _uniq_pharmacyid(),
+                "mobile": _uniq_mobile(),
+                "pharname": "الحالي",
+            },
+        )
+        assert r.status_code == 201, r.text
+        b_id = r.json()["id"]
+        _created.append(b_id)
+
+        async with SessionLocal() as s:
+            row = SyncLog(
+                branch_id=1, entity="branch", action="insert", status="pending",
+                payload={"id": b_id, "pharmacyid": "X", "mobile": "Y",
+                         "pharname": "قديم بلا علامة"},
+            )
+            s.add(row)
+            await s.flush()
+            row_id = row.id
+            await s.commit()
+
+        summary = await _replay_as(1)
+
+        async with SessionLocal() as s:
+            assert summary["skipped"] >= 1
+            local = await s.get(Branch, b_id)
+            assert local.pharname == "الحالي", "legacy snapshot must not clobber"
+            stamped = await s.get(SyncLog, row_id)
+            assert (stamped.payload or {}).get("skipped_reason")
+    finally:
+        await _cleanup()
+
+
+def test_legacy_watermark_is_deterministic_epoch():
+    """Two peers replaying the same legacy insert must land the SAME
+    timestamp — a fabricated per-peer now() would diverge their watermarks."""
+    from app.branches.replay import _EPOCH
+
+    assert _EPOCH.year == 1970
+
+
+@pytest.mark.asyncio
+async def test_string_booleans_do_not_flip_semantics(client):
+    """`bool('false') is True` — payload coercion must be strict so a
+    hand-crafted 'false' string deactivates rather than silently activating."""
+    try:
+        async with SessionLocal() as s:
+            row = SyncLog(
+                branch_id=1, entity="branch", action="insert", status="pending",
+                payload={"id": 990010, "pharmacyid": "STRICT1",
+                         "mobile": "01990100001", "is_active": "false",
+                         "updated_at": "2026-01-01T00:00:00+00:00"},
+            )
+            s.add(row)
+            await s.commit()
+
+        summary = await _replay_as(1)
+        assert summary["failed"] == 0
+
+        async with SessionLocal() as s:
+            branch = await s.get(Branch, 990010)
+            assert branch.is_active is False, "'false' must parse as False"
+    finally:
+        await _cleanup()
+        # this branch id isn't in _created — remove directly
+        from app.models import Branch as B
+        async with SessionLocal() as s:
+            b = await s.get(B, 990010)
+            if b:
+                await s.delete(b)
+                await s.commit()
+
+
+@pytest.mark.asyncio
+async def test_non_integral_float_id_fails_malformed(client):
+    try:
+        async with SessionLocal() as s:
+            row = SyncLog(
+                branch_id=1, entity="branch", action="insert", status="pending",
+                payload={"id": 5.9, "pharmacyid": "F1", "mobile": "01990200001",
+                         "updated_at": "2026-01-01T00:00:00+00:00"},
+            )
+            s.add(row)
+            await s.flush()
+            row_id = row.id
+            await s.commit()
+
+        summary = await _replay_as(1)
+
+        async with SessionLocal() as s:
+            row = await s.get(SyncLog, row_id)
+            assert row.status == "pending"  # retryable-poisoned, recorded
+            assert "malformed" in str((row.payload or {}).get("failure", "")).lower()
+    finally:
+        await _cleanup()

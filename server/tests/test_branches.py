@@ -543,10 +543,12 @@ async def test_mutations_write_audit_and_outbox_atomically(client):
         async with SessionLocal() as session:
             audits = (
                 await session.execute(
-                    select(AuditLog).where(
+                    select(AuditLog)
+                    .where(
                         AuditLog.entity == "branch",
                         AuditLog.entity_id == sub["id"],
                     )
+                    .order_by(AuditLog.id)  # insertion order is the contract
                 )
             ).scalars().all()
             assert [a.action for a in audits] == ["insert", "delete"]

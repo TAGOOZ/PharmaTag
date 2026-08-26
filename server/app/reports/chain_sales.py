@@ -31,7 +31,13 @@ async def chain_sales_report(
     date_from: Optional[date],
     date_to: Optional[date],
 ) -> dict:
-    """Per-(datee, branch) sale totals across all active branches."""
+    """Per-(datee, branch) sale totals across all active branches.
+
+    SEMANTICS (titanksasales parity, pinned by test): GROSS sales only —
+    `kind == 'sale'`; returns are NOT netted here (see period_totals /
+    vat_summary for net views). No status filter: no write path currently
+    produces non-'saved' sale invoices; revisit if void/unsaved become real.
+    """
     where = [
         Invoice.kind == "sale",
         Invoice.branch_id == Branch.id,

@@ -15,6 +15,16 @@ delivery.
 The single-main-device invariant survives replay through strict LWW alone:
 a promote history arrives FIFO (demote-then-promote share one enqueue
 transaction), and any stale re-delivery loses the updated_at comparison.
+
+KNOWN LIMITATIONS (accepted for this slice):
+* Identity mappings have no tombstone memory: if an INSERT fails transiently
+  in one pass while its later _deleted tombstone applies, a pass-2 retry of
+  the insert can resurrect the mapping on peers that already applied the
+  delete. FIFO-within-a-pass is the only protection; revisit if transient
+  identity failures become real.
+* An identity whose parent branch row is MALFORMED (permanently unappliable)
+  retries its FK violation each pass until the parent is fixed — downstream
+  poisoning mirrors the parent's state by design.
 """
 from __future__ import annotations
 
@@ -47,13 +57,40 @@ _TEXT_FIELDS = (
     "currency",
 )
 
+# watermark for legacy (pre-#34) snapshots: deterministic across peers and
+# guaranteed older than any real snapshot, so later deliveries always win
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _strict_int(value: object) -> int:
+    """int() without the traps: rejects floats with a fractional part
+    (`int(5.9)` would silently truncate) and numeric strings stay allowed."""
+    if isinstance(value, bool):
+        raise ValueError("bool is not an id")
+    if isinstance(value, float):
+        if value != int(value):
+            raise ValueError("non-integral float")
+        return int(value)
+    if not isinstance(value, (int, str)):
+        raise ValueError("unsupported id type")
+    return int(value)
+
+
+def _strict_bool(payload: dict, key: str, default: bool) -> bool:
+    """Booleans without the `bool('false') is True` trap: JSON booleans pass;
+    strings must be exactly 'true'/'false'."""
+    raw = payload.get(key, default)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        if raw.lower() == "true":
+            return True
+        if raw.lower() == "false":
+            return False
+    raise MALFORMED
+
 
 def _watermark_of(payload: dict) -> Optional[datetime]:
-    """LWW watermark from the snapshot. Rows enqueued BEFORE #34 (payloads
-    without `updated_at`) carry no ordering authority — they return None and
-    are APPLIED rather than poisoned forever (G10: never a permanent
-    unappliable state); the applied timestamp is then fabricated from now()
-    so future comparisons stay well-ordered."""
     raw = payload.get("updated_at")
     if not raw:
         return None
@@ -84,9 +121,13 @@ def _fields_from_payload(payload: dict) -> dict[str, object]:
         raise MALFORMED
     try:
         kwargs["vat_default"] = Decimal(str(payload.get("vat_default", "14.00")))
-        kwargs["vat_inclusive_prices"] = bool(payload.get("vat_inclusive_prices", True))
-        kwargs["is_main_device"] = bool(payload.get("is_main_device", False))
-        kwargs["is_active"] = bool(payload.get("is_active", True))
+        kwargs["vat_inclusive_prices"] = _strict_bool(
+            payload, "vat_inclusive_prices", True
+        )
+        kwargs["is_main_device"] = _strict_bool(payload, "is_main_device", False)
+        kwargs["is_active"] = _strict_bool(payload, "is_active", True)
+    except MALFORMED:
+        raise
     except Exception:
         raise MALFORMED
     return kwargs
@@ -98,7 +139,7 @@ def _identity_keys(payload: dict) -> tuple[str, str, str, int]:
             str(payload["legacy_table"]),
             str(payload["legacy_column"]),
             str(payload["legacy_value"]),
-            int(payload["branch_id"]),
+            _strict_int(payload["branch_id"]),
         )
     except (KeyError, TypeError, ValueError):
         raise MALFORMED_IDENTITY
@@ -112,7 +153,7 @@ async def apply_branch_versioned(
 ) -> tuple[str, Optional[str]]:
     """Apply one branch snapshot; returns (outcome, skip_reason)."""
     try:
-        branch_id = int(payload["id"])
+        branch_id = _strict_int(payload["id"])
     except (KeyError, TypeError, ValueError):
         raise MALFORMED
     ts = _watermark_of(payload)
@@ -130,11 +171,20 @@ async def apply_branch_versioned(
             f"stale snapshot (updated_at={ts.isoformat()}) — local row is newer "
             f"({local_ts.isoformat()}), LWW kept local state",
         )
+    if ts is None and local_ts is not None:
+        # legacy snapshot (no ordering authority) vs a locally-watermarked
+        # row: LWW cannot order them — keep local, record why (G10)
+        return (
+            "skipped",
+            "legacy snapshot without updated_at — cannot be ordered against "
+            "the locally-watermarked row; LWW kept local state",
+        )
 
     fields = _fields_from_payload(payload)
-    # legacy rows without a watermark apply unconditionally; fabricate a
-    # fresh timestamp so later LWW comparisons stay well-ordered
-    applied_ts = ts if ts is not None else datetime.now(timezone.utc)
+    # legacy rows apply with the EPOCH as watermark: deterministic across
+    # peers (no per-peer clock fabrication → no divergence) and guaranteed
+    # older than any real snapshot, so future deliveries always win
+    applied_ts = ts if ts is not None else _EPOCH
     old_name = local.pharname if local is not None else None
     if local is None:
         session.add(Branch(id=branch_id, **fields, updated_at=applied_ts))

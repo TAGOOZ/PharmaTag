@@ -203,3 +203,61 @@ async def test_chain_sales_in_catalog(client):
     assert r.status_code == 200, r.text
     codes = {rep["code"] for rep in r.json()["reports"]}
     assert "chain_sales" in codes
+
+
+async def test_chain_sales_is_gross_sales_returns_do_not_reduce(client):
+    """Pinned semantics (titanksasales parity): the projection counts GROSS
+    `kind='sale'` invoices only — a sale_return in range does not reduce it
+    (net views live in period_totals / vat_summary)."""
+    drug_id = await _make_drug_and_stock(
+        price="10.0000", cost_price="5.0000",
+        batches=[("10.0000", "5.0000", "2027-01-01")],
+        stock_qty="10.0000",
+    )
+    invoice_ids: list[int] = []
+    try:
+        token = await _login_token(client)
+        auth = _h(token)
+
+        r = await client.post(
+            "/api/v1/sales", headers=auth,
+            json={"lines": [{"drug_id": drug_id, "qty": "5"}]},
+        )
+        assert r.status_code == 201, r.text
+        sale_id = r.json()["id"]
+        invoice_ids.append(sale_id)
+        today = business_date().isoformat()
+
+        # a return of the whole sale, written directly (the returns API owns
+        # its own money/stock flow — irrelevant to this projection's filter)
+        from decimal import Decimal
+        from app.models import Invoice
+        async with SessionLocal() as session:
+            ret = Invoice(
+                branch_id=1, kind="sale_return",
+                invoice_no=f"CS-RET-{sale_id}", datee=business_date(),
+                subtotal=Decimal("50.00"), vat=Decimal("0"),
+                totalvalue=Decimal("50.00"), payed=Decimal("50.00"),
+                agel=Decimal("0"), ref_invoice_id=sale_id,
+            )
+            session.add(ret)
+            await session.flush()
+            invoice_ids.append(ret.id)
+            await session.commit()
+
+        rep = await client.get(
+            "/api/v1/reports/chain_sales",
+            params={"date_from": today, "date_to": today, "format": "grid"},
+            headers=auth,
+        )
+        assert rep.status_code == 200, rep.text
+        body = rep.json()
+        cols = body["columns"]
+        total_col = cols.index("الاجمالي")
+        count_col = cols.index("عدد الفواتير")
+        main_row = next(r2 for r2 in body["rows"] if r2[cols.index("الفرع")] == "Main Pharmacy")
+        assert main_row[count_col] == "1", "return must not be counted"
+        assert main_row[total_col] == "50.00", "return must not reduce gross"
+    finally:
+        await _cleanup([drug_id], invoice_ids)
+        await _branch_sweep()

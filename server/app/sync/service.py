@@ -52,9 +52,21 @@ DEFAULT_SKIP_REASON = (
 
 
 def _stamp_skip(row: SyncLog, payload: dict, reason: Optional[str]) -> None:
+    # drop any failure from an earlier attempt: this row is now DELIVERED-
+    # skipped, and a lingering failure key would mislead forensics
     row.payload = {
-        **payload,
+        **{k: v for k, v in payload.items() if k != "failure"},
         "skipped_reason": reason or DEFAULT_SKIP_REASON,
+    }
+
+
+def _clean_applied(payload: dict) -> dict:
+    """Payload for a row that applied cleanly — earlier attempts may have
+    stamped failure/skipped_reason on it; those must not survive."""
+    return {
+        k: v
+        for k, v in payload.items()
+        if k not in ("failure", "skipped_reason")
     }
 
 
@@ -236,6 +248,8 @@ async def replay_pending(
                     status_, reason = _normalize(outcome)
                     if status_ == "skipped":
                         _stamp_skip(row, payload, reason)
+                    else:
+                        row.payload = _clean_applied(payload)
                     row.status = "applied"
                     row.synced_at = datetime.now(timezone.utc)
                     summary["applied" if status_ == "applied" else "skipped"] += 1
@@ -278,13 +292,7 @@ async def replay_pending(
                     if status_ == "skipped":
                         _stamp_skip(row, payload, reason)
                     else:
-                        # strip a failure/skipped_reason left by an earlier
-                        # failed attempt — the row applied cleanly this pass
-                        row.payload = {
-                            k: v
-                            for k, v in payload.items()
-                            if k not in ("failure", "skipped_reason")
-                        }
+                        row.payload = _clean_applied(payload)
                     row.status = "applied"
                     row.synced_at = datetime.now(timezone.utc)
                     summary["applied" if status_ == "applied" else "skipped"] += 1
@@ -322,6 +330,8 @@ async def replay_pending(
                     status_, reason = _normalize(outcome)
                     if status_ == "skipped":
                         _stamp_skip(row, payload, reason)
+                    else:
+                        row.payload = _clean_applied(payload)
                     row.status = "applied"
                     row.synced_at = datetime.now(timezone.utc)
                     summary["applied" if status_ == "applied" else "skipped"] += 1
@@ -336,7 +346,7 @@ async def replay_pending(
                     summary["failures"].append(
                         {
                             "id": row.id,
-                            "entity": row.entity,
+                            "entity": "transfer",
                             "entity_id": row.entity_id,
                             "error": failure,
                         }

@@ -14,6 +14,13 @@ Multi-context: CONTEXT-MAP.md at root points to per-context CONTEXT.md files. Se
 ### TDD
 Test-driven development via the `tdd` skill. Use it for every slice that has logic to verify (money, stock, events, ETA, reports). See `docs/agents/tdd.md`.
 
+### Test smarter (fast feedback)
+The full suite takes ~10 min — never re-run it just to see what failed.
+1. **Run once, save, grep**: `pytest -q --tb=short > /tmp/opencode/pytest.log 2>&1`, then inspect `/tmp/opencode/pytest.log`. Re-running to "see the failures again" wastes ~10 min every time.
+2. **Iterate on suspects only**: run just the failing files (`pytest tests/test_foo.py -q --tb=short`) — seconds, not minutes. Full suite only as final gate before commit/close.
+3. **Failures in one test file often poison later files** via leaked rows (fixed natural keys like `__t7_wrong_old__` or invoice "70001" collide across runs; a crashed run leaves rows its `finally` cleanup never removed). If a test passes standalone but fails in the suite (or after any killed run), suspect leaked data in `pharmatag_test` before suspecting code — sweep the specific leftovers, don't nuke seeds (drugs/accounts/catalog come from migrations 002–003; wiping them breaks unrelated tests).
+4. **Test cleanups must cover everything a test writes**, including indirect rows: fan-out sync_log copies land on OTHER branches' queues, audit rows reference created users/drugs. Scope by entity + watermark, not just by created id.
+
 ### System design patterns
 The patterns & standards the codebase follows (router→service layering, G12 atomic audit+outbox, transactional outbox + idempotent replay, advisory-lock numbering, twin parity, events, RBAC). Read it before building or extending a feature seam. See `docs/agents/patterns.md`.
 

@@ -522,8 +522,19 @@ async def test_mutations_write_audit_and_outbox_atomically(client):
                     )
                 )
             ).scalars().all()
-            assert len(syncs) == 1, syncs
-            payload = syncs[0].payload
+            # #34 fan-out: one copy per ACTIVE branch (each peer's queue
+            # carries the snapshot so a reconnecting twin converges)
+            active_ids = set(
+                (
+                    await session.execute(
+                        select(Branch.id).where(Branch.is_active.is_(True))
+                    )
+                ).scalars().all()
+            )
+            assert {s.branch_id for s in syncs} == active_ids, syncs
+            own = [s for s in syncs if s.branch_id == sub["id"]]
+            assert len(own) == 1
+            payload = own[0].payload
             assert payload["pharmacyid"] == sub["pharmacyid"]
             assert payload["role"] == "sub"
 
@@ -547,7 +558,10 @@ async def test_mutations_write_audit_and_outbox_atomically(client):
                     )
                 )
             ).scalars().all()
-            assert len(syncs) == 2
+            # insert fan-out + deactivate fan-out: BOTH waves go to every
+            # branch that was active at enqueue time (the deactivating row's
+            # own transaction still sees the not-yet-flushed is_active=False)
+            assert len(syncs) == 2 * len(active_ids)
     finally:
         await _cleanup()
 

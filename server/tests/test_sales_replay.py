@@ -265,7 +265,11 @@ async def test_replay_applies_outbox_sale_and_is_idempotent():
             assert lines[0].batch_id == batch_ids[list(batch_ids)[0]]
             row = (
                 await session.execute(
-                    select(SyncLog).where(SyncLog.branch_id == BRANCH_ID)
+                    select(SyncLog).where(
+                        SyncLog.branch_id == BRANCH_ID,
+                        # the queue carries registry fan-out rows too (#34)
+                        SyncLog.entity == "invoice",
+                    )
                 )
             ).scalars().all()
             by_no = {r.payload["invoice_no"]: r for r in row}
@@ -313,7 +317,11 @@ async def test_replay_skips_online_sales_already_invoice_exists():
         async with SessionLocal() as session:
             row = (
                 await session.execute(
-                    select(SyncLog).where(SyncLog.branch_id == BRANCH_ID)
+                    select(SyncLog).where(
+                        SyncLog.branch_id == BRANCH_ID,
+                        # the queue carries registry fan-out rows too (#34)
+                        SyncLog.entity == "invoice",
+                    )
                 )
             ).scalars().all()
             by_no = {r.payload["invoice_no"]: r for r in row}
@@ -360,7 +368,11 @@ async def test_replay_failed_row_recorded_and_does_not_roll_back_others():
             # bad row: no invoice, failed + failure recorded in payload
             rows = (
                 await session.execute(
-                    select(SyncLog).where(SyncLog.branch_id == BRANCH_ID)
+                    select(SyncLog).where(
+                        SyncLog.branch_id == BRANCH_ID,
+                        # the queue carries registry fan-out rows too (#34)
+                        SyncLog.entity == "invoice",
+                    )
                 )
             ).scalars().all()
             by_no = {r.payload["invoice_no"]: r for r in rows}

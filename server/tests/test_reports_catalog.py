@@ -33,6 +33,8 @@ EXPECTED_CODES = {
     "party_totals",
     "ledger_account",
     "vat_summary",
+    # S5.4 (#34) — the titanksasales projection (A06)
+    "chain_sales",
 }
 
 

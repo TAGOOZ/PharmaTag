@@ -22,6 +22,7 @@ transaction via atomic(), so peers converge once the chain consumer (#34) runs.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
@@ -53,6 +54,10 @@ def public_branch(branch: Branch) -> dict:
         "role": "main" if branch.is_main_device else "sub",
         "is_main_device": branch.is_main_device,
         "active": branch.is_active,
+        # LWW watermark for the chain replay (#34) — every mutation bumps it
+        "updated_at": (
+            branch.updated_at.isoformat() if branch.updated_at else None
+        ),
     }
 
 
@@ -86,14 +91,34 @@ async def _audit_and_enqueue(
         action=action,
         namee=namee,
     )
-    await enqueue_sync(
-        session,
-        branch_id=branch_id,
-        entity=entity,
-        entity_id=entity_id if entity_id is not None else branch_id,
-        action=action,
-        payload=payload,
+    # FAN-OUT (#34): every active branch's queue carries a copy so an offline
+    # peer converges on reconnect; the origin branch's own copy is idempotent
+    # under LWW (its local updated_at already equals the snapshot's).
+    peer_ids = (
+        (
+            await session.execute(
+                select(Branch.id).where(
+                    Branch.is_active.is_(True), Branch.id != branch_id
+                )
+            )
+        )
+        .scalars()
+        .all()
     )
+    for peer_id in [*peer_ids, branch_id]:
+        await enqueue_sync(
+            session,
+            branch_id=peer_id,
+            entity=entity,
+            entity_id=entity_id if entity_id is not None else branch_id,
+            action=action,
+            payload=payload,
+        )
+
+
+def _touch(branch: Branch) -> None:
+    """Bump the LWW watermark IN the mutation transaction (G12)."""
+    branch.updated_at = datetime.now(timezone.utc)
 
 
 async def _dup_key_conflict(
@@ -170,6 +195,7 @@ async def create_branch(
             )
             session.add(branch)
             await session.flush()
+            _touch(branch)  # LWW watermark for the chain replay (#34)
             await _audit_and_enqueue(
                 session,
                 caller_id=caller_id,
@@ -223,6 +249,8 @@ async def update_branch(
             changes.append((field, str(getattr(branch, field)), value.strip()))
     try:
         async with atomic(session):
+            if changes:
+                _touch(branch)  # once per edit — per-field rows share a watermark
             for field, old, new in changes:
                 setattr(branch, field, new)
                 await _audit_and_enqueue(
@@ -271,6 +299,7 @@ async def deactivate_branch(
             return branch  # idempotent replay: already deactivated, nothing to write
         old_active = branch.is_active
         branch.is_active = False
+        _touch(branch)  # LWW watermark (#34)
         await _audit_and_enqueue(
             session,
             caller_id=caller_id,
@@ -323,10 +352,12 @@ async def transfer_main(
                 b.is_main_device = False
                 demoted.append(b)
             target.is_main_device = True
+            _touch(target)  # LWW watermark (#34); demoted rows bumped below
         reactivated = not target.is_active
         if reactivated:
             target.is_active = True
         for b in demoted:
+            _touch(b)  # LWW watermark (#34)
             await _audit_and_enqueue(
                 session,
                 caller_id=caller_id,

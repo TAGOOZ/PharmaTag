@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.reports.day_profit import day_profit_report
+from app.reports.chain_sales import chain_sales_report
 from app.reports.day_totals import DAY_COLUMNS, day_totals_report
 from app.reports.drawer_handover import drawer_handover_report
 from app.reports.ledger_account import ledger_account_report
@@ -616,6 +617,17 @@ async def _query_drawer_handover(
     )
 
 
+async def _query_chain_sales(
+    session: AsyncSession, branch_id: int, params: dict[str, str]
+) -> dict:
+    date_from = parse_date("date_from", params.get("date_from"))
+    date_to = parse_date("date_to", params.get("date_to"))
+    require_ordered_range(date_from, date_to)
+    # chain-wide by design (A06): the projection reads EVERY active branch,
+    # `branch_id` is only the requesting caller's
+    return await chain_sales_report(session, date_from=date_from, date_to=date_to)
+
+
 async def _query_sales_invoices(
     session: AsyncSession, branch_id: int, params: dict[str, str]
 ) -> dict:
@@ -866,6 +878,53 @@ def _ledger_account_view(payload: dict) -> ViewSpec:
     }
 
 
+def _chain_sales_view(payload: dict) -> ViewSpec:
+    totals = payload["totals"]
+    rows = [
+        [
+            row["datee"],
+            row["branch"],
+            row["invoice_count"],
+            row["total"],
+            row["payed"],
+            row["agel"],
+            row["vat"],
+        ]
+        for row in payload["rows"]
+    ]
+    return {
+        "meta": [
+            ("من تاريخ", payload["date_from"] or "مفتوح"),
+            ("إلى تاريخ", payload["date_to"] or "مفتوح"),
+            ("عدد الفواتير", totals["invoice_count"]),
+        ],
+        "columns": [
+            "التاريخ",
+            "الفرع",
+            "عدد الفواتير",
+            "الاجمالي",
+            "المدفوع",
+            "الآجل",
+            "الضريبة",
+        ],
+        "rows": rows,
+        "foot": [
+            "الإجمالي",
+            "",
+            totals["invoice_count"],
+            totals["total"],
+            totals["payed"],
+            totals["agel"],
+            totals["vat"],
+        ],
+        "note": (
+            f"هناك أيام/فروع أخرى غير معروضة (الحد 1000)."
+            if payload.get("truncated")
+            else None
+        ),
+    }
+
+
 REGISTRY: dict[str, dict[str, Callable]] = {
     "day_profit": {"query": _query_day_profit, "view": _day_profit_view},
     "period_totals": {"query": _query_period_totals, "view": _period_totals_view},
@@ -900,6 +959,7 @@ REGISTRY: dict[str, dict[str, Callable]] = {
         "query": _query_vat_summary,
         "view": _vat_summary_view,
     },
+    "chain_sales": {"query": _query_chain_sales, "view": _chain_sales_view},
 }
 
 

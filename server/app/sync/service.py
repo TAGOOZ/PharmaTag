@@ -38,9 +38,32 @@ from app.core.db import atomic
 from app.einvoicing.service import apply_einvoice_block
 from app.models import BranchStock, Drug, EInvoiceLog, Invoice, SyncLog
 from app.sales.numbering import acquire_branch_lock
+from app.branches.replay import apply_branch_versioned, apply_identity_versioned
 from app.needs.replay import apply_need_versioned
 from app.purchase_orders.replay import apply_po_versioned
 from app.transfers.replay import apply_transfer_versioned
+
+# G10: a row that was DELIVERED but not applied (stale/duplicate under LWW)
+# keeps status='applied' and records WHY in its payload — never silently
+# counted away.
+DEFAULT_SKIP_REASON = (
+    "stale or duplicate delivery — LWW kept the local state"
+)
+
+
+def _stamp_skip(row: SyncLog, payload: dict, reason: Optional[str]) -> None:
+    row.payload = {
+        **payload,
+        "skipped_reason": reason or DEFAULT_SKIP_REASON,
+    }
+
+
+def _normalize(
+    outcome: "str | tuple[str, Optional[str]]",
+) -> tuple[str, Optional[str]]:
+    if isinstance(outcome, tuple):
+        return outcome[0], outcome[1]
+    return outcome, None
 
 
 async def _apply_row(
@@ -152,7 +175,15 @@ async def replay_pending(
                 .where(
                     SyncLog.branch_id == branch_id,
                     SyncLog.entity.in_(
-                    ("invoice", "branch_stock", "transfer", "need", "purchase_order")
+                    (
+                        "invoice",
+                        "branch_stock",
+                        "transfer",
+                        "need",
+                        "purchase_order",
+                        "branch",
+                        "branch_identity",
+                    )
                 ),
                     SyncLog.status == "pending",
                 )
@@ -202,9 +233,12 @@ async def replay_pending(
                             peer_branch_id=row.branch_id,
                             user_id=user_id,
                         )
+                    status_, reason = _normalize(outcome)
+                    if status_ == "skipped":
+                        _stamp_skip(row, payload, reason)
                     row.status = "applied"
                     row.synced_at = datetime.now(timezone.utc)
-                    summary["applied" if outcome == "applied" else "skipped"] += 1
+                    summary["applied" if status_ == "applied" else "skipped"] += 1
                 except Exception as exc:
                     # a poisoned/blocked row fails ALONE (its savepoint rolled
                     # back) and stays pending for a later pass — recorded in
@@ -226,6 +260,46 @@ async def replay_pending(
                     )
                 continue
 
+            if row.entity in ("branch", "branch_identity"):
+                # VERSIONED registry replay (#34): LWW watermark is the
+                # snapshot's updated_at; identities dedupe on their natural
+                # key. Non-money — verbatim state restore.
+                try:
+                    async with session.begin_nested():
+                        if row.entity == "branch":
+                            outcome = await apply_branch_versioned(
+                                session, payload=payload, user_id=user_id
+                            )
+                        else:
+                            outcome = await apply_identity_versioned(
+                                session, payload=payload, user_id=user_id
+                            )
+                    status_, reason = _normalize(outcome)
+                    if status_ == "skipped":
+                        _stamp_skip(row, payload, reason)
+                    else:
+                        row.payload = payload
+                    row.status = "applied"
+                    row.synced_at = datetime.now(timezone.utc)
+                    summary["applied" if status_ == "applied" else "skipped"] += 1
+                except Exception as exc:
+                    failure = (
+                        exc.detail
+                        if isinstance(exc, HTTPException)
+                        else f"{type(exc).__name__}: {exc}"
+                    )
+                    row.payload = {**payload, "failure": str(failure)}
+                    summary["failed"] += 1
+                    summary["failures"].append(
+                        {
+                            "id": row.id,
+                            "entity": row.entity,
+                            "entity_id": row.entity_id,
+                            "error": failure,
+                        }
+                    )
+                continue
+
             if row.entity in ("need", "purchase_order"):
                 # VERSIONED verbatim state restore (#33): needs/POs are
                 # non-money records; the rev watermark orders stale/dupes.
@@ -239,9 +313,12 @@ async def replay_pending(
                             outcome = await apply_po_versioned(
                                 session, payload=payload, user_id=user_id
                             )
+                    status_, reason = _normalize(outcome)
+                    if status_ == "skipped":
+                        _stamp_skip(row, payload, reason)
                     row.status = "applied"
                     row.synced_at = datetime.now(timezone.utc)
-                    summary["applied" if outcome == "applied" else "skipped"] += 1
+                    summary["applied" if status_ == "applied" else "skipped"] += 1
                 except Exception as exc:
                     failure = (
                         exc.detail
@@ -303,6 +380,12 @@ async def replay_pending(
                         continue
                 row.status = "applied"
                 row.synced_at = datetime.now(timezone.utc)
+                _stamp_skip(
+                    row,
+                    payload,
+                    f"invoice '{invoice_no}' already exists locally "
+                    "(idempotent replay)",
+                )
                 summary["skipped"] += 1
                 continue
             try:

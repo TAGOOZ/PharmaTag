@@ -95,6 +95,16 @@ SEED_CATALOG: list[dict] = [
         "sort": 140,
     },
     {
+        # S5.4 (#34): the titanksasales projection (A06) — regenerated from
+        # canonical invoices, never a synced table
+        "code": "chain_sales",
+        "category": "chain",
+        "title_ar": "مبيعات السلسلة",
+        "title_en": "Chain Sales Summary",
+        "params": ["date_from", "date_to"],
+        "sort": 200,
+    },
+    {
         "code": "stock_minimum",
         "category": "stock",
         "title_ar": "النواقص (أقل من الحد الأدنى)",

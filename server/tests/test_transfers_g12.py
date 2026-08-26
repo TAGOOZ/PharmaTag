@@ -121,8 +121,9 @@ async def test_every_transition_writes_audit_and_outbox_for_both_branches(world)
     assert all(
         a.drug_id == drug for a in audits if a.entity != "transfer"
     )
-    # one outbox row PER AFFECTED BRANCH so both peers converge
-    assert [s.branch_id for s in syncs] == [world["src"], world["tgt"]]
+    # one outbox row PER AFFECTED BRANCH so both peers converge (enqueue
+    # iterates a set of branch ids — order is not part of the contract)
+    assert sorted(s.branch_id for s in syncs) == sorted([world["src"], world["tgt"]])
     assert all(s.entity == "transfer" and s.action == "update" for s in syncs)
 
     mark = await _watermarks()
@@ -143,7 +144,7 @@ async def test_every_transition_writes_audit_and_outbox_for_both_branches(world)
         ("branch_stock", "transfer_shortage_return"),
         ("transfer", "update"),
     ]
-    assert [s.branch_id for s in syncs] == [world["src"], world["tgt"]]
+    assert sorted(s.branch_id for s in syncs) == sorted([world["src"], world["tgt"]])
 
 
 async def test_rejected_dispatch_leaves_no_trace(world):

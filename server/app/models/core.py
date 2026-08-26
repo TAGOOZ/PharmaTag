@@ -27,7 +27,9 @@ class Branch(Base):
 
     __tablename__ = "branches"
 
-    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    # BY DEFAULT (rev 032): the #34 chain replay inserts fan-out copies with
+    # the payload's explicit id so peers converge on one shared branch id
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
     pharmacyid: Mapped[str] = mapped_column(String(15), nullable=False)
     phar: Mapped[str] = mapped_column(String(15), server_default="")
     mobile: Mapped[str] = mapped_column(String(15), nullable=False)

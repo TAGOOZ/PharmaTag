@@ -568,3 +568,92 @@ async def test_identity_detach_replays_as_delete(client):
             assert reason or dup.status == "applied"
     finally:
         await _cleanup()
+
+
+@pytest.mark.asyncio
+async def test_identity_repoint_audit_records_previous_branch(client):
+    """When an alias is re-pointed to another branch, the audit row must
+    record the PREVIOUS branch id as old_value — not old == new."""
+    try:
+        headers = await _admin_headers(client)
+        ids_created = []
+        for _ in range(2):
+            r = await client.post(
+                "/api/v1/branches",
+                headers=headers,
+                json={"pharmacyid": _uniq_pharmacyid(), "mobile": _uniq_mobile()},
+            )
+            assert r.status_code == 201, r.text
+            ids_created.append(r.json()["id"])
+            _created.append(ids_created[-1])
+        first, second = ids_created
+
+        async with SessionLocal() as s:
+            s.add(SyncLog(
+                branch_id=1, entity="branch_identity", action="insert",
+                status="pending",
+                payload={"legacy_table": "wzphar", "legacy_column": "pharname",
+                         "legacy_value": "repoint-alias", "branch_id": first},
+            ))
+            await s.commit()
+        await _replay_as(1)
+
+        async with SessionLocal() as s:
+            from app.models import AuditLog
+            s.add(SyncLog(
+                branch_id=1, entity="branch_identity", action="update",
+                status="pending",
+                payload={"legacy_table": "wzphar", "legacy_column": "pharname",
+                         "legacy_value": "repoint-alias", "branch_id": second},
+            ))
+            await s.commit()
+
+        summary = await _replay_as(1)
+        assert summary["failed"] == 0
+
+        async with SessionLocal() as s:
+            from app.models import AuditLog
+            audits = (
+                await s.execute(
+                    select(AuditLog)
+                    .where(
+                        AuditLog.entity == "branch_identity",
+                        AuditLog.new_value == str(second),
+                    )
+                    .order_by(AuditLog.id.desc())
+                )
+            ).scalars().all()
+            assert audits, "re-point must write an audit row"
+            assert audits[0].old_value == str(first), (
+                f"audit must capture the previous mapping, got "
+                f"old={audits[0].old_value!r} new={audits[0].new_value!r}"
+            )
+    finally:
+        await _cleanup()
+
+
+@pytest.mark.asyncio
+async def test_legacy_row_without_watermark_applies_not_poisoned(client):
+    """Pre-#34 payloads carry no updated_at: they must APPLY (unconditionally,
+    timestamp fabricated) rather than fail MALFORMED forever."""
+    try:
+        async with SessionLocal() as s:
+            row = SyncLog(
+                branch_id=1, entity="branch", action="insert", status="pending",
+                payload={"id": 990009, "pharmacyid": "LEGACY1",
+                         "mobile": "01990000001", "pharname": "قديم بلا علامة"},
+            )
+            s.add(row)
+            await s.flush()
+            row_id = row.id
+            await s.commit()
+
+        summary = await _replay_as(1)
+
+        async with SessionLocal() as s:
+            assert await s.get(Branch, 990009) is not None
+            applied_row = await s.get(SyncLog, row_id)
+            assert applied_row.status == "applied"
+            assert not (applied_row.payload or {}).get("failure")
+    finally:
+        await _cleanup()

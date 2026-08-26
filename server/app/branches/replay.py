@@ -48,10 +48,15 @@ _TEXT_FIELDS = (
 )
 
 
-def _watermark_of(payload: dict) -> datetime:
+def _watermark_of(payload: dict) -> Optional[datetime]:
+    """LWW watermark from the snapshot. Rows enqueued BEFORE #34 (payloads
+    without `updated_at`) carry no ordering authority — they return None and
+    are APPLIED rather than poisoned forever (G10: never a permanent
+    unappliable state); the applied timestamp is then fabricated from now()
+    so future comparisons stay well-ordered."""
     raw = payload.get("updated_at")
     if not raw:
-        raise MALFORMED
+        return None
     try:
         ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except ValueError:
@@ -114,7 +119,12 @@ async def apply_branch_versioned(
 
     local = await session.get(Branch, branch_id)
     local_ts = _local_watermark(local)
-    if local_ts is not None and local_ts >= ts:
+    if ts is not None and local_ts is not None and local_ts >= ts:
+        if local_ts == ts:
+            return (
+                "skipped",
+                "duplicate delivery — identical watermark, LWW kept local state",
+            )
         return (
             "skipped",
             f"stale snapshot (updated_at={ts.isoformat()}) — local row is newer "
@@ -122,16 +132,19 @@ async def apply_branch_versioned(
         )
 
     fields = _fields_from_payload(payload)
+    # legacy rows without a watermark apply unconditionally; fabricate a
+    # fresh timestamp so later LWW comparisons stay well-ordered
+    applied_ts = ts if ts is not None else datetime.now(timezone.utc)
     old_name = local.pharname if local is not None else None
     if local is None:
-        session.add(Branch(id=branch_id, **fields, updated_at=ts))
+        session.add(Branch(id=branch_id, **fields, updated_at=applied_ts))
         await session.flush()
         await _advance_identity_sequence(session, "branches", branch_id)
         action = ACTION_INSERT
     else:
         for key, value in fields.items():
             setattr(local, key, value)
-        local.updated_at = ts
+        local.updated_at = applied_ts
         action = ACTION_UPDATE
     await audit(
         session,
@@ -191,6 +204,9 @@ async def apply_identity_versioned(
         )
 
     action = ACTION_INSERT if existing is None else ACTION_UPDATE
+    # capture BEFORE the re-point overwrites it, or the audit row records
+    # old == new and the previous mapping is lost
+    previous_branch_id = existing.branch_id if existing is not None else None
     if existing is None:
         session.add(
             BranchIdentity(
@@ -210,7 +226,7 @@ async def apply_identity_versioned(
         user_id=user_id,
         entity="branch_identity",
         field="branch_id",
-        old_value=None if existing is None else str(existing.branch_id),
+        old_value=None if previous_branch_id is None else str(previous_branch_id),
         new_value=str(branch_id),
         action=action,
     )

@@ -918,7 +918,7 @@ def _chain_sales_view(payload: dict) -> ViewSpec:
             totals["vat"],
         ],
         "note": (
-            f"هناك أيام/فروع أخرى غير معروضة (الحد 1000)."
+            "هناك أيام/فروع أخرى غير معروضة (الحد 1000)."
             if payload.get("truncated")
             else None
         ),

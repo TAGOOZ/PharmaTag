@@ -94,6 +94,11 @@ async def _audit_and_enqueue(
     # FAN-OUT (#34): every active branch's queue carries a copy so an offline
     # peer converges on reconnect; the origin branch's own copy is idempotent
     # under LWW (its local updated_at already equals the snapshot's).
+    # KNOWN LIMITATION: INACTIVE branches receive no copies — a peer that is
+    # deactivated mid-history and later re-promoted sees the promote event
+    # but not the snapshots it missed while inactive; it converges only as
+    # later mutations of those rows fan out again. Revisit with a catch-up
+    # mechanism if re-activated peers must replay full history.
     peer_ids = (
         (
             await session.execute(

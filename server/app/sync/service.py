@@ -278,7 +278,13 @@ async def replay_pending(
                     if status_ == "skipped":
                         _stamp_skip(row, payload, reason)
                     else:
-                        row.payload = payload
+                        # strip a failure/skipped_reason left by an earlier
+                        # failed attempt — the row applied cleanly this pass
+                        row.payload = {
+                            k: v
+                            for k, v in payload.items()
+                            if k not in ("failure", "skipped_reason")
+                        }
                     row.status = "applied"
                     row.synced_at = datetime.now(timezone.utc)
                     summary["applied" if status_ == "applied" else "skipped"] += 1

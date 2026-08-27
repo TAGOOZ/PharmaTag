@@ -34,9 +34,12 @@ SERVER = Path(__file__).resolve().parent.parent
 # ADR-0002 precedent): titaninn.itemsasstring is dead code (0 p-code refs),
 # the chain-plugin migration machinery is deferred until a second plugin
 # needs it, and the dispatch/receive stock writes need core G12 atomicity.
+# dead_stock_exchange/chain_buy_orders were reconciled into CORE by S5.6
+# (#36, T1 — ADR-0002 precedent): ChainBuyStore/ChainBuyUsers 12-col merged
+# into chain_buy_orders + RawakidTablew roاكد into dead_stock_exchange;
+# logistics plugin schema deferred until second plugin needs it.
 PLUGIN_TABLES = {
-    "dead_stock_exchange",
-    "chain_buy_orders", "branch_registry", "drug_sync_outbox", "drug_interactions",
+    "branch_registry", "drug_sync_outbox", "drug_interactions",
     "external_drug_catalog", "archive_imports", "archive_exports", "user_drawer_money",
 }
 
@@ -198,16 +201,6 @@ def check_constraint_parity(
                         f"constraint drift: PG {label} missing from {twin_name}"
                     )
             verified += 1
-    return verified
-    for unique_name, patterns in KEY_UNIQUE_PATTERNS.items():
-        for twin_name, text in twin_texts.items():
-            nt = _norm(text)
-            if not any(p in nt for p in patterns):
-                errors.append(
-                    f"constraint drift: key UNIQUE {unique_name} missing "
-                    f"from {twin_name}"
-                )
-        verified += 1
     return verified
 
 

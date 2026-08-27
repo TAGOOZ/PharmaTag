@@ -22,6 +22,7 @@ from app.drugs.router import router as drugs_router
 from app.einvoicing.router import router as einvoicing_router
 from app.einvoicing.worker import run_forever
 from app.money.months_router import router as months_router
+from app.chain_buy.router import router as chain_buy_router
 from app.needs.router import router as needs_router
 from app.purchase_orders.router import router as purchase_orders_router
 from app.transfers.router import router as transfers_router
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
         transfers_router, prefix="/api/v1/transfers", tags=["transfers"]
     )
     application.include_router(needs_router, prefix="/api/v1/needs", tags=["needs"])
+    application.include_router(chain_buy_router, prefix="/api/v1/chain-buy", tags=["chain-buy"])
     application.include_router(
         purchase_orders_router, prefix="/api/v1/purchase-orders",
         tags=["purchase-orders"],

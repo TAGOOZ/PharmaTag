@@ -39,6 +39,7 @@ from app.einvoicing.service import apply_einvoice_block
 from app.models import BranchStock, Drug, EInvoiceLog, Invoice, SyncLog
 from app.sales.numbering import acquire_branch_lock
 from app.branches.replay import apply_branch_versioned, apply_identity_versioned
+from app.chain_buy.replay import apply_chain_buy_versioned
 from app.needs.replay import apply_need_versioned
 from app.purchase_orders.replay import apply_po_versioned
 from app.transfers.replay import apply_transfer_versioned
@@ -204,6 +205,7 @@ async def replay_pending(
                         "purchase_order",
                         "branch",
                         "branch_identity",
+                        "chain_buy_order",
                     )
                 ),
                     SyncLog.status == "pending",
@@ -216,6 +218,8 @@ async def replay_pending(
         for row in rows:
             payload = dict(row.payload or {})
             if row.entity == "branch_stock":
+                # branch_stock: missing drug is terminal (no retry — row stays failed G10)
+                # unlike chain_buy/transfer/need which stay pending retryable for missing refs
                 try:
                     async with session.begin_nested():
                         await _apply_branch_stock(
@@ -355,7 +359,44 @@ async def replay_pending(
                     summary["failures"].append(
                         {
                             "id": row.id,
-                            "entity": "transfer",
+                            "entity": row.entity,
+                            "entity_id": row.entity_id,
+                            "error": failure,
+                        }
+                    )
+                continue
+
+            if row.entity == "chain_buy_order":
+                # Absolute LWW (#36): last delivery overwrites verbatim; drug
+                # missing → poisoned stays pending retryable (G10) unlike branch_stock terminal
+                try:
+                    async with session.begin_nested():
+                        outcome = await apply_chain_buy_versioned(
+                            session,
+                            payload=payload,
+                            peer_branch_id=row.branch_id,
+                            user_id=user_id,
+                        )
+                    status_, reason = _normalize(outcome)
+                    if status_ == "skipped":
+                        _stamp_skip(row, payload, reason)
+                    else:
+                        row.payload = _clean_applied(payload)
+                    row.status = "applied"
+                    row.synced_at = datetime.now(timezone.utc)
+                    summary["applied" if status_ == "applied" else "skipped"] += 1
+                except Exception as exc:
+                    failure = (
+                        exc.detail
+                        if isinstance(exc, HTTPException)
+                        else f"{type(exc).__name__}: {exc}"
+                    )
+                    row.payload = {**payload, "failure": str(failure)}
+                    summary["failed"] += 1
+                    summary["failures"].append(
+                        {
+                            "id": row.id,
+                            "entity": row.entity,
                             "entity_id": row.entity_id,
                             "error": failure,
                         }

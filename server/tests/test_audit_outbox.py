@@ -438,4 +438,8 @@ async def test_audit_and_sync_payload_shape(stock_drug):
     assert o.status == "pending"
     assert o.synced_at is None
     assert o.source_device_id == 1
-    assert o.payload == {"branch_id": 1, "drug_id": drug_id, "qty": "14.0000"}
+    assert o.payload["branch_id"] == 1
+    assert o.payload["drug_id"] == drug_id
+    assert o.payload["qty"] == "14.0000"
+    # S5.5 added minimum/silsilaid/classy to absolute LWW payload — allow extras
+    assert o.payload.get("minimum") in (None, "0.0000")

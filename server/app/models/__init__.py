@@ -37,6 +37,7 @@ from app.models.base import (
     user_roles_table,
 )
 from app.models.chain import Need, PurchaseOrder, PurchaseOrderLine
+from app.models.chain_buy import ChainBuyOrder, DeadStockExchange
 from app.models.core import AppConfig, AuditLog, Branch, BranchIdentity, SyncLog
 from app.models.drawer import DailyClose, DrawerMovement
 from app.models.einvoicing import EInvoiceCounter, EInvoiceLog
@@ -59,7 +60,9 @@ __all__ = [
     "Branch",
     "BranchIdentity",
     "BranchStock",
+    "ChainBuyOrder",
     "DailyClose",
+    "DeadStockExchange",
     "DrawerMovement",
     "MonthOpenBalance",
     "Need",

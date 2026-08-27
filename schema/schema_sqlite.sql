@@ -940,4 +940,63 @@ INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM roles r, permissions p
 WHERE p.code = 'needs.manage' AND r.id IN (1, 2, 5);
 
+-- rev 035: chain buy (S5.6, #36; T1 CORE) — ChainBuyStore/ChainBuyUsers
+-- 12-col merged into chain_buy_orders + RawakidTablew → dead_stock_exchange
+-- (logistics tier, shipped CORE per ADR-0002 precedent). Mirrors
+-- server/sqlite/migrations/035_chain_buy.sql.
+CREATE TABLE dead_stock_exchange (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch_id             INTEGER NOT NULL REFERENCES branches(id),
+    drug_id               INTEGER NOT NULL REFERENCES drugs(id),
+    qty                   INTEGER NOT NULL CHECK (qty > 0),   -- ×10000, no DEFAULT (violates CHECK)
+    expire                TEXT,
+    price                 INTEGER DEFAULT 0 CHECK (price >= 0),          -- ×10000
+    sell_disc             INTEGER DEFAULT 0,                             -- rate ×100
+    tips                  TEXT DEFAULT '',
+    governorate           TEXT DEFAULT '',
+    district              TEXT DEFAULT '',
+    source_pharmacist_tel TEXT DEFAULT '',
+    requester_tel         TEXT DEFAULT '',
+    source_iddatetime     TEXT,
+    country               TEXT DEFAULT '',
+    status                TEXT NOT NULL DEFAULT 'created'
+                           CHECK (status IN ('created','in_transit','delivered','received','cancelled')),
+    created_at            TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX ix_dead_stock_branch ON dead_stock_exchange (branch_id);
+CREATE INDEX ix_dead_stock_drug ON dead_stock_exchange (drug_id);
+
+CREATE TABLE chain_buy_orders (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch_id      INTEGER NOT NULL REFERENCES branches(id),
+    drug_id        INTEGER NOT NULL REFERENCES drugs(id),
+    store_name     TEXT DEFAULT '',
+    pharmacist_tel TEXT DEFAULT '',
+    requester_tel  TEXT DEFAULT '',
+    qty            INTEGER NOT NULL CHECK (qty > 0),          -- ×10000, no DEFAULT (violates CHECK)
+    price          INTEGER DEFAULT 0 CHECK (price >= 0),                 -- ×10000
+    sell_disc      INTEGER DEFAULT 0,                                    -- rate ×100
+    expire         TEXT,
+    tips           TEXT DEFAULT '',
+    governorate    TEXT DEFAULT '',
+    district       TEXT DEFAULT '',
+    country        TEXT DEFAULT '',
+    iddatetime     TEXT DEFAULT (datetime('now')),
+    status         TEXT NOT NULL DEFAULT 'created'
+                   CHECK (status IN ('created','in_transit','delivered','received','cancelled')),
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at     TEXT
+);
+CREATE INDEX ix_chain_buy_branch ON chain_buy_orders (branch_id);
+CREATE INDEX ix_chain_buy_drug ON chain_buy_orders (drug_id);
+CREATE INDEX ix_chain_buy_store ON chain_buy_orders (store_name);
+CREATE INDEX ix_chain_buy_governorate ON chain_buy_orders (governorate, district);
+
+INSERT INTO permissions (code, name_ar)
+VALUES ('chain_buy.manage', 'إدارة الشراء الجماعي');
+
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r, permissions p
+WHERE p.code = 'chain_buy.manage' AND r.id IN (1, 2, 5);
+
 COMMIT;

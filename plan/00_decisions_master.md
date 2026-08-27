@@ -257,4 +257,74 @@ distributors on credit — not weekly-cycle Western purchasing.
   converge on shared ids; without this a later local create could collide with
   an already-replayed id.
 * **Deferred:** PO snapshot lines omit `received_qty`/line ids — unreachable
-  until the purchases-receipt seam lands; add them when that seam ships.
+   until the purchases-receipt seam lands; add them when that seam ships.
+
+---
+
+## S5.5 Chain-stock projection + per-branch minimum (#35) — decisions Q1–Q8 (2026-08-27)
+
+Locked after a chain-stock research pass (Compuscope Egypt chain-ERP overview: per-site
+par levels vary 3×, shortage-first boards; NeptonTech multi-branch sync note: sister-
+pharmacy visibility is cashier-level, LWW replication; Azure offline-first LWW/CQRS
+paper: absolute-value outbox + idempotent replay; Odoo reordering-rule pattern:
+per-warehouse minimum/“virtual shortage” projection, stock.quant ⊥ account.move;
+Pharmasync shortage-dashboard teardown: shortage-desc sorting, cross-branch lookup).
+Full rationale in `docs/adr/0003-chain-stock-projection-minimum.md` (Status Accepted,
+informs #35).
+
+* **Q1 — Projection, not a synced table (A06).** The chain snapshot is a live
+  projection over canonical `branch_stock`, regenerated on demand — never a second
+  `titanksastock` copy. Legacy's 8-col rows (`id, drugname, datee, silsilaid,
+  minimum, pharmacyid, classy, stock`) were GUID-loop-replicated; `branch_stock.qty
+  + minimum + silsilaid + classy + lastedit` is now the single source and the
+  report `app/reports/chain_stock.py` is that projection (chain_sales S5.4 precedent).
+
+* **Q2 — `minimum` is the per-branch reorder point, editable with strict validation:**
+  `PATCH /stock/minimum` sets `(caller_branch, drug_id)` — creates `branch_stock` with
+  `qty=0` when absent, validates exact-decimal 4dp (`money.dec/round4`), non-negative,
+  rejects NaN/Infinity/overflow (`≥10¹⁴`), and writes `audit_log(field=minimum)` +
+  `sync_log(entity=branch_stock, payload {branch_id,drug_id,qty,minimum,silsilaid,classy})`
+  atomically under the per-branch advisory lock (G12). Wire stays 4dp string.
+
+* **Q3 — Permission `stock.manage`, floor 3 (stock area).** New granular code
+  `stock.manage` (إدارة المخزون) seeded to `admin/pharmacist/manager` (`roles 1,2,5`)
+  and covered by `LEGACY_LEVEL_FLOOR stock.manage=3` (same tier as `stock.adjust`,
+  `transfers.manage`, `drugs.manage`). Edit requires it; chain reads
+  (`GET /stock/cross-branch`, `GET /reports/chain_stock`) are authenticated-only so
+  every clerk can reconcile shortages (Compuscope/NeptonTech open-read pattern).
+
+* **Q4 — Branch-stock outbox is absolute-value LWW, idempotent and complete:** payloads
+  carry absolute `qty` (+ optional `minimum` after Q2) so replay is `row.qty = dec(payload.qty)`
+  / `row.minimum = dec(payload.minimum)` — duplicate delivery is a no-op, `G10` missing-drug
+  is recorded `failed`, not lost. Rev 034 enqueues from every site that moves stock:
+  sale decrement, sale-return increment, purchase increment, purchase-return decrement,
+  transfer dispatch+receive (+ shortfall auto-return `transfer_shortage_return`), and
+  minimum edits — so the projection converges offline (Azure LWW guidance).
+
+* **Q5 — Chain-stock report shape (RPT-ST03 parity):** `app/reports/chain_stock.py`
+  = `branch_stock ⨝ branches ⨝ drugs` where `is_active` both sides, `shortage =
+  greatest(minimum - qty, 0)` (4dp), sorted `shortage DESC, drugname ASC,
+  pharmacyid ASC` (Pharmasync shortage-first board; Odoo virtual-shortage), capped
+  `1000` with whole-range `count` + `truncated`, grid الفرع/الصنف/الباركود/الرصيد/الحد الأدنى/العجز,
+  read-only (no journal/stock/outbox writes). Core rev `034` seeds the `chain_stock`
+  `report_catalog` row (chain, sort 210, `A4`, `[]` params, `A06` projection).
+
+* **Q6 — Cross-branch API filters:** `GET /stock/cross-branch?drug_id=&q=&only_shortage=&include_inactive=`
+  — `q` searches `drugname/drugnamear/generic/barcode` (barcode via `drug_barcodes`
+  subquery), `only_shortage` = `qty < minimum`, inactive branches/drugs excluded by
+  default (opt-in restores them for audit). Barcode shown is `is_primary` preferred;
+  returns `qty/minimum/shortage` exact 4dp, `count/truncated`, sorted identically to the report.
+
+* **Q7 — No GL posting (T3 precedent).** Chain-stock viewing/editing never posts a
+  journal: quantities move via `stock_batches` with preserved cost/expiry; VALUE stays
+  per-branch per COA. Valuation remains a future transit-account decision (trigger:
+  first chain customer reconciling per-branch ميزان stock values — same gate as
+  transfers T3; Odoo `stock.quant` ⊥ `account.move` for same reason).
+
+* **Q8 — Twin parity & bundle covers it:** PG `034_stock_chain_snapshot` + SQLite twin
+  `034_stock_chain_snapshot.sql` both seed `stock.manage` → `admin/pharmacist/manager`
+  and `chain_stock` catalog; `schema/schema_sqlite.sql` (= desktop bundle) unchanged
+  for this slice because `report_catalog` is data not schema — `parity_check.py`
+  (tables/columns/constraints only) stays `PARITY OK`, mirroring 033/034 and earlier
+  permission-only seeds. Offline peers read their local `branch_stock` replica after
+  the same LWW replay; no extra ATTACH file.

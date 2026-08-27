@@ -56,3 +56,17 @@ class CurrentStockOut(BaseModel):
 
 class CurrentStockListOut(BaseModel):
     items: list[CurrentStockOut] = []
+
+
+class MinimumSetRequest(BaseModel):
+    drug_id: int = Field(gt=0)
+    minimum: Decimal = Field(ge=0, max_digits=18, decimal_places=4)
+
+
+class MinimumSetResponse(BaseModel):
+    branch_id: int
+    drug_id: int
+    qty: str
+    minimum: str
+    silsilaid: str = ""
+    classy: str = ""

@@ -8,18 +8,20 @@ and expiry batches (feature_stock_counting §2.1, §7).
 """
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth.dependencies import get_current_user
-from app.auth.rbac import require_level
+from app.auth.rbac import require_level, require_permission
 from app.core import money
 from app.core.db import get_session
-from app.models import BranchStock, Drug, StockBatch, StockCorrectionRequest, User
+from app.models import BranchStock, Drug, DrugBarcode, StockBatch, StockCorrectionRequest, User
+from app.reports.chain_stock import query_chain_stock
 from app.stock.counting import (
     approve_count_request,
     reject_count_request,
@@ -29,11 +31,15 @@ from app.stock.schemas import (
     CountRequestCreate,
     CountRequestOut,
     CurrentStockListOut,
+    MinimumSetRequest,
+    MinimumSetResponse,
 )
+from app.stock.service import set_minimum as svc_set_minimum
 
 router = APIRouter()
 
 APPROVE_CORRECTION = require_level(7)
+STOCK_MANAGE = require_permission("stock.manage")
 
 
 def _qty(value) -> str:
@@ -238,3 +244,58 @@ async def reject_request(
         request,
         system_qty=await _live_system_qty(session, branch_id, request.drug_id),
     )
+
+
+@router.patch("/minimum", response_model=MinimumSetResponse)
+async def set_minimum_endpoint(
+    body: MinimumSetRequest,
+    caller: User = Depends(STOCK_MANAGE),
+    session: AsyncSession = Depends(get_session),
+):
+    """Set per-branch reorder point (minimum) — creates BranchStock if missing."""
+    if caller.branch_id is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "user has no branch assigned")
+    branch_id = caller.branch_id
+    row = await svc_set_minimum(
+        session,
+        branch_id=branch_id,
+        user_id=caller.id,
+        drug_id=body.drug_id,
+        minimum=body.minimum,
+    )
+    return MinimumSetResponse(
+        branch_id=branch_id,
+        drug_id=body.drug_id,
+        qty=_qty(row.qty),
+        minimum=_qty(row.minimum),
+        silsilaid=row.silsilaid or "",
+        classy=row.classy or "",
+    )
+
+
+@router.get("/cross-branch")
+async def cross_branch_stock(
+    drug_id: Optional[int] = Query(default=None, gt=0),
+    q: Optional[str] = Query(default=None),
+    only_shortage: bool = Query(default=False),
+    include_inactive: bool = Query(default=False),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Cross-branch stock snapshot (S5.5 #35): per-(branch,drug) qty/minimum/shortage.
+
+    Read-only projection over canonical `branch_stock` (A06). Any authenticated
+    user may read (no permission gate). Delegates to shared ``query_chain_stock``
+    so report + API never drift (review Medium).
+    """
+    data = await query_chain_stock(
+        session,
+        drug_id=drug_id,
+        q=q,
+        only_shortage=only_shortage,
+        include_inactive=include_inactive,
+    )
+    resp: dict = {"count": data["count"], "truncated": data["truncated"], "items": data["items"]}
+    if drug_id is not None:
+        resp["drug_id"] = drug_id
+    return resp

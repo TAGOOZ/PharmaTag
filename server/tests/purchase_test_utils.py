@@ -236,6 +236,11 @@ async def _cleanup(drug_ids: list[int], invoice_ids: list[int], party_ids: list[
                 delete(AuditLog).where(AuditLog.drug_id == drug_id)
             )
             await session.execute(delete(Drug).where(Drug.id == drug_id))
+            await session.execute(delete(SyncLog).where(SyncLog.entity == "branch_stock", SyncLog.entity_id == drug_id))
+            # also sweep by payload (covers legacy rows where entity_id mismatched)
+            for row in (await session.execute(select(SyncLog))).scalars().all():
+                if row.payload and row.payload.get("drug_id") == drug_id:
+                    await session.execute(delete(SyncLog).where(SyncLog.id == row.id))
         for pid in party_ids:
             await session.execute(delete(AuditLog).where(AuditLog.entity == "parties", AuditLog.entity_id == pid))
             await session.execute(delete(Party).where(Party.id == pid))

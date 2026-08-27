@@ -19,7 +19,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.audit import ACTION_INSERT, audit
+from app.core import money
+from app.core.audit import ACTION_INSERT, audit, enqueue_sync
 from app.models import BranchStock, DrugBarcode, StockBatch
 
 BATCH_DUP = HTTPException(
@@ -153,5 +154,20 @@ async def upsert_branch_stock(
         barcode=barcode,
         action="purchase",
         typevalue=invoice_no,
+    )
+    await enqueue_sync(
+        session,
+        branch_id=branch_id,
+        entity="branch_stock",
+        entity_id=drug_id,
+        action="purchase",
+        payload={
+            "branch_id": branch_id,
+            "drug_id": drug_id,
+            "qty": format(money.round4(new), "f"),
+            "minimum": format(money.round4(row.minimum or 0), "f"),
+            "silsilaid": row.silsilaid or "",
+            "classy": row.classy or "",
+        },
     )
     return row

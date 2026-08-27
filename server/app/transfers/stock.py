@@ -20,7 +20,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.audit import audit
+from app.core import money
+from app.core.audit import audit, enqueue_sync
 from app.core.money import dec, format2, format4
 from app.models import BranchStock, StockBatch
 
@@ -204,6 +205,21 @@ async def _adjust_branch_stock(
         drug_id=drug_id,
         action=action,
         typevalue=transfer_no,
+    )
+    await enqueue_sync(
+        session,
+        branch_id=branch_id,
+        entity="branch_stock",
+        entity_id=drug_id,
+        action=action,
+        payload={
+            "branch_id": branch_id,
+            "drug_id": drug_id,
+            "qty": format(money.round4(new), "f"),
+            "minimum": format(money.round4(row.minimum or 0), "f"),
+            "silsilaid": row.silsilaid or "",
+            "classy": row.classy or "",
+        },
     )
 
 

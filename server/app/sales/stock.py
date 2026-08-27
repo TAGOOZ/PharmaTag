@@ -22,7 +22,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.audit import audit
+from app.core import money
+from app.core.audit import audit, enqueue_sync
 from app.core.money import dec, round2
 from app.models import BranchStock, StockBatch
 
@@ -189,5 +190,20 @@ async def decrement_allocations(
         barcode=barcode,
         action="sale",
         typevalue=invoice_no,
+    )
+    await enqueue_sync(
+        session,
+        branch_id=branch_id,
+        entity="branch_stock",
+        entity_id=drug_id,
+        action="sale",
+        payload={
+            "branch_id": branch_id,
+            "drug_id": drug_id,
+            "qty": format(money.round4(new), "f"),
+            "minimum": format(money.round4(branch.minimum or 0), "f"),
+            "silsilaid": branch.silsilaid or "",
+            "classy": branch.classy or "",
+        },
     )
     return round2(total_cost)

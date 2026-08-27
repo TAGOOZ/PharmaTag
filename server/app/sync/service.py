@@ -126,15 +126,17 @@ async def _invoice_exists(
 async def _apply_branch_stock(
     session: AsyncSession, *, branch_id: int, payload: dict
 ) -> None:
-    """Apply a `branch_stock` outbox row (S1.7, ticket #13 edge pass #5).
+    """Apply a `branch_stock` outbox row (S1.7, ticket #13 edge pass #5 + S5.5 #35).
 
-    The payload carries the ABSOLUTE balance (`qty`), so LWW is trivially
-    idempotent: whichever write lands last is the truth, and re-applying an
-    already-applied row is a no-op. A drug that no longer exists on the target
-    store is a recorded failure, never silently dropped (G10)."""
+    The payload carries ABSOLUTE balances (`qty` and optionally `minimum`),
+    so LWW is trivially idempotent: whichever write lands last is the truth,
+    and re-applying an already-applied row is a no-op. A drug that no longer
+    exists on the target store is a recorded failure, never silently dropped
+    (G10). `minimum` is the per-branch reorder point (S5.5)."""
     drug_id = payload.get("drug_id")
     qty = payload.get("qty")
-    if drug_id is None or qty is None:
+    minimum = payload.get("minimum")
+    if drug_id is None or (qty is None and minimum is None):
         raise HTTPException(
             status_code=400, detail="malformed branch_stock outbox row"
         )
@@ -158,7 +160,14 @@ async def _apply_branch_stock(
             minimum=money.dec("0"),
         )
         session.add(row)
-    row.qty = money.dec(qty)
+    if qty is not None:
+        row.qty = money.dec(qty)
+    if minimum is not None:
+        row.minimum = money.dec(minimum)
+    if "silsilaid" in payload and payload["silsilaid"] is not None:
+        row.silsilaid = str(payload["silsilaid"])
+    if "classy" in payload and payload["classy"] is not None:
+        row.classy = str(payload["classy"])
     row.lastedit = datetime.now(timezone.utc)
     session.add(row)
 

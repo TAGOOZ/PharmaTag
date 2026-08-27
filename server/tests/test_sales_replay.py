@@ -295,8 +295,11 @@ async def test_replay_applies_outbox_sale_and_is_idempotent():
         assert debit == Decimal("60.00")  # 40 drawer + 20 cogs
         assert credit == Decimal("60.00")
 
-        # second replay: nothing pending anymore (row marked applied in run 1) —
-        # no re-apply, no double decrement
+        # second replay: branch_stock fan-out from the first replay is now applied (LWW absolute)
+        summary = await _replay()
+        assert summary["applied"] == 1
+        assert summary["failed"] == 0
+        # third replay: now truly empty
         summary = await _replay()
         assert summary == {"applied": 0, "skipped": 0, "failed": 0, "failures": []}
         assert await _stock_qty(drug_id) == Decimal("6.0000")
@@ -327,8 +330,12 @@ async def test_replay_skips_online_sales_already_invoice_exists():
             ).scalars().all()
 
         summary = await _replay()
-        assert summary["applied"] == 0
+        # online sale left a branch_stock pending row; duplicate invoice is skipped
         assert summary["skipped"] == 1
+        assert summary["failed"] == 0
+        assert summary["applied"] == 1  # branch_stock fan-out
+        # drain and verify empty
+        summary = await _replay()
         assert summary["failed"] == 0
         async with SessionLocal() as session:
             row = (

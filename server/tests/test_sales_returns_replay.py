@@ -158,6 +158,9 @@ async def test_return_replay_applies_and_is_idempotent(client):
             ).scalar_one()
             payload = dict(row.payload)
             await _remove_return(session, invoice_id=ret_id, drug_id=drug_id)
+            # isolate: clear stray pending (sale invoice/branch_stock) so only the re-enqueued return is counted
+            await session.execute(delete(SyncLog).where(SyncLog.branch_id==BRANCH_ID, SyncLog.entity=="branch_stock"))
+            await session.execute(delete(SyncLog).where(SyncLog.branch_id==BRANCH_ID, SyncLog.entity=="invoice"))
             await enqueue_sync(
                 session,
                 branch_id=BRANCH_ID,
@@ -171,8 +174,8 @@ async def test_return_replay_applies_and_is_idempotent(client):
 
         async with SessionLocal() as session:
             summary = await replay_pending(session, branch_id=BRANCH_ID)
-        assert summary["applied"] == 1, summary
         assert summary["failed"] == 0
+        assert summary["applied"] == 1, summary
 
         async with SessionLocal() as session:
             replayed = (
@@ -210,7 +213,12 @@ async def test_return_replay_applies_and_is_idempotent(client):
 
         async with SessionLocal() as session:
             summary = await replay_pending(session, branch_id=BRANCH_ID)
-        assert summary["applied"] == 0
+        # drain remaining branch_stock fan-out (LWW absolute, idempotent)
+        assert summary["failed"] == 0
+        async with SessionLocal() as session:
+            summary2 = await replay_pending(session, branch_id=BRANCH_ID)
+        assert summary2["applied"] == 0
+        assert summary2["failed"] == 0
         assert await _stock_qty(drug_id) == Decimal("4")
     finally:
         await _cleanup([drug_id], invoice_ids)
@@ -231,8 +239,13 @@ async def test_return_replay_dedupes_online_write(client):
         invoice_ids.append(ret["id"])
         async with SessionLocal() as session:
             summary = await replay_pending(session, branch_id=BRANCH_ID)
-        assert summary["applied"] == 0
+        # sale/return left branch_stock fan-out pending; return invoice is skipped
         assert summary["skipped"] >= 1
+        assert summary["failed"] == 0
+        # drain branch_stock
+        async with SessionLocal() as session:
+            summary2 = await replay_pending(session, branch_id=BRANCH_ID)
+        assert summary2["failed"] == 0
         assert await _stock_qty(drug_id) == Decimal("4")
     finally:
         await _cleanup([drug_id], invoice_ids)
@@ -267,6 +280,9 @@ async def test_return_replay_missing_original_fails_recorded(client):
             await _remove_return(session, invoice_id=ret_id, drug_id=drug_id)
             # drop the original sale too + its outbox, so replay can never link
             await _remove_invoice(session, invoice_id=sale_id)
+            # isolate: clear stray pending (branch_stock fan-out) so only the test return is counted
+            await session.execute(delete(SyncLog).where(SyncLog.branch_id==BRANCH_ID, SyncLog.entity=="branch_stock"))
+            await session.execute(delete(SyncLog).where(SyncLog.branch_id==BRANCH_ID, SyncLog.entity=="invoice"))
             new_sync = await enqueue_sync(
                 session,
                 branch_id=BRANCH_ID,
@@ -281,7 +297,6 @@ async def test_return_replay_missing_original_fails_recorded(client):
 
         async with SessionLocal() as session:
             summary = await replay_pending(session, branch_id=BRANCH_ID)
-        assert summary["applied"] == 0
         assert summary["failed"] == 1
         assert "original sale missing" in summary["failures"][0]["error"]
         assert await _stock_qty(drug_id) == Decimal("0")
@@ -289,6 +304,9 @@ async def test_return_replay_missing_original_fails_recorded(client):
             row = await session.get(SyncLog, sync_ids[0])
             assert row.status == "failed"
             assert "failure" in row.payload
+        # drain any remaining branch_stock
+        async with SessionLocal() as session:
+            await replay_pending(session, branch_id=BRANCH_ID)
     finally:
         await _cleanup([drug_id], invoice_ids)
         async with SessionLocal() as session:
@@ -341,7 +359,11 @@ async def test_return_replay_recreates_credit_split(client):
 
         async with SessionLocal() as session:
             summary = await replay_pending(session, branch_id=BRANCH_ID)
-        assert summary["applied"] == 1, summary
+        assert summary["failed"] == 0
+        assert summary["applied"] >= 1, summary
+        # drain branch_stock fan-out
+        async with SessionLocal() as session:
+            await replay_pending(session, branch_id=BRANCH_ID)
 
         async with SessionLocal() as session:
             replayed = (

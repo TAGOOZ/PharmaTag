@@ -123,8 +123,14 @@ async def test_every_transition_writes_audit_and_outbox_for_both_branches(world)
     )
     # one outbox row PER AFFECTED BRANCH so both peers converge (enqueue
     # iterates a set of branch ids — order is not part of the contract)
-    assert sorted(s.branch_id for s in syncs) == sorted([world["src"], world["tgt"]])
-    assert all(s.entity == "transfer" and s.action == "update" for s in syncs)
+    transfer_syncs = [s for s in syncs if s.entity == "transfer"]
+    assert sorted(s.branch_id for s in transfer_syncs) == sorted([world["src"], world["tgt"]])
+    assert all(s.entity == "transfer" and s.action == "update" for s in transfer_syncs)
+    # branch_stock fan-out (S5.5): dispatch also enqueues one branch_stock row for the source
+    stock_syncs = [s for s in syncs if s.entity == "branch_stock"]
+    assert len(stock_syncs) == 1 and stock_syncs[0].branch_id == world["src"]
+    assert stock_syncs[0].payload and stock_syncs[0].payload.get("drug_id") == drug
+    assert "qty" in stock_syncs[0].payload and "minimum" in stock_syncs[0].payload
 
     mark = await _watermarks()
     await client.post(
@@ -144,7 +150,15 @@ async def test_every_transition_writes_audit_and_outbox_for_both_branches(world)
         ("branch_stock", "transfer_shortage_return"),
         ("transfer", "update"),
     ]
-    assert sorted(s.branch_id for s in syncs) == sorted([world["src"], world["tgt"]])
+    transfer_syncs = [s for s in syncs if s.entity == "transfer"]
+    assert sorted(s.branch_id for s in transfer_syncs) == sorted([world["src"], world["tgt"]])
+    stock_syncs = [s for s in syncs if s.entity == "branch_stock"]
+    # receive lands one branch_stock row on target and restores one on source
+    assert len(stock_syncs) == 2
+    assert sorted(s.branch_id for s in stock_syncs) == sorted([world["src"], world["tgt"]])
+    for s in stock_syncs:
+        assert s.payload and s.payload.get("drug_id") == drug
+        assert "qty" in s.payload and "minimum" in s.payload
 
 
 async def test_rejected_dispatch_leaves_no_trace(world):

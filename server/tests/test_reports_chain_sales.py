@@ -46,12 +46,23 @@ async def _branch_sweep() -> None:
                 AuditLog.entity.in_(["branch", "branch_identity"])
             )
         )
+        # S5.5: sales on sister branches enqueue branch_stock outbox rows
+        # (payload {branch_id, drug_id, qty, minimum}) that block the branch
+        # FK if not cleared — the entity-scoped delete above misses them.
+        if ids:
+            await session.execute(delete(SyncLog).where(SyncLog.branch_id.in_(ids)))
+            await session.execute(delete(SyncLog).where(SyncLog.source_device_id.in_(ids)))
+            from app.models import BranchStock, StockBatch
+
+            await session.execute(delete(StockBatch).where(StockBatch.branch_id.in_(ids)))
+            await session.execute(delete(BranchStock).where(BranchStock.branch_id.in_(ids)))
         # new branches are seeded a chart of accounts (+ balances) on first
         # use — clear those before the branch row itself
         from app.models import Account, Balance, User
 
-        await session.execute(delete(Balance).where(Balance.branch_id.in_(ids)))
-        await session.execute(delete(Account).where(Account.branch_id.in_(ids)))
+        if ids:
+            await session.execute(delete(Balance).where(Balance.branch_id.in_(ids)))
+            await session.execute(delete(Account).where(Account.branch_id.in_(ids)))
         # sales audited BY the branch-pinned user reference them — clear
         # those audit rows before the users themselves
         await session.execute(

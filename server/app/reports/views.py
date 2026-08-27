@@ -14,6 +14,7 @@ from typing import Any, Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.reports.chain_stock import chain_stock_report
 from app.reports.day_profit import day_profit_report
 from app.reports.chain_sales import chain_sales_report
 from app.reports.day_totals import DAY_COLUMNS, day_totals_report
@@ -925,6 +926,38 @@ def _chain_sales_view(payload: dict) -> ViewSpec:
     }
 
 
+def _chain_stock_view(payload: dict) -> ViewSpec:
+    rows = [
+        [
+            item["pharname"] or item["pharmacyid"],
+            f"{item['drugname']} ({item['drugnamear']})" if item["drugnamear"] else item["drugname"],
+            item["barcode"] or "—",
+            item["qty"],
+            item["minimum"],
+            item["shortage"],
+        ]
+        for item in payload["items"]
+    ]
+    note = None
+    if payload.get("truncated"):
+        note = f"هناك أصناف أخرى غير معروضة (الحد 1000) — العدد الإجمالي {payload['count']}."
+    return {
+        "meta": [("عدد البطاقات", payload["count"])],
+        "columns": ["الفرع", "الصنف", "الباركود", "الرصيد", "الحد الأدنى", "العجز"],
+        "rows": rows,
+        "foot": None,
+        "note": note,
+    }
+
+
+async def _query_chain_stock(
+    session: AsyncSession, branch_id: int, params: dict[str, str]
+) -> dict:
+    # chain-wide by design (A06): projection reads EVERY active branch,
+    # `branch_id` is only the requesting caller's
+    return await chain_stock_report(session, branch_id=branch_id)
+
+
 REGISTRY: dict[str, dict[str, Callable]] = {
     "day_profit": {"query": _query_day_profit, "view": _day_profit_view},
     "period_totals": {"query": _query_period_totals, "view": _period_totals_view},
@@ -960,6 +993,7 @@ REGISTRY: dict[str, dict[str, Callable]] = {
         "view": _vat_summary_view,
     },
     "chain_sales": {"query": _query_chain_sales, "view": _chain_sales_view},
+    "chain_stock": {"query": _query_chain_stock, "view": _chain_stock_view},
 }
 
 

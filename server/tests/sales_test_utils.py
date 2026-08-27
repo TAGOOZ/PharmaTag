@@ -141,6 +141,10 @@ async def _cleanup(drug_ids: list[int], invoice_ids: list[int]) -> None:
                 delete(AuditLog).where(AuditLog.drug_id == drug_id)
             )
             await session.execute(delete(Drug).where(Drug.id == drug_id))
+            await session.execute(delete(SyncLog).where(SyncLog.entity == "branch_stock", SyncLog.entity_id == drug_id))
+            for row in (await session.execute(select(SyncLog))).scalars().all():
+                if row.payload and row.payload.get("drug_id") == drug_id:
+                    await session.execute(delete(SyncLog).where(SyncLog.id == row.id))
         await session.commit()
 
 

@@ -31,6 +31,7 @@ LEGACY_LEVEL_FLOOR = {
     "sale.edit_invoice": 8,
     "day.close": 7,
     "stock.adjust": 3,
+    "stock.manage": 3,  # per-branch reorder point (S5.5 #35 — stock area, floor 3)
     "drugs.manage": 3,  # الأصناف والمخزون (drug master + stock module, plan/02 §3)
     "needs.manage": 3,  # needs/orders نواقص وطلبات (S5.3, #33 — stock area)
     "transfers.manage": 3,  # inter-pharmacy transfers تحويلات بين الفروع (S5.2, #32 — stock area)

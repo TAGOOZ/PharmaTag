@@ -12,7 +12,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from app.sales.schemas import PaymentSplitIn
 
@@ -20,7 +20,15 @@ from app.sales.schemas import PaymentSplitIn
 class PurchaseLineIn(BaseModel):
     drug_id: int = Field(gt=0)
     qty: Decimal = Field(gt=0, max_digits=18, decimal_places=4)
-    unit_cost: Decimal = Field(ge=0, max_digits=18, decimal_places=4)
+    # S5.5: accept legacy wire aliases so replay/older clients sending
+    # ``cost``/``price`` (titanksastock legacy, test_stock_cross_branch) remain
+    # green — ``unit_cost`` is canonical, the two aliases are compat-only.
+    unit_cost: Decimal = Field(
+        validation_alias=AliasChoices("unit_cost", "cost", "price"),
+        ge=0,
+        max_digits=18,
+        decimal_places=4,
+    )
     expire: Optional[date] = None
     disc_percent: Optional[Decimal] = Field(
         default=None, ge=0, le=100, max_digits=5, decimal_places=2

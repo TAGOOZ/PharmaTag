@@ -31,6 +31,8 @@ EXPECTED_CODES = {
     "vat_summary",
     # S5.4 (#34) — the titanksasales projection (A06)
     "chain_sales",
+    # S5.5 (#35) — chain_stock projection
+    "chain_stock",
 }
 
 
@@ -112,4 +114,5 @@ async def test_catalog_orders_by_sort_then_code(client):
         "ledger_account",
         "vat_summary",
         "chain_sales",
+        "chain_stock",
     ]

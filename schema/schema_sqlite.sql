@@ -111,7 +111,7 @@ CREATE TABLE drugs (
     titanid      INTEGER DEFAULT 0,
     history      TEXT DEFAULT '',
     active       INTEGER NOT NULL DEFAULT 1,
-    egs_code     TEXT,                                          -- ETA EGS code (#30; nullable until registered)
+    egs_code     TEXT,                                          -- ETA EGS code (#30 nullable until registered)
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
     lastedit     TEXT
@@ -757,7 +757,8 @@ INSERT INTO role_permissions (role_id, permission_id)
     WHERE p.code = 'months.close' AND r.id IN (1, 4, 5);
 
 -- rev 015: report_catalog + print_jobs (S3.1, #23) — RPT menu/dispatch key +
--- durable print queue; seeds mirror alembic 015.
+-- durable print queue; seeds mirror alembic 015–034 (S3.1–S3.5, S5.4–S5.5).
+-- Backfill 016/017 (day_totals + stock 4) was missing from the twin until #53.
 CREATE TABLE report_catalog (
     code     TEXT PRIMARY KEY,
     category TEXT NOT NULL,
@@ -783,9 +784,22 @@ CREATE TABLE print_jobs (
 
 INSERT INTO report_catalog (code, category, title_ar, title_en, params, paper, sort) VALUES
     ('drawer_handover', 'money', 'تسليم الدرج', 'Drawer Handover', '["date_from", "date_to"]', 'A4', 10),
-    ('day_profit', 'money', 'ربح اليوم', 'Day Profit', '["datee"]', 'A4', 20),
+    ('day_profit', 'money', 'ربح اليوم', 'Day Profit', '["datee", "date_from", "date_to"]', 'A4', 20),
+    ('day_totals', 'money', 'الإجماليات اليومية', 'Day Totals', '["date_from", "date_to"]', 'A4', 25),
     ('period_totals', 'money', 'ملخص المبيعات والمشتريات', 'Sales & Purchases Summary', '["date_from", "date_to"]', 'A4', 30),
-    ('stock_minimum', 'stock', 'النواقص (أقل من الحد الأدنى)', 'Stock Below Minimum', '[]', 'A4', 40);
+    ('stock_minimum', 'stock', 'النواقص (أقل من الحد الأدنى)', 'Stock Below Minimum', '[]', 'A4', 40),
+    ('stock_current', 'stock', 'رصيد الأصناف', 'Current Stock', '[]', 'A4', 50),
+    ('stock_movements', 'stock', 'تتبع تغيير الرصيد', 'Drug Movement Track', '["drug_id", "date_from", "date_to"]', 'A4', 60),
+    ('stock_expired', 'stock', 'الادوية منتهية الصلاحية', 'Expired / Expiring Stock', '["datee", "horizon_days"]', 'A4', 70),
+    ('stock_needs', 'stock', 'احتياجات الطلب (الحد الأدنى)', 'Order Needs (Minimum-Based)', '[]', 'A4', 80),
+    ('sales_invoices', 'sales', 'فواتير المبيعات', 'Sales Invoices', '["date_from", "date_to"]', 'A4', 90),
+    ('purchase_invoices', 'sales', 'فواتير المشتريات', 'Purchase Invoices', '["date_from", "date_to"]', 'A4', 100),
+    ('returns_period', 'sales', 'مرتجعات الفترة', 'Period Returns', '["date_from", "date_to"]', 'A4', 110),
+    ('party_totals', 'sales', 'إجمالي العملاء والموردين', 'Customer & Supplier Totals', '["date_from", "date_to"]', 'A4', 120),
+    ('ledger_account', 'accounting', 'دفتر الأستاذ لحساب', 'Ledger by Account', '["account_code", "month", "year", "date_from", "date_to"]', 'A4', 130),
+    ('vat_summary', 'accounting', 'ملخص ضريبة القيمة المضافة', 'VAT Summary (Form 10)', '["month", "year", "date_from", "date_to"]', 'A4', 140),
+    ('chain_sales', 'chain', 'مبيعات السلسلة', 'Chain Sales Summary', '["date_from", "date_to"]', 'A4', 200),
+    ('chain_stock', 'chain', 'مخزون السلسلة', 'Chain Stock Snapshot', '[]', 'A4', 210);
 
 -- rev 023: einvoice foundations (S4.1, #28; ADR-0002) — per-device UUID/counter
 -- chain + tax-document log; payload_json TEXT keeps document key order verbatim
@@ -818,7 +832,7 @@ CREATE TABLE einvoice_log (
     response       TEXT NOT NULL DEFAULT '',
     submitted_at   TEXT,
     attempts       INTEGER NOT NULL DEFAULT 0,      -- S4.2 retry bookkeeping
-    next_attempt_at TEXT,                            -- backoff gate; NULL = due now
+    next_attempt_at TEXT,                            -- backoff gate NULL = due now
     last_error     TEXT NOT NULL DEFAULT '',        -- last transport/ETA error
     created_at     TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (branch_id, kind, counter),
@@ -939,6 +953,30 @@ VALUES ('needs.manage', 'إدارة النواقص والطلبات');
 INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM roles r, permissions p
 WHERE p.code = 'needs.manage' AND r.id IN (1, 2, 5);
+
+-- rev 014 (backfill): opening_balances.manage was missing from bundle — idempotent
+INSERT OR IGNORE INTO permissions (code, name_ar) VALUES ('opening_balances.manage', 'الأرصدة الافتتاحية');
+INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r, permissions p
+WHERE p.code = 'opening_balances.manage' AND r.id IN (1, 4, 5);
+
+-- rev 026 (backfill): branches.manage — SQLite twin was missing this rev — idempotent
+INSERT OR IGNORE INTO permissions (code, name_ar) VALUES ('branches.manage', 'إدارة الفروع والأجهزة');
+INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r, permissions p
+WHERE p.code = 'branches.manage' AND r.id IN (1, 5);
+
+-- rev 027 (backfill): transfers.manage was missing from bundle — idempotent
+INSERT OR IGNORE INTO permissions (code, name_ar) VALUES ('transfers.manage', 'إدارة التحويلات بين الفروع');
+INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r, permissions p
+WHERE p.code = 'transfers.manage' AND r.id IN (1, 2, 5);
+
+-- rev 034 (backfill): stock.manage — bundle had chain_stock row but not this permission — idempotent
+INSERT OR IGNORE INTO permissions (code, name_ar) VALUES ('stock.manage', 'إدارة المخزون');
+INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM roles r, permissions p
+WHERE p.code = 'stock.manage' AND r.id IN (1, 2, 5);
 
 -- rev 035: chain buy (S5.6, #36; T1 CORE) — ChainBuyStore/ChainBuyUsers
 -- 12-col merged into chain_buy_orders + RawakidTablew → dead_stock_exchange

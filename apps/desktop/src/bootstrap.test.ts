@@ -39,13 +39,13 @@ function tableNames(db: DatabaseSync): string[] {
 }
 
 describe('bootstrapSchema (first-run offline schema application)', () => {
-  it('applies the full 38-table schema on first boot (branches guard)', async () => {
+  it('applies the full 52-table schema on first boot (branches guard)', async () => {
     const { db, runner } = openInMemory();
     expect(tableNames(db)).toEqual([]);
     await bootstrapSchema(runner, schemaSql);
     const names = tableNames(db);
     expect(names).toContain('branches');
-    expect(names.length).toBe(38);
+    expect(names.length).toBe(52);
   });
 
   it('is idempotent — a second boot is a no-op, never duplicate tables', async () => {

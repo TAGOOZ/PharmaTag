@@ -16,6 +16,7 @@ Usage: python scripts/parity_check.py  (run from server/; needs alembic on PATH)
 """
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -222,6 +223,141 @@ def normalize(pg_type: str) -> str:
     return t
 
 
+# ---------------------------------------------------------------------------
+# Row-level parity for seeded tables (#53): report_catalog must be identical
+# across PG and both SQLite twins. Fresh twin apply must yield all catalog
+# rows matching Postgres; future drift is caught here.
+# ---------------------------------------------------------------------------
+
+_PG_CATALOG_INSERT_RE = re.compile(
+    r"INSERT INTO report_catalog \(code, category, title_ar, title_en, params, paper, sort\) "
+    r"VALUES \('([^']*)', '([^']*)', '([^']*)', '([^']*)',.*?\'(\[.*?\])\'.*?, '([^']*)', (\d+)\)",
+    re.I | re.S,
+)
+_PG_CATALOG_UPDATE_RE = re.compile(
+    r"UPDATE report_catalog SET params =.*?\'(\[.*?\])\'.*?WHERE code = '([^']*)'",
+    re.I | re.S,
+)
+_SQLITE_CATALOG_INSERT_BLOCK_RE = re.compile(
+    r"INSERT(?: OR IGNORE)? INTO report_catalog \(code, category, title_ar, title_en, params, paper, sort\) VALUES\s*(.+?);",
+    re.I | re.S,
+)
+_SQLITE_CATALOG_TUPLE_RE = re.compile(
+    r"\(\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'(\[.*?\])'\s*,\s*'([^']*)'\s*,\s*(\d+)\s*\)",
+    re.S,
+)
+_SQLITE_CATALOG_UPDATE_RE = re.compile(
+    r"UPDATE report_catalog SET params\s*=\s*'([^']*)'\s*WHERE\s+code\s*=\s*'([^']*)'",
+    re.I,
+)
+
+
+def _normalize_params(raw: str) -> str:
+    """Canonical JSON form for params comparison (whitespace-insensitive)."""
+    try:
+        obj = json.loads(raw)
+        return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return raw.strip()
+
+
+def _catalog_from_pg_sql(sql: str) -> dict[str, tuple]:
+    """Apply PG INSERTs + UPDATEs in file order to build final catalog map."""
+    events: list[tuple[int, str, re.Match]] = []
+    for m in _PG_CATALOG_INSERT_RE.finditer(sql):
+        events.append((m.start(), "insert", m))
+    for m in _PG_CATALOG_UPDATE_RE.finditer(sql):
+        events.append((m.start(), "update", m))
+    events.sort(key=lambda x: x[0])
+    catalog: dict[str, tuple] = {}
+    for _, typ, m in events:
+        if typ == "insert":
+            code, category, title_ar, title_en, params_raw, paper, sort = m.groups()
+            catalog[code] = (
+                category,
+                title_ar,
+                title_en,
+                _normalize_params(params_raw),
+                paper,
+                int(sort),
+            )
+        else:
+            params_raw, code = m.groups()
+            if code in catalog:
+                cat, ta, te, _old, pap, srt = catalog[code]
+                catalog[code] = (cat, ta, te, _normalize_params(params_raw), pap, srt)
+    return catalog
+
+
+def _catalog_from_sqlite_sql(sql: str) -> dict[str, tuple]:
+    """Apply SQLite INSERT (incl. OR IGNORE) + UPDATE in order."""
+    events: list[tuple[int, str, re.Match]] = []
+    for m in _SQLITE_CATALOG_INSERT_BLOCK_RE.finditer(sql):
+        events.append((m.start(), "insert", m))
+    for m in _SQLITE_CATALOG_UPDATE_RE.finditer(sql):
+        events.append((m.start(), "update", m))
+    events.sort(key=lambda x: x[0])
+    catalog: dict[str, tuple] = {}
+    for _, typ, m in events:
+        if typ == "insert":
+            block = m.group(1)
+            is_ignore = "OR IGNORE" in m.group(0).upper()
+            for tup in _SQLITE_CATALOG_TUPLE_RE.finditer(block):
+                code, category, title_ar, title_en, params_raw, paper, sort = tup.groups()
+                if is_ignore and code in catalog:
+                    continue
+                catalog[code] = (
+                    category,
+                    title_ar,
+                    title_en,
+                    _normalize_params(params_raw),
+                    paper,
+                    int(sort),
+                )
+        else:
+            params_raw, code = m.groups()
+            if code in catalog:
+                cat, ta, te, _old, pap, srt = catalog[code]
+                catalog[code] = (cat, ta, te, _normalize_params(params_raw), pap, srt)
+    return catalog
+
+
+def _catalog_from_sqlite_paths(paths: list[Path]) -> dict[str, tuple]:
+    """SQLite migrations twin: apply files in sorted order, OR IGNORE semantics."""
+    # Concatenate in sorted order but preserve per-file OR IGNORE handling;
+    # feeding the combined SQL to _catalog_from_sqlite_sql preserves order.
+    combined = "\n".join(p.read_text(encoding="utf-8") for p in sorted(paths))
+    return _catalog_from_sqlite_sql(combined)
+
+
+def check_seeded_row_parity(
+    pg_catalog: dict[str, tuple],
+    twin_catalogs: dict[str, dict[str, tuple]],
+    errors: list[str],
+) -> int:
+    """Every PG report_catalog row must exist identically in each twin."""
+    verified = 0
+    for code, pg_row in sorted(pg_catalog.items()):
+        all_match = True
+        for twin_name, catalog in twin_catalogs.items():
+            if code not in catalog:
+                errors.append(f"seeded row drift: PG report_catalog {code!r} missing from {twin_name}")
+                all_match = False
+            elif catalog[code] != pg_row:
+                errors.append(
+                    f"seeded row drift: PG report_catalog {code!r} mismatch in {twin_name}: "
+                    f"PG={pg_row} vs twin={catalog[code]}"
+                )
+                all_match = False
+        if all_match:
+            verified += 1
+    for twin_name, catalog in twin_catalogs.items():
+        for code in sorted(catalog):
+            if code not in pg_catalog:
+                errors.append(f"seeded row drift: extra report_catalog {code!r} in {twin_name} not in PG")
+    return verified
+
+
 def main() -> int:
     pg_sql = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head", "--sql"],
@@ -315,6 +451,28 @@ def main() -> int:
                 f"constraint drift: key UNIQUE {unique_name} missing from a twin"
             )
 
+    # seeded row parity (#53): report_catalog must be identical across PG and both SQLite twins
+    pg_catalog = _catalog_from_pg_sql(pg_sql)
+    twin_catalogs = {
+        "migrations twin": _catalog_from_sqlite_paths(
+            sorted((SERVER / "sqlite" / "migrations").glob("*.sql"))
+        ),
+        "desktop bundle (schema/schema_sqlite.sql)": _catalog_from_sqlite_sql(
+            (SERVER.parent / "schema" / "schema_sqlite.sql").read_text(encoding="utf-8")
+        ),
+    }
+    seeded_verified = check_seeded_row_parity(pg_catalog, twin_catalogs, errors)
+
+    # ensure Tauri-bundled copy is identical to canonical schema (drift undetected otherwise)
+    canonical_path = SERVER.parent / "schema" / "schema_sqlite.sql"
+    tauri_path = SERVER.parent / "apps" / "desktop" / "src" / "resources" / "schema_sqlite.sql"
+    if tauri_path.exists():
+        if canonical_path.read_text(encoding="utf-8") != tauri_path.read_text(encoding="utf-8"):
+            errors.append(
+                "desktop bundle drift: apps/desktop/src/resources/schema_sqlite.sql != schema/schema_sqlite.sql "
+                "(run cp schema/schema_sqlite.sql apps/desktop/src/resources/schema_sqlite.sql)"
+            )
+
     if errors:
         print("PARITY FAIL")
         for e in sorted(set(errors)):
@@ -324,6 +482,7 @@ def main() -> int:
         f"PARITY OK — {len(pg)} tables, {sum(len(c) for c in pg.values())} PG columns "
         f"mirrored in SQLite twin + desktop bundle (schema/schema_sqlite.sql); "
         f"{constraints} constraints (CHECKs + key UNIQUE backstops) verified on both twins; "
+        f"{seeded_verified} seeded report_catalog rows verified on both twins; "
         f"no REAL/FLOAT money; no plugin tables in core."
     )
     return 0

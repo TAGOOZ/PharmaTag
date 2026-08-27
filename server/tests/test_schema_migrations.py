@@ -43,6 +43,7 @@ _CORE_ENUMS = [
 EXPECTED_TABLES = {  # == the SQLite twin's CREATE TABLE set (49 core + host)
     "accounts", "app_config", "app_plugins", "audit_log", "balances",
     "branch_identities", "branch_stock", "branches", "daily_close",
+    "chain_buy_orders", "dead_stock_exchange",
     "drawer_movements", "drug_barcodes", "drug_costs", "drugs",
     "einvoice_counters", "einvoice_log",
     "integration_config", "invoice_lines", "invoice_versions", "invoices",
@@ -64,14 +65,16 @@ EXPECTED_COUNTS = {
     "branches": 1,
     "users": 1,
     "roles": 5,
-    "permissions": 25,           # 16 seeded + drugs.manage (rev 005) +
+    "permissions": 27,           # 16 seeded + drugs.manage (rev 005) +
                                  # accounts.manage (rev 009) + journals.manage (rev 011) +
                                  # receivables.manage (rev 012) + months.close (rev 013) +
                                  # opening_balances.manage (rev 014) +
                                  # branches.manage (rev 026) +
                                  # transfers.manage (rev 027) +
-                                 # needs.manage (rev 031)
-    "role_permissions": 49,      # admin->all 16 + manager 6 + accountant 2 +
+                                 # needs.manage (rev 031) +
+                                 # stock.manage (rev 034) +
+                                 # chain_buy.manage (rev 035)
+    "role_permissions": 55,      # admin->all 16 + manager 6 + accountant 2 +
                                  # pharmacist 1 + cashier 1 + 005 admin grant +
                                  # 009 admin + accountant accounts.manage grants +
                                  # 011 journals.manage grants to roles 1, 4, 5 +
@@ -80,7 +83,9 @@ EXPECTED_COUNTS = {
                                  # 014 opening_balances.manage grants to roles 1, 4, 5 +
                                  # 026 branches.manage grants to roles 1, 5 +
                                  # 027 transfers.manage grants to roles 1, 2, 5 +
-                                 # 031 needs.manage grants to roles 1, 2, 5
+                                 # 031 needs.manage grants to roles 1, 2, 5 +
+                                 # 034 stock.manage grants to roles 1, 2, 5 +
+                                 # 035 chain_buy.manage grants to roles 1, 2, 5
     "user_roles": 1,
     "accounts": 23,              # 12 seeded + 11 rev-009 tree nodes
     "app_plugins": 2,

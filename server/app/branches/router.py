@@ -1,16 +1,17 @@
-"""Branch registry endpoints (ticket #31, S5.1).
+"""Branch registry endpoints (ticket #31, S5.1 + branch settings #59).
 
 Reads are open to any authenticated user (pickers/settings screens); writes
 require the `branches.manage` permission (seeded to admin+manager, legacy
 floor 7 — the same tier as day-close reopen). Main-device role changes add a
-`require_level(7)` gate in the service.
+`require_level(7)` gate in the service. Branch-settings (#59) extends the
+same pattern for vat/treasury/printer/legal fields.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -133,6 +134,59 @@ async def promote_main(
         caller_level=caller.permission_level, target=branch
     )
     return service.public_branch(branch)
+
+
+class BranchSettingsPatchRequest(BaseModel):
+    vat_inclusive_prices: Optional[StrictBool] = Field(default=None)
+    treasury_enabled: Optional[StrictBool] = Field(default=None)
+    printer_defaults: Optional[Dict[str, str]] = Field(default=None)
+    printer_config: Optional[Dict[str, str]] = Field(default=None)
+    tax_id: Optional[str] = Field(default=None, max_length=30)
+    pharname: Optional[str] = Field(default=None, max_length=100)
+    adress: Optional[str] = Field(default=None, max_length=200)
+    governorate: Optional[str] = Field(default=None, max_length=50)
+    district: Optional[str] = Field(default=None, max_length=50)
+
+
+@router.get("/{branch_id}/settings")
+async def get_branch_settings(
+    branch_id: int,
+    caller: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    branch = await _get_or_404(session, branch_id)
+    return service.public_settings(branch)
+
+
+@router.patch("/{branch_id}/settings")
+async def patch_branch_settings(
+    branch_id: int,
+    body: BranchSettingsPatchRequest,
+    caller: User = Depends(MANAGE_BRANCHES),
+    session: AsyncSession = Depends(get_session),
+):
+    branch = await _get_or_404(session, branch_id)
+    if body.printer_defaults is not None and body.printer_config is not None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "provide printer_defaults or printer_config, not both",
+        )
+    # alias printer_config -> printer_defaults
+    raw_printer = body.printer_defaults if body.printer_defaults is not None else body.printer_config
+    branch = await service.update_branch_settings(
+        session,
+        caller_id=caller.id,
+        branch=branch,
+        vat_inclusive_prices=body.vat_inclusive_prices,
+        treasury_enabled=body.treasury_enabled,
+        printer_config=raw_printer,
+        tax_id=body.tax_id,
+        pharname=body.pharname,
+        adress=body.adress,
+        governorate=body.governorate,
+        district=body.district,
+    )
+    return service.public_settings(branch)
 
 
 class AttachIdentityRequest(BaseModel):

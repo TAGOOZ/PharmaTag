@@ -19,6 +19,7 @@ from app.models import (
     JournalLine,
     PaymentSplit,
     StockBatch,
+    SyncLog,
 )
 from app.einvoicing.chain import verify_chain
 from tests.einv_test_utils import (
@@ -79,6 +80,13 @@ async def _cleanup(drug_ids: list[int], branch_id: int) -> None:
             await session.execute(delete(StockBatch).where(StockBatch.drug_id == drug_id))
             await session.execute(
                 delete(BranchStock).where(BranchStock.drug_id == drug_id)
+            )
+            await session.execute(
+                delete(SyncLog).where(
+                    SyncLog.branch_id == branch_id,
+                    SyncLog.entity == "branch_stock",
+                    SyncLog.entity_id == drug_id,
+                )
             )
             await session.execute(delete(AuditLog).where(AuditLog.drug_id == drug_id))
             await session.execute(delete(Drug).where(Drug.id == drug_id))

@@ -28,6 +28,7 @@ KNOWN LIMITATIONS (accepted for this slice):
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
@@ -36,6 +37,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.branches.service import ALLOWED_PRINTER_PURPOSES
 from app.core.audit import ACTION_DELETE, ACTION_INSERT, ACTION_UPDATE, audit
 from app.models import Branch, BranchIdentity
 from app.needs.replay import _advance_identity_sequence
@@ -55,6 +57,7 @@ _TEXT_FIELDS = (
     "district",
     "country",
     "currency",
+    "tax_id",
 )
 
 # watermark for legacy (pre-#34) snapshots: deterministic across peers and
@@ -124,6 +127,35 @@ def _fields_from_payload(payload: dict) -> dict[str, object]:
         kwargs["vat_inclusive_prices"] = _strict_bool(
             payload, "vat_inclusive_prices", True
         )
+        kwargs["treasury_enabled"] = _strict_bool(payload, "treasury_enabled", False)
+        # printer_config: tolerate both `printer_config` and alias `printer_defaults`
+        # and both dict and JSON-text forms (SQLite twin stores TEXT). Explicit
+        # `null` must not shadow the alias.
+        pc_raw = payload.get("printer_config")
+        if pc_raw is None:
+            pc_raw = payload.get("printer_defaults", {})
+        if isinstance(pc_raw, str):
+            try:
+                pc_raw = json.loads(pc_raw) if pc_raw.strip() else {}
+            except Exception:
+                raise MALFORMED
+        if pc_raw is None:
+            pc_raw = {}
+        if not isinstance(pc_raw, dict):
+            raise MALFORMED
+        for k, v in pc_raw.items():
+            if k not in ALLOWED_PRINTER_PURPOSES:
+                raise MALFORMED
+            if not isinstance(v, str):
+                raise MALFORMED
+            stripped = v.strip()
+            if len(stripped) > 100 or any(ord(c) < 32 for c in stripped):
+                raise MALFORMED
+        # normalize to full 5-key map so replay is deterministic (stripped)
+        kwargs["printer_config"] = {
+            k: str(pc_raw.get(k, "")).strip() if isinstance(pc_raw.get(k, ""), str) else ""
+            for k in ALLOWED_PRINTER_PURPOSES
+        }
         kwargs["is_main_device"] = _strict_bool(payload, "is_main_device", False)
         kwargs["is_active"] = _strict_bool(payload, "is_active", True)
     except MALFORMED:

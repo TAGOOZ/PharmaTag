@@ -177,7 +177,8 @@ async def _stock_qty_branch(branch_id: int, drug_id: int) -> Decimal:
 
 async def _delete_branch(branch_id: int) -> None:
     """Remove a throwaway branch + its users + balances (they FK the branch).
-    Audit rows reference the branch's users, so purge those first."""
+    Audit rows reference the branch's users, so purge those first. Also purge
+    any outbox rows that FK the branch (branch_stock sync, invoice sync)."""
     async with SessionLocal() as session:
         user_ids = (
             await session.execute(
@@ -188,6 +189,10 @@ async def _delete_branch(branch_id: int) -> None:
             await session.execute(
                 delete(AuditLog).where(AuditLog.user_id.in_(user_ids))
             )
+        await session.execute(delete(SyncLog).where(SyncLog.branch_id == branch_id))
+        # branch_stock sync rows have entity_id=drug_id but branch_id is the branch;
+        # the above already covers them (branch_id filter). Also purge any sync
+        # that references this branch via payload (defensive).
         await session.execute(delete(Balance).where(Balance.branch_id == branch_id))
         await session.execute(delete(User).where(User.branch_id == branch_id))
         await session.execute(delete(Branch).where(Branch.id == branch_id))

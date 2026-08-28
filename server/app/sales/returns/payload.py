@@ -28,25 +28,28 @@ def _return_payload(
         orig_line = item["orig_line"]
         lm = item["lm"]
         batch = item["batch"]
-        lines.append(
-            {
-                "drug_id": orig_line.drug_id,
-                "qty": str(lm.qty),
-                "unit_price": str(lm.unit_price),
-                "unit_cost": str(round4(item["cogs"] / lm.qty)),
-                "discount": str(lm.discount),
-                "tax_type": lm.tax_type,
-                "vat_amount": str(lm.vat),
-                "line_total": str(lm.line_total),
-                "expire": orig_line.expire.isoformat() if orig_line.expire else None,
-                "ref_invoice_line_id": orig_line.id,
-                "batch": {
-                    "randomid": batch.randomid,
-                    "cost": str(batch.cost),
-                    "expire": batch.expire.isoformat() if batch.expire else None,
-                },
-            }
-        )
+        entry: dict[str, Any] = {
+            "drug_id": orig_line.drug_id,
+            "qty": str(lm.qty),
+            "unit_price": str(lm.unit_price),
+            "unit_cost": str(round4(item["cogs"] / lm.qty)),
+            "discount": str(lm.discount),
+            "tax_type": lm.tax_type,
+            "vat_amount": str(lm.vat),
+            "line_total": str(lm.line_total),
+            "expire": orig_line.expire.isoformat() if orig_line.expire else None,
+            "ref_invoice_line_id": orig_line.id,
+            "batch": {
+                "randomid": batch.randomid,
+                "cost": str(batch.cost),
+                "expire": batch.expire.isoformat() if batch.expire else None,
+            },
+        }
+        # #51: spillover restores carry per-lot shares so replay restores each
+        # source lot instead of re-creating a single earliest-expiry batch.
+        if "restored_batches" in item:
+            entry["restored_batches"] = item["restored_batches"]
+        lines.append(entry)
     return {
         "branch_id": invoice.branch_id,
         "kind": invoice.kind,

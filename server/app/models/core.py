@@ -45,6 +45,14 @@ class Branch(Base):
     vat_inclusive_prices: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("true")
     )
+    # rev 036 — branch settings (ticket #59)
+    tax_id: Mapped[str] = mapped_column(String(30), nullable=False, server_default="")
+    treasury_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    printer_config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     is_main_device: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )

@@ -44,6 +44,9 @@ CREATE TABLE branches (
     currency            TEXT DEFAULT '',
     vat_default         INTEGER NOT NULL DEFAULT 1400,          -- 14.00 ×100
     vat_inclusive_prices INTEGER NOT NULL DEFAULT 1,
+    tax_id              TEXT NOT NULL DEFAULT '',
+    treasury_enabled    INTEGER NOT NULL DEFAULT 0,
+    printer_config      TEXT NOT NULL DEFAULT '{}',
     is_main_device      INTEGER NOT NULL DEFAULT 0,
     is_active           INTEGER NOT NULL DEFAULT 1,
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),

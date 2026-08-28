@@ -23,7 +23,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.audit import ACTION_INSERT, audit
+from app.core import money
+from app.core.audit import ACTION_INSERT, audit, enqueue_sync
 from app.core.money import dec, format2, round2, tax_rate
 from app.drawer.movements import SALE_RETURN, record_payment_splits
 from app.einvoicing.service import apply_einvoice_block
@@ -102,6 +103,183 @@ async def apply_sale_return_payload(
     line_batches: list[tuple[dict, StockBatch]] = []
     cogs_total = Decimal("0")
     for lp in payload["lines"]:
+        # #51: restored_batches carry per-lot shares; replay must restore each
+        # source lot instead of re-creating a single earliest-expiry batch.
+        restores = lp.get("restored_batches")
+        if isinstance(restores, list) and restores:
+            first_batch: StockBatch | None = None
+            total_restored = Decimal("0")
+            for idx, rb in enumerate(restores):
+                rq = dec(rb.get("qty", 0))
+                if rq <= 0:
+                    continue
+                total_restored += rq
+                # Try to increment an existing lot by randomid (primary)
+                batch: StockBatch | None = None
+                r_randomid = rb.get("randomid")
+                r_cost = rb.get("cost")
+                r_expire = rb.get("expire")
+                r_batch_id = rb.get("batch_id")
+                if r_randomid:
+                    batch = (
+                        await session.execute(
+                            select(StockBatch)
+                            .where(
+                                StockBatch.branch_id == branch_id,
+                                StockBatch.drug_id == lp["drug_id"],
+                                StockBatch.randomid == r_randomid,
+                            )
+                            .with_for_update()
+                        )
+                    ).scalar_one_or_none()
+                if batch is None and r_batch_id is not None:
+                    try:
+                        bid = int(r_batch_id)
+                    except Exception:
+                        bid = None
+                    if bid is not None:
+                        batch = (
+                            await session.execute(
+                                select(StockBatch)
+                                .where(
+                                    StockBatch.id == bid,
+                                    StockBatch.branch_id == branch_id,
+                                    StockBatch.drug_id == lp["drug_id"],
+                                )
+                                .with_for_update()
+                            )
+                        ).scalar_one_or_none()
+                if batch is not None:
+                    old = dec(batch.qty)
+                    new = old + rq
+                    batch.qty = new
+                    batch.oldstock = old
+                    session.add(batch)
+                    await audit(
+                        session,
+                        branch_id=branch_id,
+                        user_id=user_id,
+                        entity="stock_batches",
+                        entity_id=batch.id,
+                        field="qty",
+                        old_value=str(old),
+                        new_value=str(new),
+                        drug_id=lp["drug_id"],
+                        action="return",
+                        typevalue=invoice_no,
+                    )
+                else:
+                    if r_randomid:
+                        dup = (
+                            await session.execute(
+                                select(StockBatch.id).where(
+                                    StockBatch.branch_id == branch_id,
+                                    StockBatch.drug_id == lp["drug_id"],
+                                    StockBatch.randomid == r_randomid,
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if dup is not None:
+                            raise _BATCH_DUP
+                        new_randomid = r_randomid
+                    else:
+                        new_randomid = f"r-{invoice_no}-{lp['drug_id']}-{len(line_batches)}-{idx}"
+                    batch = StockBatch(
+                        branch_id=branch_id,
+                        drug_id=lp["drug_id"],
+                        randomid=new_randomid,
+                        qty=rq,
+                        expire=date.fromisoformat(r_expire) if r_expire else None,
+                        cost=dec(r_cost) if r_cost not in (None, "") else dec(lp["unit_cost"]),
+                        vat=round2(tax_rate(lp["tax_type"]) * Decimal("100")),
+                        price=dec(lp["unit_price"]),
+                        oldstock=Decimal("0"),
+                        typee="return",
+                        vatvalue=dec(lp["vat_amount"]),
+                        totalwithvat=dec(lp["line_total"]),
+                        created_by=user_id,
+                    )
+                    session.add(batch)
+                    await session.flush()
+                    await audit(
+                        session,
+                        branch_id=branch_id,
+                        user_id=user_id,
+                        entity="stock_batches",
+                        entity_id=batch.id,
+                        field="qty",
+                        old_value="0.0000",
+                        new_value=str(rq),
+                        drug_id=lp["drug_id"],
+                        action="return",
+                        typevalue=invoice_no,
+                    )
+                if first_batch is None:
+                    first_batch = batch
+            # Branch-stock is raised once per line by the sum of restores (== lp qty)
+            # We use total_restored to keep 4dp fidelity if lp qty rounding differs.
+            row = (
+                await session.execute(
+                    select(BranchStock)
+                    .where(
+                        BranchStock.branch_id == branch_id,
+                        BranchStock.drug_id == lp["drug_id"],
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                row = BranchStock(
+                    branch_id=branch_id,
+                    drug_id=lp["drug_id"],
+                    qty=Decimal("0"),
+                    minimum=Decimal("0"),
+                )
+                session.add(row)
+                await session.flush()
+            old_qty = dec(row.qty)
+            inc = total_restored if total_restored != 0 else dec(lp["qty"])
+            new_qty = old_qty + inc
+            row.qty = new_qty
+            row.lastedit = datetime.now(timezone.utc)
+            await audit(
+                session,
+                branch_id=branch_id,
+                user_id=user_id,
+                entity="branch_stock",
+                entity_id=lp["drug_id"],
+                field="qty",
+                old_value=str(old_qty),
+                new_value=str(new_qty),
+                drug_id=lp["drug_id"],
+                action="return",
+                typevalue=invoice_no,
+            )
+            await enqueue_sync(
+                session,
+                branch_id=branch_id,
+                entity="branch_stock",
+                entity_id=lp["drug_id"],
+                action="return",
+                payload={
+                    "branch_id": branch_id,
+                    "drug_id": lp["drug_id"],
+                    "qty": format(money.round4(new_qty), "f"),
+                    "minimum": format(money.round4(row.minimum or 0), "f"),
+                    "silsilaid": row.silsilaid or "",
+                    "classy": row.classy or "",
+                },
+            )
+            cogs_total += round2(dec(lp["qty"]) * dec(lp["unit_cost"]))
+            # For invoice line FK we keep the first restored batch
+            if first_batch is None:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "malformed return payload: restored_batches empty after filtering",
+                )
+            line_batches.append((lp, first_batch))
+            continue
+        # Legacy single-batch fallback
         b = lp["batch"]
         dup = (
             await session.execute(
@@ -179,6 +357,21 @@ async def apply_sale_return_payload(
             drug_id=lp["drug_id"],
             action="return",
             typevalue=invoice_no,
+        )
+        await enqueue_sync(
+            session,
+            branch_id=branch_id,
+            entity="branch_stock",
+            entity_id=lp["drug_id"],
+            action="return",
+            payload={
+                "branch_id": branch_id,
+                "drug_id": lp["drug_id"],
+                "qty": format(money.round4(new_qty), "f"),
+                "minimum": format(money.round4(row.minimum or 0), "f"),
+                "silsilaid": row.silsilaid or "",
+                "classy": row.classy or "",
+            },
         )
         cogs_total += round2(dec(lp["qty"]) * dec(lp["unit_cost"]))
         line_batches.append((lp, batch))

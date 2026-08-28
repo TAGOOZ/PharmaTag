@@ -4,8 +4,11 @@
 `atomic()` transaction with the header save, audit rows and outbox enqueue
 (G12). It reverses a saved sale into a NEW `sale_return` invoice:
 
-* stock: a NEW return batch (`typee='return'`, cost = the sold line cost) +
-  `branch_stock` back up;
+* stock (#51): by default a NEW return batch (`typee='return'`, cost = the
+  sold line's avg cost) + `branch_stock` back up; **FIFO-spillover lines**
+  (`allocations` > 1) instead restore each ORIGINAL source lot proportionally
+  (per-batch share of the returned qty, preserving expiry/cost/randomid) and
+  fall back to the NEW batch only when the outbox allocations are missing;
 * money: per-line totals recomputed at the ORIGINAL line's unit price/tax_type/
   discount for the returned qty, header discount reversed proportionally, and
   the refund split mirrored from the original payments (payed + agel == total);
@@ -55,8 +58,10 @@ from app.sales.pricing import DISCOUNT_OVERFLOW
 from app.sales.returns.payload import _return_payload
 from app.sales.returns.stock import (
     _primary_barcode,
+    _split_return_shares,
     create_return_batch,
     raise_branch_stock,
+    restore_return_allocations,
 )
 
 NOT_FOUND = HTTPException(status.HTTP_404_NOT_FOUND, "invoice not found")
@@ -79,6 +84,73 @@ CREDIT_OVERFLOW = HTTPException(
     status.HTTP_400_BAD_REQUEST,
     "credit refund exceeds the original sale's credit portion",
 )
+
+
+async def _allocations_for_line(
+    session: AsyncSession,
+    *,
+    branch_id: int,
+    original_id: int,
+    orig_line_id: int,
+) -> Optional[list[dict]]:
+    """Fetch the original sale line's FIFO allocations from its outbox payload (#51).
+
+    The sale write (S1.3) stores per-batch takes (batch_id/randomid/take/cost/expire)
+    in the invoice outbox row's `payload.lines[].allocations`. That is the
+    authoritative source for which expiry lots were consumed. We locate the
+    matching payload line by index (invoice_lines ordered by id mirrors the
+    resolved order) and, as a fallback, by drug_id+qty. If the outbox row is
+    missing or has no allocations the caller falls back to the legacy single-batch
+    path.
+    """
+    from app.models import SyncLog  # local import to avoid cycle
+
+    row = (
+        await session.execute(
+            select(SyncLog)
+            .where(
+                SyncLog.branch_id == branch_id,
+                SyncLog.entity == "invoice",
+                SyncLog.entity_id == original_id,
+            )
+            .order_by(SyncLog.id.desc())
+        )
+    ).scalars().first()
+    if row is None or not isinstance(row.payload, dict):
+        return None
+    payload_lines = row.payload.get("lines")
+    if not isinstance(payload_lines, list):
+        return None
+    # Map by index using invoice_lines order
+    orig_lines = (
+        await session.execute(
+            select(InvoiceLine)
+            .where(InvoiceLine.invoice_id == original_id)
+            .order_by(InvoiceLine.id)
+        )
+    ).scalars().all()
+    try:
+        idx = next(i for i, l in enumerate(orig_lines) if l.id == orig_line_id)
+    except StopIteration:
+        return None
+    if 0 <= idx < len(payload_lines):
+        allocs = payload_lines[idx].get("allocations")
+        if isinstance(allocs, list) and allocs:
+            return allocs
+    # Fallback: try match by drug_id + qty (covers reordered payloads or manual edits)
+    orig_line = next((l for l in orig_lines if l.id == orig_line_id), None)
+    if orig_line is not None:
+        for pl in payload_lines:
+            if pl.get("drug_id") == orig_line.drug_id and isinstance(pl.get("allocations"), list) and pl.get("allocations"):
+                try:
+                    if dec(pl.get("qty", 0)) == dec(orig_line.qty):
+                        return pl.get("allocations")
+                except Exception:
+                    continue
+        for pl in payload_lines:
+            if pl.get("drug_id") == orig_line.drug_id and isinstance(pl.get("allocations"), list) and pl.get("allocations"):
+                return pl.get("allocations")
+    return None
 
 
 async def _already_returned(session: AsyncSession, original_line_id: int) -> Decimal:
@@ -363,6 +435,61 @@ async def _build_full_return(
     for item in resolved:
         orig_line = item["orig_line"]
         lm = item["lm"]
+        allocs = await _allocations_for_line(
+            session,
+            branch_id=branch_id,
+            original_id=original.id,
+            orig_line_id=orig_line.id,
+        )
+        # #51: FIFO-spillover lines must restore each source lot proportionally,
+        # not re-create a single earliest-expiry batch. We only take the restore
+        # path when the sale actually spilled over (allocs > 1); single-lot
+        # sales keep the legacy synthetic batch so existing tests stay green and
+        # the non-spillover path remains the documented fallback.
+        if allocs is not None and len(allocs) > 1:
+            restored = await restore_return_allocations(
+                session,
+                branch_id=branch_id,
+                user_id=user_id,
+                invoice_no=invoice_no,
+                drug_id=orig_line.drug_id,
+                allocations=allocs,
+                returned_qty=lm.qty,
+                barcode=item["barcode"],
+                vat_rate=round2(tax_rate(lm.tax_type) * Decimal("100")),
+                price=orig_line.unit_price,
+                vat_amount=lm.vat,
+                total_with_vat=lm.line_total,
+            )
+            if restored:
+                item["batch"] = restored[0]
+                # Build payload restores from the allocations + computed shares
+                # so the offline replay can reproduce the exact per-lot restores.
+                shares = _split_return_shares(allocs, lm.qty)
+                # restored order matches allocs order (zero-shares skipped);
+                # zip them to emit a faithful payload
+                payload_restores: list[dict] = []
+                r_idx = 0
+                for alloc, sh in zip(allocs, shares):
+                    if dec(sh) <= 0:
+                        continue
+                    # restored[r_idx] corresponds to this alloc's share
+                    b = restored[r_idx] if r_idx < len(restored) else restored[0]
+                    r_idx += 1
+                    cost_raw = alloc.get("cost")
+                    expire_raw = alloc.get("expire")
+                    payload_restores.append(
+                        {
+                            "batch_id": b.id,
+                            "randomid": b.randomid,
+                            "expire": expire_raw if expire_raw is not None else (b.expire.isoformat() if b.expire else None),
+                            "cost": str(cost_raw) if cost_raw not in (None, "") else str(b.cost),
+                            "qty": str(sh),
+                        }
+                    )
+                item["restored_batches"] = payload_restores
+                continue
+        # Legacy single-batch fallback (also used when allocations missing)
         item["batch"] = await create_return_batch(
             session,
             branch_id=branch_id,

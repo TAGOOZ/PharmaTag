@@ -536,6 +536,7 @@ async def _build_full_return(
         agel=agel,
         party_id=original.party_id,
         status="saved",
+        writer=writer,
         created_by=user_id,
     )
     session.add(invoice)

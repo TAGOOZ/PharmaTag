@@ -397,6 +397,7 @@ async def _build_full_purchase_return(
         payed=payed,
         agel=agel,
         status="saved",
+        writer=writer,
         created_by=user_id,
     )
     session.add(invoice)

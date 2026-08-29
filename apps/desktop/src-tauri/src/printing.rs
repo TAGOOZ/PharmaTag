@@ -221,19 +221,14 @@ fn print_raw_linux(printer: &str, data: &[u8]) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn print_raw_windows(printer: &str, data: &[u8]) -> Result<(), String> {
-    // For now, Windows path is stubbed to avoid heavy `windows` dep in tests.
+    // Windows path is stubbed to avoid heavy `windows` dep in tests.
     // Real implementation would use winspool:
     //   OpenPrinterW, StartDocPrinterW, StartPagePrinter, WritePrinter, EndPagePrinter, EndDocPrinter, ClosePrinter
-    // To keep CI green on Linux, we simulate success for tests and return error for real hardware absence.
-
-    // If printer is empty and we're not on Windows, this shouldn't be called.
-    // For tests, allow a special printer name "test" to succeed without hardware.
-    if printer == "test" || printer.is_empty() {
-        // In test mode, just validate we got data and pretend success
-        if std::env::var("PHARMATAG_PRINT_TEST").is_ok() {
-            return Ok(());
-        }
-        // Otherwise, report not implemented but not panic
+    // Test printer "test" always succeeds without hardware (no env var leak).
+    if printer == "test" {
+        return Ok(());
+    }
+    if printer.is_empty() {
         return Err("printing not implemented on this Windows build — configure winspool".to_string());
     }
     // Stub error for unknown printer

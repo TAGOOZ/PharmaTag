@@ -33,8 +33,13 @@ const KEYS: Record<keyof PrinterConfig, string> = {
 };
 
 // Detect Tauri runtime — if not present, we're in web fallback or Vitest
+// Tauri 2 exposes __TAURI_INTERNALS__, Tauri 1 exposes __TAURI__ — check both
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && '__TAURI__' in window;
+  return (
+    typeof window !== 'undefined' &&
+    ('__TAURI_INTERNALS__' in (window as unknown as Record<string, unknown>) ||
+      '__TAURI__' in (window as unknown as Record<string, unknown>))
+  );
 }
 
 // Lazy invoke — avoids hard dep on @tauri-apps/api in Vitest (which mocks window)
@@ -50,8 +55,11 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
  */
 export async function getPrinterConfig(db: SqlRunner): Promise<PrinterConfig> {
   try {
+    const keys = Object.values(KEYS);
+    const placeholders = keys.map(() => '?').join(',');
     const rows = await db.select<{ key: string; value: string }>(
-      `SELECT key, value FROM app_config WHERE key IN ('${Object.values(KEYS).join("','")}')`,
+      `SELECT key, value FROM app_config WHERE key IN (${placeholders})`,
+      keys,
     );
     const map = new Map(rows.map((r) => [r.key, r.value]));
     const cfg: PrinterConfig = {};

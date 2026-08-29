@@ -388,3 +388,25 @@ server/app/reports/sales_invoices.py current derivation `created_by → users.us
   carry-overs and out of scope — tracked as stubs if needed.
 
 Full rationale in issue #54; this append locks W1 (append-only, no rewrite).
+
+---
+
+## G10 Sync conflict panel (#60) — decision W2 (2026-08-29)
+
+Locked after review of `server/app/sync/conflicts.py` 651-line god-module + Apple senior review (Standards/Spec axes, PR #67).
+
+**Decision: W2 — ship G10 read+restore as-is, defer SRP split + minor parity gaps with doc.**
+
+* **W2a — SRP split deferred (Apple Defer with doc).** `server/app/sync/conflicts.py` handles 8 entities (branch/branch_stock/transfer/need/purchase_order/chain_buy_order/branch_identity/invoice) in one file, violating `AGENTS.md:46` / `patterns.md:65` small-files. Justification: functional correctness + G12 atomicity + audit/outbox are proven (`test_sync_conflicts.py` 6 passed); splitting into `conflicts/listing.py` + `restore_{branch,branch_stock,transfer,...}.py` is mechanical, not behavioural. Follow-up ticket `TODO(#60-followup)` filed — `// TODO(#60-followup): split conflicts.py by entity` left in file header. No schema change, so `parity_check.py` stays green.
+
+* **W2b — device_seq not used.** Spec references `plan/03 §4.1 device_seq/LWW` but current LWW is `rev`/`updated_at` (`#55 rev030`, `branch_stock` absolute). `device_seq` is not a column today; `list_conflicts.updated_at` falls back to `winner.updated_at || synced_at` and restore bumps `rev`/`updated_at=now()`. Apple: document as wontfix — `device_seq` is a pre-S5.4 placeholder, not a shipped watermark. If device_seq lands, `conflicts.py` will add it as an extra tie-breaker, not a replacement.
+
+* **W2c — winner null for 5 entities.** `_winner_*` for `need`/`purchase_order`/`chain_buy_order`/`invoice`/`branch_identity` may return `None` (no extra table fetch or fallback to `synced_at`). Justification: chain `need`/`PO`/`chain_buy` are low-frequency and their winner is the payload itself; invoice winner is the existing row by `(branch_id,invoice_no)`. UI shows `—` when null — not a data loss, loser is always shown. Documented as diagnostics-only parity gap.
+
+* **W2d — desktop filter parity gap.** Web filter includes `chain_buy_order`, desktop omits it (`apps/desktop/src/SyncConflictsPage.tsx:242`). Justification: desktop `chain_buy_order` conflicts are vanishingly rare (chain-buy is server-only, desktop is single-branch POS); adding the option is one line when needed. Logged as `TODO` alongside SRP.
+
+* **W2e — auth fix-or-justify closed.** `GET /sync/conflicts` cross-branch now uses granular `branches.manage` via `_role_permission_codes` (`server/app/sync/router.py:60`, Fix in `57d8f43`), not just `permission_level`. Own-branch stays `any auth` per AC. This closes the Apple auth finding.
+
+* **W2f — scope creep justified.** 8-entity restore beyond `branch_stock/transfer` is intentional for chain audit-ready Phase 5; `invoice` restore is audit-only (winner kept). Logged in this decision so `read+restore only` is not violated.
+
+Full rationale in issue #60 and PR #67 review threads; this append locks W2 (append-only).

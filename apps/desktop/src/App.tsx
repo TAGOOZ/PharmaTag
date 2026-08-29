@@ -10,6 +10,7 @@ import type Database from '@tauri-apps/plugin-sql';
 import { useCallback, useEffect, useState } from 'react';
 import { DrugsPage } from './DrugsPage';
 import { initDb } from './db';
+import { SyncConflictsPage } from './SyncConflictsPage';
 
 type DbState = 'booting' | 'ready' | 'error';
 
@@ -39,6 +40,7 @@ const STUBS: Record<string, { title: string }> = {
   '/reports': { title: 'التقارير' },
   '/employees': { title: 'الموظفين' },
   '/settings': { title: 'الاعدادات' },
+  '/sync/conflicts': { title: 'تعارضات المزامنة' },
 };
 
 export function App() {
@@ -95,7 +97,13 @@ export function App() {
         </>
       }
     >
-      {route === '/drugs' ? <DrugsPage db={db} /> : <PageStub title={stub.title} />}
+      {route === '/drugs' ? (
+        <DrugsPage db={db} />
+      ) : route === '/sync/conflicts' ? (
+        <SyncConflictsPage db={db} />
+      ) : (
+        <PageStub title={stub.title} />
+      )}
     </AppShell>
   );
 }

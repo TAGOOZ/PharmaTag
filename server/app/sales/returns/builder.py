@@ -50,7 +50,7 @@ from app.core.money import (
 )
 from app.drawer.movements import SALE_RETURN, record_payment_splits
 from app.einvoicing.service import einvoice_block, issue_for_invoice
-from app.models import Branch, Drug, Invoice, InvoiceLine, InvoiceVersion, Party, PaymentSplit
+from app.models import Branch, Drug, Invoice, InvoiceLine, InvoiceVersion, Party, PaymentSplit, User
 from app.money.journal import post_journal
 from app.sales.numbering import next_journal_entry_no
 from app.sales.payments import _resolve_payments
@@ -370,6 +370,14 @@ async def _build_full_return(
     if branch is None:
         raise NOT_FOUND
     inclusive = bool(branch.vat_inclusive_prices)
+
+    # W1 fail-fast: missing user → 404 (avoid silent FK 500)
+    writer = ""
+    if user_id is not None:
+        u = await session.get(User, user_id)
+        if u is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+        writer = (u.username or "").strip()[:50]
 
     resolved: list[dict] = []
     cogs_total = Decimal("0")

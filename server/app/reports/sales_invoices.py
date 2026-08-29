@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import money
 
-from app.models import Invoice, Party, User
+from app.models import Invoice, Party
 
 _MAX_ROWS = 1000
 
@@ -72,10 +72,9 @@ async def sales_invoices_report(
                 Invoice.totalvalue,
                 Invoice.payed,
                 Invoice.agel,
-                User.username,
+                Invoice.writer,
             )
             .join(Party, Invoice.party_id == Party.id, isouter=True)
-            .join(User, Invoice.created_by == User.id, isouter=True)
             .where(*where)
             .order_by(Invoice.datee.asc(), Invoice.id.asc())
             .limit(_MAX_ROWS)
@@ -95,7 +94,7 @@ async def sales_invoices_report(
             "totalvalue": money.format2(totalvalue),
             "payed": money.format2(payed),
             "agel": money.format2(agel),
-            "writer": writer or "",
+            "writer": (writer or "").strip()[:50],
         }
         for (
             id_,

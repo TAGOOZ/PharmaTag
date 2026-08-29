@@ -121,6 +121,9 @@ async def apply_sale_payload(
         resolved.append((lp, allocations))
         cogs_total += line_cogs
 
+    _raw_writer = payload.get("writer")
+    _writer = _raw_writer if isinstance(_raw_writer, str) else ""
+    _writer = _writer.strip()[:50]
     invoice = Invoice(
         branch_id=branch_id,
         kind=payload.get("kind", "sale"),
@@ -135,6 +138,7 @@ async def apply_sale_payload(
         agel=dec(payload["agel"]),
         party_id=customer.id if customer else None,
         status=payload.get("status", "saved"),
+        writer=_writer,
         created_by=payload.get("created_by") or user_id,
     )
     session.add(invoice)

@@ -27,6 +27,7 @@ from app.models import (
     InvoiceLine,
     Party,
     PaymentSplit,
+    User,
 )
 from app.sales.journal import post_sale_journal
 from app.sales.numbering import next_journal_entry_no
@@ -69,6 +70,15 @@ async def _build_full_sale(
     if branch is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "branch not found")
     inclusive = bool(branch.vat_inclusive_prices)
+
+    # W1 (#54) fail-fast: resolve writer before touching stock so an invalid
+    # user never burns FIFO/allocation work. Missing user → 404 (avoid silent FK 500).
+    writer = ""
+    if user_id is not None:
+        u = await session.get(User, user_id)
+        if u is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+        writer = (u.username or "").strip()[:50]
 
     customer: Optional[Party] = None
     if party_id is not None:
@@ -146,6 +156,7 @@ async def _build_full_sale(
         agel=agel,
         party_id=customer.id if customer else None,
         status="saved",
+        writer=writer,
         created_by=user_id,
     )
     session.add(invoice)

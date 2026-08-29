@@ -20,6 +20,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Optional
 
+from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import business_date
@@ -35,7 +36,7 @@ from app.core.events import (
     bus,
 )
 from app.core.money import format2
-from app.models import Invoice
+from app.models import Invoice, User
 from app.sales.builder import _build_full_sale
 from app.sales.numbering import acquire_branch_lock, next_invoice_no
 from app.sales.payload import _ctx_payload
@@ -53,6 +54,12 @@ async def _save_header_only(
     datee: date,
 ) -> Invoice:
     """The original seam behavior: header-only invoice, zero totals."""
+    writer = ""
+    if user_id is not None:
+        u = await session.get(User, user_id)
+        if u is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+        writer = (u.username or "").strip()[:50]
     invoice = Invoice(
         branch_id=branch_id,
         kind="sale",
@@ -65,6 +72,7 @@ async def _save_header_only(
         totalvalue=0,
         payed=0,
         agel=0,
+        writer=writer,
         created_by=user_id,
     )
     session.add(invoice)

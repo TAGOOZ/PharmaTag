@@ -47,7 +47,7 @@ from app.core.money import (
     tax_rate,
 )
 from app.drawer.movements import SUPPLIER_PAY, record_payment_splits
-from app.models import Branch, Invoice, InvoiceLine, InvoiceVersion, PaymentSplit
+from app.models import Branch, Invoice, InvoiceLine, InvoiceVersion, PaymentSplit, User
 from app.money.journal import post_journal
 from app.purchases.returns.payload import _purchase_return_payload
 from app.purchases.returns.stock import (
@@ -304,6 +304,14 @@ async def _build_full_purchase_return(
         raise NOT_FOUND
     # Mirrors the purchase: B2B supplier invoices are always VAT-exclusive.
     inclusive = False
+
+    # W1 fail-fast: missing user → 404 (avoid silent FK 500)
+    writer = ""
+    if user_id is not None:
+        u = await session.get(User, user_id)
+        if u is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+        writer = (u.username or "").strip()[:50]
 
     resolved: list[dict] = []
     for idx, line in enumerate(lines):

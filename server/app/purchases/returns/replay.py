@@ -149,6 +149,9 @@ async def apply_purchase_return_payload(
         ).scalars().first()
         resolved.append({"line": lp, "batch": batch, "orig_line": orig_line})
 
+    _raw_writer = payload.get("writer")
+    _writer = _raw_writer if isinstance(_raw_writer, str) else ""
+    _writer = _writer.strip()[:50]
     invoice = Invoice(
         branch_id=branch_id,
         kind="purchase_return",
@@ -164,6 +167,7 @@ async def apply_purchase_return_payload(
         totalvalue=Decimal(payload["totalvalue"]),
         payed=Decimal(payload["payed"]),
         agel=Decimal(payload["agel"]),
+        writer=_writer,
         created_by=payload.get("created_by") or user_id,
     )
     session.add(invoice)

@@ -154,6 +154,9 @@ async def apply_purchase_payload(
         )
         line_batches.append((lp, batch))
 
+    _raw_writer = payload.get("writer")
+    _writer = _raw_writer if isinstance(_raw_writer, str) else ""
+    _writer = _writer.strip()[:50]
     invoice = Invoice(
         branch_id=branch_id,
         kind=payload.get("kind", "purchase"),
@@ -169,6 +172,7 @@ async def apply_purchase_payload(
         totalvalue=Decimal(payload["totalvalue"]),
         payed=Decimal(payload["payed"]),
         agel=Decimal(payload["agel"]),
+        writer=_writer,
         created_by=payload.get("created_by") or user_id,
     )
     session.add(invoice)

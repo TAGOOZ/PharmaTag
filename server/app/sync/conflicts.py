@@ -309,15 +309,26 @@ async def restore_conflict(
 
     async with atomic(session):
         # branch-scoped advisory lock for entities that mutate branch_stock/transfer
-        # to avoid racing restores with concurrent writes
+        # to avoid racing restores with concurrent writes — must not fail silently
         if entity in ("branch_stock", "transfer", "branch", "branch_identity"):
-            # acquire branch lock for safety (reuse existing helper if available)
-            try:
-                from app.sales.numbering import acquire_branch_lock
+            from app.sales.numbering import acquire_branch_lock
 
+            try:
                 await acquire_branch_lock(session, branch_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                # log and surface as 503 — running without lock would race
+                import logging
+
+                logging.getLogger(__name__).exception(
+                    "acquire_branch_lock failed for branch %s during restore %s: %s",
+                    branch_id,
+                    conflict_id,
+                    exc,
+                )
+                raise HTTPException(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "could not acquire branch lock for restore — try again",
+                ) from exc
 
         # --- entity-specific restore ---
         if entity == "branch_stock":
@@ -496,16 +507,15 @@ async def _restore_transfer(
     outcome = await apply_transfer_versioned(
         session, payload=new_payload, peer_branch_id=peer_branch_id, user_id=user_id
     )
-    if outcome == "skipped":
-        # shouldn't happen because we bumped rev, but if still skipped, force header update
-        if existing is not None:
-            existing.rev = new_rev
-            # apply status from loser
-            try:
-                existing.status = str(loser.get("status", existing.status))
-            except Exception:
-                pass
-            session.add(existing)
+    # normalize: versioned appliers may return (status, reason)
+    outcome_status = outcome[0] if isinstance(outcome, tuple) else outcome
+    if outcome_status == "skipped":
+        # bumped rev should never be skipped — do not silently mutate header
+        # without audit/outbox; surface as conflict so manager can retry
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "restore was skipped — newer local state exists or payload could not be applied",
+        )
 
 
 async def _restore_branch(

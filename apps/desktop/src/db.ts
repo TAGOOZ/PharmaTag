@@ -6,10 +6,13 @@ import schemaSql from './resources/schema_sqlite.sql?raw';
 /**
  * Minimal SQL port the offline bootstrap needs — the tauri-plugin-sql Database
  * implements it, and node:sqlite can stand in during tests.
+ *
+ * Params are forwarded to the underlying driver (tauri-plugin-sql / node:sqlite)
+ * for injection-safe binding; callers that don't need params may omit the array.
  */
 export interface SqlRunner {
-  select<T>(sql: string): Promise<T[]>;
-  execute(sql: string): Promise<unknown>;
+  select<T>(sql: string, params?: unknown[]): Promise<T[]>;
+  execute(sql: string, params?: unknown[]): Promise<unknown>;
 }
 
 /**

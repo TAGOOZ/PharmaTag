@@ -36,6 +36,20 @@ function parsePayload(text: string | null): Record<string, unknown> {
   }
 }
 
+/** Convert exact 4dp string like "10.0000" to minor units integer (×10000). */
+function toMinorUnits(v: unknown): number | null {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (s === '') return null;
+  // exact 4dp via string split to avoid binary float error
+  const neg = s.startsWith('-');
+  const abs = neg ? s.slice(1) : s;
+  const [intPart, fracPart = ''] = abs.split('.');
+  const frac = (fracPart + '0000').slice(0, 4);
+  const minor = Number(intPart) * 10000 + Number(frac);
+  return neg ? -minor : minor;
+}
+
 /**
  * Desktop offline sync conflict panel (G10, #60) — reads the local SQLite
  * `sync_log` replica directly (no network). RTL, empty state, light/dark.
@@ -83,10 +97,17 @@ export function SyncConflictsPage({ db }: { db: Database | SqlRunner | null }) {
                   classy: string;
                   lastedit: string | null;
                 }>(
-                  `SELECT qty, minimum, silsilaid, classy, lastedit FROM branch_stock WHERE branch_id = ${Number(r.branch_id)} AND drug_id = ${Number(drugId)}`,
+                  'SELECT qty, minimum, silsilaid, classy, lastedit FROM branch_stock WHERE branch_id = ? AND drug_id = ?',
+                  [Number(r.branch_id), Number(drugId)],
                 );
                 if (w.length > 0) {
-                  const row = w[0]!;
+                  const row = w[0] as {
+                    qty: number;
+                    minimum: number;
+                    silsilaid: string;
+                    classy: string;
+                    lastedit: string | null;
+                  };
                   winner = {
                     branch_id: r.branch_id,
                     drug_id: drugId,
@@ -106,12 +127,17 @@ export function SyncConflictsPage({ db }: { db: Database | SqlRunner | null }) {
                   pharmacyid: string;
                   pharname: string;
                   updated_at: string | null;
-                }>(
-                  `SELECT pharmacyid, pharname, updated_at FROM branches WHERE id = ${Number(bid)}`,
-                );
+                }>('SELECT pharmacyid, pharname, updated_at FROM branches WHERE id = ?', [
+                  Number(bid),
+                ]);
                 if (w.length > 0) {
-                  winner = w[0]! as Record<string, unknown>;
-                  updatedAt = (w[0]! as { updated_at: string | null }).updated_at ?? updatedAt;
+                  const row = w[0] as {
+                    pharmacyid: string;
+                    pharname: string;
+                    updated_at: string | null;
+                  };
+                  winner = row as unknown as Record<string, unknown>;
+                  updatedAt = row.updated_at ?? updatedAt;
                 }
               }
             } else if (r.entity === 'transfer') {
@@ -123,11 +149,13 @@ export function SyncConflictsPage({ db }: { db: Database | SqlRunner | null }) {
                   rev: number;
                   created_at: string | null;
                 }>(
-                  `SELECT status, rev, created_at FROM transfers WHERE source_branch_id = ${Number(sid)} AND transfer_no = '${String(tno).replace(/'/g, "''")}'`,
+                  'SELECT status, rev, created_at FROM transfers WHERE source_branch_id = ? AND transfer_no = ?',
+                  [Number(sid), String(tno)],
                 );
                 if (w.length > 0) {
-                  winner = w[0]! as Record<string, unknown>;
-                  updatedAt = (w[0]! as { created_at: string | null }).created_at ?? updatedAt;
+                  const row = w[0] as { status: string; rev: number; created_at: string | null };
+                  winner = row as unknown as Record<string, unknown>;
+                  updatedAt = row.created_at ?? updatedAt;
                 }
               }
             }
@@ -166,6 +194,21 @@ export function SyncConflictsPage({ db }: { db: Database | SqlRunner | null }) {
       if (!c) return;
       // Reapply loser as new state (non-destructive: new rev / updated_at now)
       const now = new Date().toISOString();
+      const runner = db as SqlRunner;
+      // helper to run in a single SQLite transaction (G12 atomic)
+      const inTx = async (fn: () => Promise<void>) => {
+        await runner.execute('BEGIN IMMEDIATE');
+        try {
+          await fn();
+          await runner.execute('COMMIT');
+        } catch (e) {
+          try {
+            await runner.execute('ROLLBACK');
+          } catch {}
+          throw e;
+        }
+      };
+
       if (c.entity === 'branch_stock') {
         const loser = c.loser as {
           drug_id?: number;
@@ -175,61 +218,130 @@ export function SyncConflictsPage({ db }: { db: Database | SqlRunner | null }) {
           classy?: string;
         };
         if (loser.drug_id == null) throw new Error('malformed loser');
-        const qty =
-          loser.qty != null ? Number(String(loser.qty).replace(/[^0-9.-]/g, '')) * 10000 : null;
-        const minimum =
-          loser.minimum != null
-            ? Number(String(loser.minimum).replace(/[^0-9.-]/g, '')) * 10000
-            : null;
-        // UPSERT branch_stock with loser values
-        await (db as SqlRunner).execute(
-          `INSERT INTO branch_stock (branch_id, drug_id, qty, minimum, silsilaid, classy, lastedit) VALUES (${Number(c.branch_id)}, ${Number(loser.drug_id)}, ${qty ?? 0}, ${minimum ?? 0}, '${String(loser.silsilaid ?? '').replace(/'/g, "''")}', '${String(loser.classy ?? '').replace(/'/g, "''")}', '${now}') ` +
-            `ON CONFLICT(branch_id, drug_id) DO UPDATE SET qty = ${qty ?? 'qty'}, minimum = ${minimum ?? 'minimum'}, silsilaid = '${String(loser.silsilaid ?? '').replace(/'/g, "''")}', classy = '${String(loser.classy ?? '').replace(/'/g, "''")}', lastedit = '${now}'`,
-        );
-        // enqueue new sync outbox row (applied immediately in local twin context)
-        const payloadObj = {
-          branch_id: c.branch_id,
-          drug_id: loser.drug_id,
-          qty: loser.qty,
-          minimum: loser.minimum,
-          silsilaid: loser.silsilaid ?? '',
-          classy: loser.classy ?? '',
-        };
-        await (db as SqlRunner).execute(
-          `INSERT INTO sync_log (branch_id, entity, entity_id, action, payload, status, created_at) VALUES (${Number(c.branch_id)}, 'branch_stock', ${Number(loser.drug_id)}, 'update', '${JSON.stringify(payloadObj).replace(/'/g, "''")}', 'applied', '${now}')`,
-        );
-        // mark original as resolved (payload JSON update)
-        const rows = await (db as SqlRunner).select<{ payload: string }>(
-          `SELECT payload FROM sync_log WHERE id = ${Number(id)}`,
-        );
-        if (rows.length > 0) {
-          const orig = parsePayload(rows[0]?.payload);
-          const updated = { ...orig, resolved: true, resolved_at: now };
-          await (db as SqlRunner).execute(
-            `UPDATE sync_log SET payload = '${JSON.stringify(updated).replace(/'/g, "''")}' WHERE id = ${Number(id)}`,
+        const qtyMinor = toMinorUnits(loser.qty);
+        const minMinor = toMinorUnits(loser.minimum);
+        const silsilaid = loser.silsilaid ?? '';
+        const classy = loser.classy ?? '';
+
+        await inTx(async () => {
+          // For null qty/minimum we must keep existing value; fetch current first
+          let finalQty: number | null = qtyMinor;
+          let finalMin: number | null = minMinor;
+          let existingQty: number | null = null;
+          let existingMin: number | null = null;
+          if (qtyMinor == null || minMinor == null) {
+            const cur = await runner.select<{ qty: number; minimum: number }>(
+              'SELECT qty, minimum FROM branch_stock WHERE branch_id = ? AND drug_id = ?',
+              [Number(c.branch_id), Number(loser.drug_id)],
+            );
+            if (cur.length > 0) {
+              const row = cur[0] as { qty: number; minimum: number };
+              existingQty = row.qty;
+              existingMin = row.minimum;
+              if (finalQty == null) finalQty = existingQty;
+              if (finalMin == null) finalMin = existingMin;
+            } else {
+              if (finalQty == null) finalQty = 0;
+              if (finalMin == null) finalMin = 0;
+            }
+          }
+          // UPSERT branch_stock with loser values (exact minor units)
+          await runner.execute(
+            'INSERT INTO branch_stock (branch_id, drug_id, qty, minimum, silsilaid, classy, lastedit) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(branch_id, drug_id) DO UPDATE SET qty = ?, minimum = ?, silsilaid = ?, classy = ?, lastedit = ?',
+            [
+              Number(c.branch_id),
+              Number(loser.drug_id),
+              finalQty ?? 0,
+              finalMin ?? 0,
+              String(silsilaid),
+              String(classy),
+              now,
+              finalQty ?? 0,
+              finalMin ?? 0,
+              String(silsilaid),
+              String(classy),
+              now,
+            ],
           );
-        }
-        // audit
-        await (db as SqlRunner).execute(
-          `INSERT INTO audit_log (branch_id, entity, entity_id, field, old_value, new_value, action, created_at) VALUES (${Number(c.branch_id)}, 'branch_stock', ${Number(loser.drug_id)}, 'restore', 'winner kept', '${JSON.stringify(loser).replace(/'/g, "''")}', 'update', '${now}')`,
-        );
+          // enqueue new sync outbox row (applied immediately in local twin context)
+          const payloadObj = {
+            branch_id: c.branch_id,
+            drug_id: loser.drug_id,
+            qty: loser.qty,
+            minimum: loser.minimum,
+            silsilaid: silsilaid,
+            classy: classy,
+          };
+          await runner.execute(
+            'INSERT INTO sync_log (branch_id, entity, entity_id, action, payload, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [
+              Number(c.branch_id),
+              'branch_stock',
+              Number(loser.drug_id),
+              'update',
+              JSON.stringify(payloadObj),
+              'applied',
+              now,
+            ],
+          );
+          // mark original as resolved (payload JSON update)
+          const rows = await runner.select<{ payload: string }>(
+            'SELECT payload FROM sync_log WHERE id = ?',
+            [Number(id)],
+          );
+          if (rows.length > 0) {
+            const orig = parsePayload((rows[0] as { payload: string }).payload);
+            const updated = { ...orig, resolved: true, resolved_at: now };
+            await runner.execute('UPDATE sync_log SET payload = ? WHERE id = ?', [
+              JSON.stringify(updated),
+              Number(id),
+            ]);
+          }
+          // audit
+          await runner.execute(
+            'INSERT INTO audit_log (branch_id, entity, entity_id, field, old_value, new_value, action, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+              Number(c.branch_id),
+              'branch_stock',
+              Number(loser.drug_id),
+              'restore',
+              'winner kept',
+              JSON.stringify(loser),
+              'update',
+              now,
+            ],
+          );
+        });
         // refresh list: mark as resolved locally
         setConflicts((prev) => prev.map((x) => (x.id === id ? { ...x, resolved: true } : x)));
       } else {
-        // generic: just mark resolved and audit
-        const rows = await (db as SqlRunner).select<{ payload: string }>(
-          `SELECT payload FROM sync_log WHERE id = ${Number(id)}`,
-        );
-        if (rows.length > 0) {
-          const orig = parsePayload(rows[0]?.payload);
-          const updated = { ...orig, resolved: true, resolved_at: now };
-          await (db as SqlRunner).execute(
-            `UPDATE sync_log SET payload = '${JSON.stringify(updated).replace(/'/g, "''")}' WHERE id = ${Number(id)}`,
+        // generic: just mark resolved and audit — also atomic
+        await inTx(async () => {
+          const rows = await runner.select<{ payload: string }>(
+            'SELECT payload FROM sync_log WHERE id = ?',
+            [Number(id)],
           );
-        }
-        await (db as SqlRunner).execute(
-          `INSERT INTO audit_log (branch_id, entity, field, old_value, new_value, action, created_at) VALUES (${Number(c.branch_id)}, '${c.entity.replace(/'/g, "''")}', 'restore', '${String(c.skipped_reason).replace(/'/g, "''")}', '${JSON.stringify(c.loser).replace(/'/g, "''")}', 'update', '${now}')`,
-        );
+          if (rows.length > 0) {
+            const orig = parsePayload((rows[0] as { payload: string }).payload);
+            const updated = { ...orig, resolved: true, resolved_at: now };
+            await runner.execute('UPDATE sync_log SET payload = ? WHERE id = ?', [
+              JSON.stringify(updated),
+              Number(id),
+            ]);
+          }
+          await runner.execute(
+            'INSERT INTO audit_log (branch_id, entity, field, old_value, new_value, action, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [
+              Number(c.branch_id),
+              String(c.entity),
+              'restore',
+              String(c.skipped_reason),
+              JSON.stringify(c.loser),
+              'update',
+              now,
+            ],
+          );
+        });
         setConflicts((prev) => prev.map((x) => (x.id === id ? { ...x, resolved: true } : x)));
       }
     } catch {

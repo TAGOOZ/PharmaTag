@@ -53,17 +53,25 @@ async def list_sync_conflicts(
     caller: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Branch-scoped LWW losses. Any authenticated user may read."""
-    caller_branch = _caller_branch_id(caller)
-    # branch-scoped: if client asks for another branch, forbid unless manager
-    target_branch = branch_id if branch_id is not None else caller_branch
-    if target_branch != caller_branch and caller.permission_level < 7:
-        # also allow granular branches.manage
-        from app.auth.rbac import LEGACY_LEVEL_FLOOR
+    """Branch-scoped LWW losses. Any authenticated user may read own branch.
 
-        floor = LEGACY_LEVEL_FLOOR.get("branches.manage", 7)
-        if caller.permission_level < floor:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "cross-branch conflict read forbidden")
+    Cross-branch read requires `branches.manage` (G08 granular or legacy floor 7)
+    — spec says branch-scoped, a clerk must not enumerate another branch's losses.
+    """
+    caller_branch = _caller_branch_id(caller)
+    target_branch = branch_id if branch_id is not None else caller_branch
+    if target_branch != caller_branch:
+        # Fix-or-justify (Apple): use granular RBAC, not just permission_level.
+        # Own branch: any auth (per AC). Cross-branch: needs branches.manage.
+        from app.auth.rbac import LEGACY_LEVEL_FLOOR, _role_permission_codes
+
+        codes = await _role_permission_codes(caller, session)
+        has_granular = "branches.manage" in codes
+        has_floor = caller.permission_level >= LEGACY_LEVEL_FLOOR.get("branches.manage", 7)
+        if not (has_granular or has_floor):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "cross-branch conflict read forbidden"
+            )
     # optional entity filter validation
     if entity is not None and entity not in {
         "invoice",

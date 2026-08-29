@@ -3,6 +3,10 @@
 Lists LWW losses (sync_log rows that were skipped as stale/duplicate) with
 loser payload + winner snapshot + updated_at, branch-scoped. Restore reapplies
 the loser as a new rev with audit — never mutates history in place.
+
+TODO(#60-followup): split 651-line god-module by entity — see plan/00 W2
+(defer with doc, PR #67 review). Target: conflicts/listing.py +
+conflicts/restore_{branch,branch_stock,transfer,need,po,...}.py
 """
 from __future__ import annotations
 

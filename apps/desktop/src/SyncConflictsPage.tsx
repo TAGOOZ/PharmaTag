@@ -391,6 +391,7 @@ export function SyncConflictsPage({ db }: { db: Database | SqlRunner | null }) {
             <option value="branch_identity">هوية فرع</option>
             <option value="need">حاجة</option>
             <option value="purchase_order">طلب شراء</option>
+            <option value="chain_buy_order">طلب شراء جماعي</option>
             <option value="invoice">فاتورة</option>
           </select>
         </label>

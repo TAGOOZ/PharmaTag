@@ -6,6 +6,7 @@
  * Printer-per-purpose selection (receipt/barcode/A4/label) + `app_config`
  * persistence, Windows + Linux (Linux `lp`/`usb` via Rust, Windows via winspool).
  * Offline / no printer / paper-out / permission denied are surfaced as Err, never panic.
+ * TODO(#58-followup): winspool + 30-setting panel — see plan/00 W3.
  */
 
 import type { SqlRunner } from './db';

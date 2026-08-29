@@ -8,6 +8,7 @@
 //! - `print_label(printer_name, zpl)` — ZPL/EPL label (Zebra)
 //!
 //! Windows: winspool (OpenPrinter/WritePrinter). Linux: lp / direct /dev/usb/lp0.
+//! TODO(#58-followup): winspool full impl + optional escpos/rusb — see plan/00 W3.
 //! Offline / no printer / paper-out are surfaced as Err(String), never panic.
 //! Permission gated via `capabilities/default.json` `core:default` + `printing:default`.
 

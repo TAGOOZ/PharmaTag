@@ -17,6 +17,7 @@ def _ctx_payload(invoice: Invoice) -> dict[str, Any]:
         "totalvalue": str(invoice.totalvalue),
         "payed": str(invoice.payed),
         "agel": str(invoice.agel),
+        "writer": (invoice.writer or "").strip()[:50],
     }
 
 
@@ -79,6 +80,7 @@ def _sale_payload(
         "payed": str(invoice.payed),
         "agel": str(invoice.agel),
         "inclusive": inclusive,
+        "writer": (invoice.writer or "").strip()[:50],
         "created_by": invoice.created_by,
         "journal": {"entry_no": entry_no, "source": "sale"},
         "lines": lines,

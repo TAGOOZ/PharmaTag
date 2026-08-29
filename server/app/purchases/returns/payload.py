@@ -61,6 +61,7 @@ def _purchase_return_payload(
         "payed": str(invoice.payed),
         "agel": str(invoice.agel),
         "inclusive": inclusive,
+        "writer": (invoice.writer or "").strip()[:50],
         "created_by": invoice.created_by,
         "ref_invoice_id": original_id,
         "original_invoice_no": original_no,

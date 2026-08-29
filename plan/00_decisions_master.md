@@ -328,3 +328,63 @@ informs #35).
   (tables/columns/constraints only) stays `PARITY OK`, mirroring 033/034 and earlier
   permission-only seeds. Offline peers read their local `branch_stock` replica after
   the same LWW replay; no extra ATTACH file.
+
+---
+
+## Invoices.writer — كاتب الفاتورة (#54) — decision W1 (2026-08-28)
+
+Locked after a legacy + S3.4 research pass (titan_extract/feature_sales_invoices.md
+§3.3/§9: writer selector · كاتب الفاتورة; reports_complete RPT-S01 · الموظف/Writer
+per invoice + RPT-S04 · فواتير مبيعات موظف group-by-writer; ModOot/wzgard writer usage;
+server/app/reports/sales_invoices.py current derivation `created_by → users.username`).
+
+**Decision: Option A — populate `invoices.writer = username` at write time (chosen).**
+
+* **W1 — Writer = snapshot of `users.username` at invoice write time.** Every
+  invoice kind that writes `invoices` (`sale`, `purchase`, `sale_return`,
+  `purchase_return`, plus the sale header-only seam) sets `writer` atomically
+  with the header inside the same G12 transaction as `audit_log` + `sync_log`
+  (so writer + audit + outbox live or die together). Value = `users.username`
+  for `created_by` (async `session.get(User, user_id)`), or `""` when
+  `created_by` is null/system. Rationale: (1) preserves the legacy intent —
+  `writer` is the الموظف shown on RPT-S01 and grouped in RPT-S04, impossible
+  while the column stays `""`; (2) historical immutability — a later username
+  rename does not rewrite old invoices (FK `created_by` stays for permission
+  checks; `writer` stays the display snapshot); (3) offline-first — the snapshot
+  travels in the `sync_log` payload (`invoice` entity → `writer` field) so a
+  replay peer can render writer without needing the source `users` row synced;
+  (4) report simplicity — RPT-S01 (and future RPT-S04) read `invoices.writer`
+  directly, no `JOIN users`, no stale-join cost, and no ambiguity when a user
+  was deleted.
+
+* **W1a — Payload & replay.** `app/sales/payload.py`,
+  `app/purchases/payload.py`, `app/sales/returns/payload.py`,
+  `app/purchases/returns/payload.py` carry `writer` (JSON primitive string) in
+  the `invoice` outbox snapshot beside `created_by`. `app/sales/replay.py`,
+  `app/purchases/replay.py`, `app/sales/returns/replay.py`,
+  `app/purchases/returns/replay.py` set `Invoice(writer=payload.get("writer",""))`
+  verbatim on the target store (idempotent; duplicate delivery is a no-op via
+  `UNIQUE(branch_id, invoice_no)`). `created_by` continues to be `payload
+  created_by` with fallback to replaying `user_id` — writer is the display
+  string, not the FK.
+
+* **W1b — Reports read writer directly.** `app/reports/sales_invoices.py`
+  selects `Invoice.writer` (no `JOIN users`); view `app/reports/views.py`
+  renders `row["writer"] or "—"` unchanged. Future `RPT-S04` (employee sales
+  grouping) groups by `invoices.writer` (fallback `COALESCE(writer,'')` for
+  pre-W1 rows remains `""`). Existing rows with `writer=""` stay blank until an
+  optional backfill `UPDATE invoices SET writer = users.username FROM users WHERE
+  writer='' AND created_by = users.id` — not run in this slice.
+
+* **W1c — Alternative B rejected.** Keeping `writer` forever empty and deriving
+  via `created_by → users.username` would preserve normalization but leaves a
+  dead column (needs a later deprecation/drop migration), forces every writer
+  read to join `users` (offline peers need that row), and rewrites history on
+  rename. The cost of one `SELECT users` per builder (already inside the locked
+  transaction) is negligible.
+
+* **W1d — Scope.** `invoices` only. Other `writer` columns (`parties.writer`,
+  `journal_lines.writer`, `stock_batches.writer`) are separate legacy
+  carry-overs and out of scope — tracked as stubs if needed.
+
+Full rationale in issue #54; this append locks W1 (append-only, no rewrite).

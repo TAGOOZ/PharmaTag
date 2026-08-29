@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import ACTION_INSERT, audit, enqueue_sync
 from app.core.money import add, format2, line_money, round2, round4, tax_rate
 from app.drawer.movements import SUPPLIER_PAY, record_payment_splits
-from app.models import Branch, Drug, Invoice, InvoiceLine, Party, PaymentSplit
+from app.models import Branch, Drug, Invoice, InvoiceLine, Party, PaymentSplit, User
 from app.money.journal import post_journal
 from app.purchases.payload import _purchase_payload
 from app.purchases.stock import (
@@ -80,6 +80,14 @@ async def _build_full_purchase(
     # is ALWAYS VAT-exclusive regardless of the branch's RETAIL inclusive flag.
     inclusive = False
     supplier = await _supplier_or_404(session, branch_id, supplier_id)
+
+    # W1 fail-fast: missing user → 404 (avoid silent FK 500)
+    writer = ""
+    if user_id is not None:
+        u = await session.get(User, user_id)
+        if u is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+        writer = (u.username or "").strip()[:50]
 
     resolved: list[dict] = []
     for idx, line in enumerate(lines):
@@ -148,6 +156,7 @@ async def _build_full_purchase(
         payed=payed,
         agel=agel,
         status="saved",
+        writer=writer,
         created_by=user_id,
     )
     session.add(invoice)

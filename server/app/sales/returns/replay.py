@@ -376,6 +376,9 @@ async def apply_sale_return_payload(
         cogs_total += round2(dec(lp["qty"]) * dec(lp["unit_cost"]))
         line_batches.append((lp, batch))
 
+    _raw_writer = payload.get("writer")
+    _writer = _raw_writer if isinstance(_raw_writer, str) else ""
+    _writer = _writer.strip()[:50]
     invoice = Invoice(
         branch_id=branch_id,
         kind="sale_return",
@@ -391,6 +394,7 @@ async def apply_sale_return_payload(
         payed=Decimal(payload["payed"]),
         agel=Decimal(payload["agel"]),
         status="saved",
+        writer=_writer,
         created_by=payload.get("created_by") or user_id,
     )
     session.add(invoice)

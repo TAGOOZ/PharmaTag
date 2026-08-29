@@ -205,7 +205,7 @@ def _sales_invoices_view(payload: dict) -> ViewSpec:
             row["payed"],
             row["agel"],
             row["vat"],
-            row["writer"] or "—",
+            (row.get("writer") or "").strip() or "—",
         ]
         for row in payload["rows"]
     ]

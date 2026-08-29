@@ -86,10 +86,7 @@ export async function setPrinterConfig(
   }
 }
 
-export function printerForPurpose(
-  cfg: PrinterConfig,
-  purpose: PrinterPurpose,
-): string | undefined {
+export function printerForPurpose(cfg: PrinterConfig, purpose: PrinterPurpose): string | undefined {
   switch (purpose) {
     case 'receipt':
       return cfg.receiptPrinter;
@@ -169,9 +166,7 @@ export async function printReceipt(
   const text = lines.join('\n');
   const data = new TextEncoder().encode(text);
   // Add cut if requested — real ESC/POS cut handled in Rust build_receipt_bytes, but we just append here
-  const payload = opts?.cut
-    ? new Uint8Array([...data, 0x1d, 0x56, 0x00])
-    : data;
+  const payload = opts?.cut ? new Uint8Array([...data, 0x1d, 0x56, 0x00]) : data;
   await printRaw(printerName, payload);
 }
 

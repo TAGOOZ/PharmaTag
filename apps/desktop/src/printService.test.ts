@@ -1,13 +1,13 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SqlRunner } from './db';
 import {
   getPrinterConfig,
-  setPrinterConfig,
-  printerForPurpose,
   listPrinters,
-  printRaw,
   openDrawer,
+  printerForPurpose,
   printLabel,
+  printRaw,
+  setPrinterConfig,
 } from './printService';
 
 // Mock SqlRunner
@@ -65,7 +65,9 @@ describe('PrintService', () => {
     expect((db.execute as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
     // check params contain keys
     const calls = (db.execute as ReturnType<typeof vi.fn>).mock.calls;
-    const hasReceipt = calls.some((c) => String(c[1]).includes('printer_receipt') || String(c[0]).includes('printer_receipt'));
+    const hasReceipt = calls.some(
+      (c) => String(c[1]).includes('printer_receipt') || String(c[0]).includes('printer_receipt'),
+    );
     // In our impl we use ? placeholders, so key is in params array
     const paramsContain = calls.some((c) => {
       const params = c[1] as unknown[];

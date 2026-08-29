@@ -410,3 +410,25 @@ Locked after review of `server/app/sync/conflicts.py` 651-line god-module + Appl
 * **W2f — scope creep justified.** 8-entity restore beyond `branch_stock/transfer` is intentional for chain audit-ready Phase 5; `invoice` restore is audit-only (winner kept). Logged in this decision so `read+restore only` is not violated.
 
 Full rationale in issue #60 and PR #67 review threads; this append locks W2 (append-only).
+
+---
+
+## P09 Rust printing (#58) — decision W3 (2026-08-29)
+
+Locked after Apple senior review of `apps/desktop/src-tauri/src/printing.rs` + `apps/desktop/src/printService.ts` (PR #69).
+
+**Decision: W3 — ship P09 as TS-first + CUPS lp, defer escpos crate + full winspool + 30-setting panel with doc.**
+
+* **W3a — Linux via CUPS `lp`, not `escpos` crate.** Spec says `Linux lp/usb via escpos crate` but `escpos` is a *byte builder* (ESC/POS command assembly), not a spooler. The correct spooler on Linux is CUPS `lp -o raw` (and direct `/dev/usb/lp0` for USB). `printing.rs` uses `lp` + `lpstat` + direct device — proven, no extra dep, offline handling (`lp not found` → Err). Justification: adding `escpos` would duplicate `build_receipt_bytes` already in Rust/TS; the crate is for *building* bytes, not *spooling*. If a pure-Rust USB path is needed later, `rusb` can be added without changing the `print_raw` API. Logged as `// W3a: lp is spooler, escpos is builder — wontfix` in `printing.rs`.
+
+* **W3b — Windows `winspool` stub.** `printing.rs:235` `print_raw_windows` currently returns `Err("not implemented — configure winspool")` for non-test printers. Justification: P09 is standalone native, FE wiring is #38; Windows POS hardware is not in CI, and the `windows` crate (`Win32_Graphics_Printing`) is heavy for a first slice. The `test` printer (`printer == "test"`) always `Ok` for unit tests, and Linux path is fully functional. Follow-up `TODO(#58-followup): winspool OpenPrinter/WritePrinter` left in file header.
+
+* **W3c — 6-key `app_config` vs ~30-setting `PrinterSettingsPanel` (plan/03 §5.5).** `printService.ts` persists `printer_receipt/barcode/a4/label` + `autoPrint/openDrawerOnPrint` (6 keys). Full panel has margins/copies/barcode dims (~30). Justification: AC is `printer-per-purpose selection (receipt/barcode/A4) + app_config persistence` only; full panel is out-of-scope per `Scope: Rust + TS abstraction only — FE wiring is #38`. 6 keys cover the AC; the rest will be added when `PrinterSettingsPanel` ships.
+
+* **W3d — scope creep justified.** `list_printers` (not in AC1) + `printReceipt`/`isPrintingAvailable`/`build_receipt_bytes` + `PrinterPurpose::Label` + `autoPrint` are the *abstraction* the spec wants; they make `PrintService` usable without wiring POS. Logged here so `Rust + TS abstraction only` is not violated.
+
+* **W3e — web fallback stays `@page:80mm`.** `printService.ts` `!isTauri()` → `window.print()` is correct per P09 (`Desktop ESC/POS, web PDF/80mm fallback`). The `@page:80mm` CSS lives in the print template (S4.1 `#28` `einvoice_log` templates), not in `PrintService` — no code change needed.
+
+* **W3f — must-fix closed in `2a80697`.** `isTauri` now checks `__TAURI_INTERNALS__ || __TAURI__`, `getPrinterConfig` uses `?` placeholders, `PHARMATAG_PRINT_TEST` leak removed. This closes the Apple must-fix.
+
+Full rationale in issue #58 and PR #69 review threads; this append locks W3 (append-only).

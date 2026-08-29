@@ -5,6 +5,10 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "sql:default"
+    "sql:default",
+    "allow-print-raw",
+    "allow-open-drawer",
+    "allow-list-printers",
+    "allow-print-label"
   ]
 }

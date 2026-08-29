@@ -1,0 +1,25 @@
+"$schema" = "../gen/schemas/desktop-schema.json"
+
+[default]
+description = "Default printing permissions — ESC/POS thermal + drawer + labels"
+permissions = ["allow-print-raw", "allow-open-drawer", "allow-list-printers", "allow-print-label"]
+
+[[permission]]
+identifier = "allow-print-raw"
+description = "Allow print_raw command (raw ESC/POS bytes to named printer)"
+commands = { allow = ["print_raw"] }
+
+[[permission]]
+identifier = "allow-open-drawer"
+description = "Allow open_drawer command (ESC p pulse)"
+commands = { allow = ["open_drawer"] }
+
+[[permission]]
+identifier = "allow-list-printers"
+description = "Allow list_printers command (enumerate OS printers)"
+commands = { allow = ["list_printers"] }
+
+[[permission]]
+identifier = "allow-print-label"
+description = "Allow print_label command (ZPL/EPL to label printer)"
+commands = { allow = ["print_label"] }

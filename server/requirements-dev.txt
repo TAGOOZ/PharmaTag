@@ -13,6 +13,9 @@ packaging>=23
 openpyxl>=3.1
 fpdf2>=2.8
 uharfbuzz>=0.4
+segno>=1.6
+cryptography>=42
+asn1crypto>=1.5
 
 # dev / test
 pytest>=8.0

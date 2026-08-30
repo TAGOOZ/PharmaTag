@@ -359,3 +359,176 @@ export async function openSalePrint(
     throw err;
   }
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Parties (suppliers) — S1.4 (#10)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface Party {
+  id: number;
+  branch_id: number;
+  kind: string;
+  typee: string;
+  namee: string;
+  name_ar: string;
+  mobile: string;
+  adress: string;
+  governorate: string;
+  district: string;
+  credit_limit: string;
+  active: boolean;
+}
+
+export interface PartiesListResponse {
+  parties: Party[];
+}
+
+export async function listParties(
+  token: string,
+  kind: 'supplier' | 'customer' | 'both' = 'supplier',
+  signal?: AbortSignal,
+): Promise<PartiesListResponse> {
+  const res = await fetch(`${API_URL}/api/v1/parties?kind=${encodeURIComponent(kind)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal,
+  });
+  await throwForStatus(res);
+  return (await res.json()) as PartiesListResponse;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Purchases — S1.4 / S1.6 (#10 / #12)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface PurchaseSummary {
+  id: number;
+  invoice_no: string;
+  datee: string;
+  totalvalue: string;
+  payed: string;
+  agel: string;
+  status: string;
+  party_id: number | null;
+}
+
+export interface PurchasesListResponse {
+  purchases: PurchaseSummary[];
+}
+
+export interface PurchaseLineIn {
+  drug_id: number;
+  qty: string;
+  unit_cost: string;
+  expire?: string;
+  disc_percent?: string;
+}
+
+export interface PurchaseCreateBody {
+  supplier_id: number;
+  lines: PurchaseLineIn[];
+  disc_percent?: string;
+  payments?: PaymentSplitIn[];
+}
+
+export interface PurchaseLineOut {
+  id: number;
+  drug_id: number;
+  drugname: string;
+  drugnamear: string;
+  batch_id: number | null;
+  ref_invoice_line_id: number | null;
+  qty: string;
+  unit: string;
+  unit_price: string;
+  cost: string;
+  tax_type: string;
+  vat_amount: string;
+  line_total: string;
+  expire: string | null;
+}
+
+export interface PurchaseOut {
+  id: number;
+  branch_id: number;
+  kind: string;
+  invoice_no: string;
+  datee: string;
+  silsilaid: string;
+  status: string;
+  party_id: number | null;
+  ref_invoice_id: number | null;
+  subtotal: string;
+  discount: string;
+  vat: string;
+  totalvalue: string;
+  net: string;
+  payed: string;
+  agel: string;
+  created_by: number | null;
+  lines: PurchaseLineOut[];
+  payments: PaymentSplitOut[];
+  journal: {
+    id: number;
+    entry_no: string;
+    datee: string;
+    balanced: boolean;
+    debit_total: string;
+    credit_total: string;
+  } | null;
+}
+
+export async function fetchPurchases(
+  token: string,
+  signal?: AbortSignal,
+): Promise<PurchasesListResponse> {
+  const res = await fetch(`${API_URL}/api/v1/purchases`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal,
+  });
+  await throwForStatus(res);
+  return (await res.json()) as PurchasesListResponse;
+}
+
+export async function fetchPurchase(
+  token: string,
+  id: number,
+  signal?: AbortSignal,
+): Promise<PurchaseOut> {
+  const res = await fetch(`${API_URL}/api/v1/purchases/${id}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal,
+  });
+  await throwForStatus(res);
+  return (await res.json()) as PurchaseOut;
+}
+
+export async function createPurchase(
+  token: string,
+  body: PurchaseCreateBody,
+  signal?: AbortSignal,
+): Promise<PurchaseOut> {
+  const res = await fetch(`${API_URL}/api/v1/purchases`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+    signal,
+  });
+  await throwForStatus(res);
+  return (await res.json()) as PurchaseOut;
+}
+
+export async function createPurchaseReturn(
+  token: string,
+  purchaseId: number,
+  body: ReturnCreateBody,
+  signal?: AbortSignal,
+): Promise<PurchaseOut> {
+  const res = await fetch(`${API_URL}/api/v1/purchases/${purchaseId}/return`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+    signal,
+  });
+  await throwForStatus(res);
+  return (await res.json()) as PurchaseOut;
+}

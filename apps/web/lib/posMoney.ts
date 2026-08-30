@@ -18,7 +18,7 @@ export function errorForStatus(status: number, detail?: string): string {
     return 'خطأ في البيانات — تحقّق من الكميات والخصم وطريقة الدفع';
   }
   if (status === 401) return 'انتهت الجلسة — سجّل الدخول مجدداً';
-  if (status === 403) return 'ليس لديك صلاحية إنشاء/عرض المبيعات (sale.create)';
+  if (status === 403) return 'ليس لديك صلاحية — تحقق من دورك';
   if (status === 404) return 'الدواء أو الفاتورة غير موجودة';
   if (status === 409) {
     const d = (detail ?? '').toLowerCase();

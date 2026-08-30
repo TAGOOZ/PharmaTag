@@ -346,8 +346,10 @@ export default function PurchasesPage() {
       const res = await searchDrugs(token, q, ac.signal);
       if (mySeq !== searchSeq.current) return;
       const active = res.drugs.filter((d) => d.active);
+      const inactiveCount = res.drugs.length - active.length;
       if (res.drugs.length > 0 && active.length === 0)
         setSearchError('الدواء غير نشط — غير متاح للشراء');
+      else if (inactiveCount > 0) setSearchError(`تم إخفاء ${inactiveCount} غير نشط`);
       setSearchResults(active);
     } catch (err) {
       if ((err as Error)?.name === 'AbortError') return;
@@ -387,6 +389,13 @@ export default function PurchasesPage() {
     }
     if (!supplierId) {
       setSaveError('اختر المورد — المورد مطلوب لفاتورة الشراء');
+      return;
+    }
+    if (
+      !/^\d+$/.test(supplierId) ||
+      (parties && parties.length > 0 && !parties.some((p) => String(p.id) === supplierId))
+    ) {
+      setSaveError('المورد غير صالح — اختر مورداً من القائمة');
       return;
     }
     for (const item of cart) {

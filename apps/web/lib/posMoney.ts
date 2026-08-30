@@ -42,8 +42,9 @@ export function errorForStatus(status: number, detail?: string): string {
 }
 
 export function normalizeDecimal(raw: string): string {
-  return raw
-    .trim()
+  let s = raw.trim();
+  if (s.startsWith('+')) s = s.slice(1);
+  return s
     .replace(/[\u00A0\u202F\u2009\u200A\u2002\u2003\u200C ]/g, '') // NBSP/thin/ZWNJ/regular space from Excel
     .replace(/[٬,،]/g, '') // thousands separators: Arabic thousands U+066C, comma, Arabic comma U+060C
     .replace(/٫/g, '.') // Arabic decimal separator

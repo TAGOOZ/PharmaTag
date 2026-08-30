@@ -52,13 +52,14 @@ export function usePurchaseCart() {
   }, [cart]);
 
   function addToCart(drug: Drug): string | null {
-    const existing = cart.find((c) => c.drug.id === drug.id);
+    // allow same drug with different expire as separate lines (FEFO) — match on drug+expire
+    const existing = cart.find((c) => c.drug.id === drug.id && c.expire === '');
     if (existing) {
       const norm = normalizeDecimal(existing.qty);
       if (!isQtyValid(norm)) return 'كمية غير صالحة — صحح الكمية قبل الإضافة';
     }
     setCart((prev) => {
-      const idx = prev.findIndex((c) => c.drug.id === drug.id);
+      const idx = prev.findIndex((c) => c.drug.id === drug.id && c.expire === '');
       if (idx >= 0) {
         const next = [...prev];
         const ent = next[idx];

@@ -481,7 +481,7 @@ export async function fetchPurchases(
   token: string,
   signal?: AbortSignal,
 ): Promise<PurchasesListResponse> {
-  const res = await fetch(`${API_URL}/api/v1/purchases`, {
+  const res = await fetch(`${API_URL}/api/v1/purchases?limit=100`, {
     headers: { Authorization: `Bearer ${token}` },
     signal,
   });

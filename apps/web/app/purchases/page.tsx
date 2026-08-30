@@ -113,15 +113,9 @@ export default function PurchasesPage() {
     searchSeq.current++;
     searchAbortRef.current?.abort();
     detailAbortRef.current?.abort();
-    try {
-      window.localStorage.removeItem(PURCHASE_CART_KEY);
-    } catch {}
-    clearCart();
-    setSupplierId('');
-    setInvoiceDisc('');
-    setPayCash('');
-    setPayCard('');
-    setPayCredit('');
+    setSearching(false);
+    setDetailLoading(false);
+    // preserve cart draft on 401 — do not clearCart/removeItem (fix HIGH #1)
     setSearchResults(null);
     setSearchError(null);
     setSaveError(null);
@@ -407,16 +401,12 @@ export default function PurchasesPage() {
         return;
       }
       if (item.expire) {
-        const d = new Date(item.expire);
-        if (Number.isNaN(d.getTime())) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(item.expire)) {
           setSaveError(`تاريخ الانتهاء غير صالح للصنف ${item.drug.drugnamear}`);
           return;
         }
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const expireDay = new Date(d);
-        expireDay.setHours(0, 0, 0, 0);
-        if (expireDay < today) {
+        const todayISO = new Date().toLocaleDateString('en-CA');
+        if (item.expire < todayISO) {
           setSaveError(
             `تاريخ الانتهاء منتهي للصنف ${item.drug.drugnamear || item.drug.drugname} — يجب أن يكون تاريخاً مستقبلياً`,
           );
@@ -459,8 +449,6 @@ export default function PurchasesPage() {
     setSaving(true);
     setSaveError(null);
     setSaveResult(null);
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 15_000);
     try {
       const body = {
         supplier_id: Number(supplierId),
@@ -484,8 +472,7 @@ export default function PurchasesPage() {
         disc_percent: rawInvDisc ? toFixed2(rawInvDisc) : undefined,
         payments: payments.length ? payments : undefined,
       };
-      const out = await createPurchase(token, body, ac.signal);
-      clearTimeout(timer);
+      const out = await createPurchase(token, body);
       setSaveResult(out);
       const ac2 = new AbortController();
       const timer2 = setTimeout(() => ac2.abort(), 8000);
@@ -493,7 +480,8 @@ export default function PurchasesPage() {
         const res = await fetchPurchases(token, ac2.signal);
         setPurchases(res.purchases.slice(0, 100));
       } catch (e) {
-        if (e instanceof ApiError) setPurchasesError(errorForStatus(e.status, e.detail));
+        if (e instanceof ApiError && e.status === 401) handleAuthFail();
+        else if (e instanceof ApiError) setPurchasesError(errorForStatus(e.status, e.detail));
         else if ((e as Error)?.name === 'AbortError') setPurchasesError('انتهت مهلة جلب المشتريات');
         else setPurchasesError('تعذّر تحديث قائمة المشتريات بعد الحفظ');
       } finally {
@@ -506,8 +494,7 @@ export default function PurchasesPage() {
       setInvoiceDisc('');
       setSupplierId('');
     } catch (err) {
-      if ((err as Error)?.name === 'AbortError') setSaveError('انتهت مهلة الاتصال — حاول مجدداً');
-      else if (err instanceof ApiError && err.status === 401) {
+      if (err instanceof ApiError && err.status === 401) {
         handleAuthFail();
         return;
       } else if (err instanceof ApiError) {
@@ -516,7 +503,6 @@ export default function PurchasesPage() {
         );
       } else setSaveError('تعذّر الاتصال بالـ API');
     } finally {
-      clearTimeout(timer);
       savingLock.current = false;
       setSaving(false);
     }
@@ -594,11 +580,8 @@ export default function PurchasesPage() {
     setReturning(true);
     setReturnError(null);
     setReturnResult(null);
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 15_000);
     try {
-      const out = await createPurchaseReturn(token, selectedPurchase.id, { lines }, ac.signal);
-      clearTimeout(timer);
+      const out = await createPurchaseReturn(token, selectedPurchase.id, { lines });
       setReturnResult(out);
       setReturnQty({});
       const ac2 = new AbortController();
@@ -607,15 +590,15 @@ export default function PurchasesPage() {
         const res = await fetchPurchases(token, ac2.signal);
         setPurchases(res.purchases.slice(0, 100));
       } catch (e) {
-        if (e instanceof ApiError) setPurchasesError(errorForStatus(e.status, e.detail));
+        if (e instanceof ApiError && e.status === 401) handleAuthFail();
+        else if (e instanceof ApiError) setPurchasesError(errorForStatus(e.status, e.detail));
         else if ((e as Error)?.name === 'AbortError') setPurchasesError('انتهت مهلة جلب المشتريات');
         else setPurchasesError('تعذّر تحديث قائمة المشتريات بعد الإرجاع');
       } finally {
         clearTimeout(timer2);
       }
     } catch (err) {
-      if ((err as Error)?.name === 'AbortError') setReturnError('انتهت مهلة الاتصال — حاول مجدداً');
-      else if (err instanceof ApiError && err.status === 401) {
+      if (err instanceof ApiError && err.status === 401) {
         handleAuthFail();
         return;
       } else if (err instanceof ApiError) {
@@ -624,7 +607,6 @@ export default function PurchasesPage() {
         );
       } else setReturnError('تعذّر الاتصال بالـ API');
     } finally {
-      clearTimeout(timer);
       returningLock.current = false;
       setReturning(false);
     }

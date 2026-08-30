@@ -248,10 +248,7 @@ describe('DrugsPage', () => {
     const login = jsonResponse({ ...LOGIN_OK, must_reset_password: true, access_token: 'tok-x' });
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValueOnce(login)
-        .mockRejectedValueOnce(new TypeError('fetch failed')),
+      vi.fn().mockResolvedValueOnce(login).mockRejectedValueOnce(new TypeError('fetch failed')),
     );
     await click('دخول');
     setResetPasswords('NewPass123!', 'NewPass123!');

@@ -60,6 +60,9 @@ export function isQtyValid(s: string): boolean {
   const digits = intPart.replace(/^0+/, '') || '0';
   if (digits.length > 15) return false;
   if (/[eExX]/.test(s)) return false;
+  // total digits (int without leading zeros + frac) must fit max_digits 18
+  const frac = s.split('.')[1] ?? '';
+  if (digits.length + frac.length > 18) return false;
   return true;
 }
 
@@ -70,6 +73,8 @@ export function isMoneyValid(s: string): boolean {
   const digits = intPart.replace(/^0+/, '') || '0';
   if (digits.length > 15) return false;
   if (/[eExX]/.test(s)) return false;
+  const frac = s.split('.')[1] ?? '';
+  if (digits.length + frac.length > 18) return false;
   return true;
 }
 

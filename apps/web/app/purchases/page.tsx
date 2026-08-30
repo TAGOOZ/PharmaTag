@@ -24,6 +24,7 @@ import {
 } from '@/lib/api';
 import { RESET_ERROR_TEXT, type ResetError, validateNewPassword } from '@/lib/change-password';
 import {
+  addDecimal,
   compareDecimal,
   errorForStatus,
   isInRange,
@@ -71,6 +72,7 @@ export default function PurchasesPage() {
   const [searchResults, setSearchResults] = useState<Drug[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchCooldown, setSearchCooldown] = useState(0);
 
   const {
     cart,
@@ -94,6 +96,15 @@ export default function PurchasesPage() {
       detailAbortRef.current?.abort();
     };
   }, []);
+
+  // 429 backoff countdown
+  useEffect(() => {
+    if (searchCooldown <= 0) return;
+    const id = setInterval(() => {
+      setSearchCooldown((c) => (c <= 1 ? 0 : c - 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [searchCooldown]);
 
   const [returnQty, setReturnQty] = useState<Record<number, string>>({});
   const [returning, setReturning] = useState(false);
@@ -320,6 +331,7 @@ export default function PurchasesPage() {
   }
 
   async function doSearch() {
+    if (searchCooldown > 0) return;
     const token = loadToken();
     if (!token) {
       setView('login');
@@ -358,9 +370,10 @@ export default function PurchasesPage() {
         handleAuthFail();
         return;
       }
-      if (err instanceof ApiError)
+      if (err instanceof ApiError) {
         setSearchError(errorForStatus(err.status, (err as ApiError).detail));
-      else setSearchError('تعذّر الاتصال بالـ API');
+        if (err.status === 429) setSearchCooldown(5);
+      } else setSearchError('تعذّر الاتصال بالـ API');
       setSearchResults([]);
     } finally {
       if (searchAbortRef.current === ac) searchAbortRef.current = null;
@@ -385,6 +398,10 @@ export default function PurchasesPage() {
     }
     if (cart.length === 0) {
       setSaveError('العربة فارغة — أضف صنفاً واحداً على الأقل');
+      return;
+    }
+    if (parties === null) {
+      setSaveError('جارٍ تحميل الموردين — انتظر قبل الحفظ');
       return;
     }
     if (!supplierId) {
@@ -809,6 +826,22 @@ export default function PurchasesPage() {
     );
   }
 
+  const paymentsSumHint = (() => {
+    const raws = [payCash, payCard, payCredit];
+    let has = false;
+    let sum = '0';
+    for (const raw of raws) {
+      const t = normalizeDecimal(raw);
+      if (!t) continue;
+      has = true;
+      if (!isMoneyValid(t)) return null;
+      // treat negative already validated elsewhere; just sum absolute valid
+      sum = addDecimal(sum, toFixed2(t));
+    }
+    if (!has || isZero(sum)) return null;
+    return sum;
+  })();
+
   // ready
   return (
     <Shell>
@@ -832,6 +865,7 @@ export default function PurchasesPage() {
               searchQuery={searchQuery}
               onSearchQueryChange={setSearchQuery}
               searching={searching}
+              searchCooldown={searchCooldown}
               searchError={searchError}
               searchResults={searchResults}
               onSearch={doSearch}
@@ -857,6 +891,8 @@ export default function PurchasesPage() {
                 payCredit={payCredit}
                 onPayCreditChange={setPayCredit}
                 saving={saving}
+                partiesLoading={parties === null}
+                paymentsHint={paymentsSumHint}
                 saveError={saveError}
                 purchasesError={purchasesError}
                 saveResult={saveResult}

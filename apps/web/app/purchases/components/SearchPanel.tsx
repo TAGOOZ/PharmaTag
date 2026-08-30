@@ -7,6 +7,7 @@ interface Props {
   searchQuery: string;
   onSearchQueryChange: (v: string) => void;
   searching: boolean;
+  searchCooldown?: number;
   searchError: string | null;
   searchResults: Drug[] | null;
   onSearch: () => void;
@@ -17,6 +18,7 @@ export function SearchPanel({
   searchQuery,
   onSearchQueryChange,
   searching,
+  searchCooldown = 0,
   searchError,
   searchResults,
   onSearch,
@@ -42,10 +44,10 @@ export function SearchPanel({
         <button
           type="button"
           onClick={onSearch}
-          disabled={searching}
+          disabled={searching || searchCooldown > 0}
           className="pt-caption cursor-pointer rounded-md bg-surface-elevated px-4 py-2 disabled:opacity-50"
         >
-          {searching ? 'جارٍ…' : 'بحث'}
+          {searching ? 'جارٍ…' : searchCooldown > 0 ? `حاول بعد ${searchCooldown}ث` : 'بحث'}
         </button>
       </div>
       {searchError && <p className="pt-caption text-red-600">{searchError}</p>}

@@ -62,7 +62,10 @@ describe('reports api client', () => {
   });
 
   it('raises ApiError with the status for non-2xx', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({}, 403)));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({}, 403)),
+    );
     await expect(fetchReportsCatalog('tok')).rejects.toMatchObject({
       name: 'ApiError',
       status: 403,

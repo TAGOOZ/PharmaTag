@@ -45,7 +45,7 @@ function toMinorUnits(v: unknown): number | null {
   const neg = s.startsWith('-');
   const abs = neg ? s.slice(1) : s;
   const [intPart, fracPart = ''] = abs.split('.');
-  const frac = (fracPart + '0000').slice(0, 4);
+  const frac = `${fracPart}0000`.slice(0, 4);
   const minor = Number(intPart) * 10000 + Number(frac);
   return neg ? -minor : minor;
 }

@@ -12,6 +12,8 @@ interface Props {
   payCredit: string;
   onPayCreditChange: (v: string) => void;
   saving: boolean;
+  partiesLoading?: boolean;
+  paymentsHint?: string | null;
   saveError: string | null;
   purchasesError: string | null;
   saveResult: PurchaseOut | null;
@@ -28,6 +30,8 @@ export function PaymentForm({
   payCredit,
   onPayCreditChange,
   saving,
+  partiesLoading = false,
+  paymentsHint = null,
   saveError,
   purchasesError,
   saveResult,
@@ -85,6 +89,14 @@ export function PaymentForm({
           />
         </label>
       </div>
+      {paymentsHint && (
+        <p className="pt-caption text-muted">
+          المدفوع المدخل: {paymentsHint} — سيتم التحقق ومطابقته مع إجمالي الفاتورة على الخادم
+        </p>
+      )}
+      {partiesLoading && (
+        <p className="pt-caption text-amber-600">جارٍ تحميل الموردين — انتظر قبل الحفظ</p>
+      )}
       {saveError && (
         <p role="alert" className="pt-caption text-red-600">
           {saveError}
@@ -110,7 +122,7 @@ export function PaymentForm({
       <button
         type="button"
         onClick={onSave}
-        disabled={saving}
+        disabled={saving || partiesLoading}
         className="pt-caption w-fit cursor-pointer rounded-md bg-[var(--accent-color)] px-4 py-2 text-white disabled:opacity-50"
       >
         {saving ? 'جارٍ الحفظ…' : 'حفظ فاتورة الشراء'}

@@ -151,7 +151,8 @@ the ticket ships.
 
 | Area | Item | Status | Ticket |
 | --- | --- | --- | --- |
-| web `/pos` `/purchases` `/stock` `/money` `/employees` | module screens | stubs — show "built in the corresponding slice" | #38 |
+| web `/purchases` `/stock` `/money` `/employees` | module screens | stubs — show "built in the corresponding slice" | #38 |
+| web `/pos` | POS screen (sales + returns + barcode + payment split + print) | shipped — web only, desktop stays stub per #71 (#38a) | #71 |
 | web `/settings` | module screen | change-password form works (ticket #37); the rest of the settings module is a stub | #38 |
 | web `/` | dashboard (home) | stub — static shell, today-summary not wired | #38 |
 | desktop | module screens (`App.tsx` STUBS) | stubs — same as web | #38 |

@@ -739,6 +739,70 @@ describe.sequential('EmployeesPage — AC & edge cases', () => {
     expect(textOf()).toContain('pharmacist1');
   });
 
+  it('logs in via the form and shows the users list', async () => {
+    await render(<EmployeesPage />);
+    const inputs = [...host.querySelectorAll('input')];
+    expect(inputs.length).toBe(2);
+    setInputValue(inputs[0] as HTMLInputElement, 'admin');
+    setInputValue(inputs[1] as HTMLInputElement, 'changeme');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (String(url).includes('/api/v1/auth/login'))
+          return jsonResponse({
+            access_token: 'tok-1',
+            refresh_token: 'r-1',
+            token_type: 'bearer',
+            must_reset_password: false,
+            user: { id: 1, username: 'admin', namee: '', permission_level: 9, branch_id: 1 },
+          });
+        if (String(url).includes('/api/v1/branches')) return jsonResponse(BRANCHES);
+        if (String(url).includes('/api/v1/users')) return jsonResponse(USERS_ONE);
+        return jsonResponse({});
+      }),
+    );
+    await click('دخول');
+    expect(window.localStorage.getItem('pharmatag:token')).toBe('tok-1');
+    expect(textOf()).toContain('pharmacist1');
+    expect(textOf()).toContain('فرع ثان');
+  });
+
+  it('blocks entry with forced reset when must_reset_password and completes after new password', async () => {
+    await render(<EmployeesPage />);
+    const loginInputs = [...host.querySelectorAll('input')];
+    setInputValue(loginInputs[0] as HTMLInputElement, 'admin');
+    setInputValue(loginInputs[1] as HTMLInputElement, 'changeme');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (String(url).includes('/api/v1/auth/login'))
+          return jsonResponse({
+            access_token: 'tok-x',
+            refresh_token: 'r-x',
+            token_type: 'bearer',
+            must_reset_password: true,
+            user: { id: 1, username: 'admin', namee: '', permission_level: 9, branch_id: 1 },
+          });
+        if (String(url).includes('/api/v1/auth/reset-password')) return jsonResponse({ ok: true });
+        if (String(url).includes('/api/v1/branches')) return jsonResponse(BRANCHES);
+        if (String(url).includes('/api/v1/users')) return jsonResponse(USERS_ONE);
+        return jsonResponse({});
+      }),
+    );
+    await click('دخول');
+    expect(textOf()).toContain('يجب تغيير كلمة المرور الافتراضية');
+    expect(textOf()).not.toContain('pharmacist1');
+    expect(window.localStorage.getItem('pharmatag:token')).toBeNull();
+    const resetInputs = [...host.querySelectorAll('input[type="password"]')];
+    expect(resetInputs.length).toBe(3);
+    setInputValue(resetInputs[0] as HTMLInputElement, 'changeme');
+    setInputValue(resetInputs[1] as HTMLInputElement, 'NewPass123!');
+    setInputValue(resetInputs[2] as HTMLInputElement, 'NewPass123!');
+    await click('تغيير وحفظ');
+    expect(window.localStorage.getItem('pharmatag:token')).toBe('tok-x');
+    expect(textOf()).toContain('pharmacist1');
+  });
+
   it('shows loader role=status during initial fetch', async () => {
     window.localStorage.setItem('pharmatag:token', 'tok-1');
     let resolveUsers!: (v: Response) => void;

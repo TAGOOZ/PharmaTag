@@ -151,7 +151,7 @@ the ticket ships.
 
 | Area | Item | Status | Ticket |
 | --- | --- | --- | --- |
-| web `/money` | module screen | stub — show "built in the corresponding slice" | #38 |
+| web `/money` | Money screen (drawer + day-close + manual journals + statements/payables + receivables + trial-balance/balance-sheet + months/openings, RTL, RBAC gated) | shipped — web only, desktop stays stub per #75 (#38e) | #75 |
 | web `/employees` | Employees screen (users/roles + manager reset + change-password, RTL, RBAC gated) | shipped — web only, desktop stays stub per #74 (#38d) | #74 |
 | web `/stock` | Stock screen (current stock + shortages + batches + cross-branch, 4dp, truncated, VAT-exclusive) | shipped — web only, desktop stays stub per #73 (#38c) | #73 |
 | web `/pos` | POS screen (sales + returns + barcode + payment split + print) | shipped — web only, desktop stays stub per #71 (#38a) | #71 |

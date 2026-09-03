@@ -8,17 +8,32 @@ export type Health = { status: string };
 export class ApiError extends Error {
   readonly status: number;
   readonly detail?: string;
+  readonly retryAfter?: number;
 
-  constructor(status: number, detail?: string) {
+  constructor(status: number, detail?: string, retryAfter?: number) {
     super(detail ? `API ${status}: ${detail.slice(0, 2000)}` : `API returned ${status}`);
     this.name = 'ApiError';
     this.status = status;
     this.detail = detail;
+    this.retryAfter = retryAfter;
+  }
+}
+
+function parseRetryAfter(res: Response): number | undefined {
+  try {
+    const h = res.headers?.get?.('Retry-After');
+    if (!h) return undefined;
+    const n = Number.parseInt(h.trim(), 10);
+    if (Number.isNaN(n) || n <= 0) return undefined;
+    return Math.min(n, 120);
+  } catch {
+    return undefined;
   }
 }
 
 export async function throwForStatus(res: Response): Promise<void> {
   if (!res.ok) {
+    const retryAfter = parseRetryAfter(res);
     let detail: string | undefined;
     try {
       const hasClone = typeof (res as unknown as { clone?: () => Response }).clone === 'function';
@@ -41,7 +56,7 @@ export async function throwForStatus(res: Response): Promise<void> {
     } catch {
       detail = undefined;
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(res.status, detail, retryAfter);
   }
 }
 

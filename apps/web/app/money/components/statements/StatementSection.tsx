@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { ApiError, listParties, type Party } from '@/lib/api';
+import { useRef, useState } from 'react';
+import { ApiError, type Party } from '@/lib/api';
 import { fetchStatement, type PartyStatement } from '@/lib/money';
 import { mapMoneyError, moneyErrorMessage } from '../moneyErrors';
 
@@ -39,58 +39,31 @@ function keyedMovements(raw: unknown): Row[] {
 export default function StatementSection({
   token,
   onAuthFail,
+  parties,
 }: {
   token: string;
   onAuthFail: () => void;
+  parties: Party[] | null;
 }) {
-  const [parties, setParties] = useState<Party[] | null>(null);
   const [partyId, setPartyId] = useState('');
   const [month, setMonth] = useState('');
   const [year, setYear] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [statement, setStatement] = useState<PartyStatement | null>(null);
-  const [loadingParties, setLoadingParties] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const seqRef = useRef(0);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    let cancelled = false;
-    (async () => {
-      try {
-        const kinds = ['supplier', 'customer', 'both'] as const;
-        const lists = await Promise.all(kinds.map((k) => listParties(token, k, controller.signal)));
-        if (cancelled) return;
-        const merged = new Map<number, Party>();
-        for (const l of lists) for (const p of l.parties) merged.set(p.id, p);
-        setParties([...merged.values()].sort((a, b) => a.namee.localeCompare(b.namee)));
-      } catch (err) {
-        if (cancelled || (err as Error)?.name === 'AbortError') return;
-        if (err instanceof ApiError && err.status === 401) {
-          onAuthFail();
-          return;
-        }
-        setParties([]);
-        setError(
-          err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
-        );
-      } finally {
-        if (!cancelled) setLoadingParties(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [token, onAuthFail]);
-
   async function show() {
     const id = Number.parseInt(partyId, 10);
     if (!partyId || Number.isNaN(id)) {
       setError('اختر طرفاً لعرض الكشف');
+      return;
+    }
+    if ((month || year) && (dateFrom || dateTo)) {
+      setError('اختر الشهر والسنة أو المدى الزمني — وليس الاثنين معاً');
       return;
     }
     const seq = ++seqRef.current;
@@ -125,7 +98,7 @@ export default function StatementSection({
     <div className="flex flex-col gap-3">
       <h3 className="pt-title">كشف حساب</h3>
 
-      {loadingParties ? (
+      {parties === null ? (
         <p className="pt-caption" role="status">
           جارٍ تحميل الأطراف…
         </p>
@@ -228,10 +201,10 @@ export default function StatementSection({
                   <tr key={key} className="border-b border-border">
                     <td className="px-3 py-2">{cells[0]}</td>
                     <td className="px-3 py-2">{cells[1]}</td>
-                    <td className="pt-mono px-3 py-2">{cells[2]}</td>
-                    <td className="pt-mono px-3 py-2">{cells[3]}</td>
-                    <td className="pt-mono px-3 py-2">{cells[4]}</td>
-                    <td className="pt-mono px-3 py-2">{cells[5]}</td>
+                    <td className="pt-mono break-all px-3 py-2">{cells[2]}</td>
+                    <td className="pt-mono break-all px-3 py-2">{cells[3]}</td>
+                    <td className="pt-mono break-all px-3 py-2">{cells[4]}</td>
+                    <td className="pt-mono break-all px-3 py-2">{cells[5]}</td>
                   </tr>
                 ))}
               </tbody>

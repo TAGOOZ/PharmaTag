@@ -400,10 +400,13 @@ export interface PartiesListResponse {
 
 export async function listParties(
   token: string,
-  kind: 'supplier' | 'customer' | 'both' = 'supplier',
+  kind?: 'supplier' | 'customer' | 'both',
   signal?: AbortSignal,
 ): Promise<PartiesListResponse> {
-  const res = await fetch(`${API_URL}/api/v1/parties?kind=${encodeURIComponent(kind)}`, {
+  // No kind = every active party (supplier + customer + both) in one call.
+  // Callers that pass an explicit kind keep the old filtered behavior.
+  const suffix = kind ? `?kind=${encodeURIComponent(kind)}` : '';
+  const res = await fetch(`${API_URL}/api/v1/parties${suffix}`, {
     headers: { Authorization: `Bearer ${token}` },
     signal,
   });

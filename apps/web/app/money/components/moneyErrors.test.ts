@@ -12,9 +12,7 @@ describe('moneyErrors', () => {
   });
 
   it('surfaces short server detail verbatim for actionable codes', () => {
-    expect(moneyErrorMessage(400, 'journal is not balanced')).toContain(
-      'journal is not balanced',
-    );
+    expect(moneyErrorMessage(400, 'journal is not balanced')).toContain('journal is not balanced');
     expect(moneyErrorMessage(409, 'month is already closed')).toContain('month is already closed');
     expect(moneyErrorMessage(404, 'party not found')).toContain('party not found');
   });

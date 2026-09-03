@@ -3,6 +3,7 @@ import { ThemeProvider } from '@pharmatag/ui';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { businessToday } from '@/lib/businessDate';
 import MoneyPage from './page';
 
 vi.mock('next/navigation', () => ({
@@ -413,6 +414,44 @@ describe.sequential('MoneyPage — journals', () => {
     expect(textOf()).toContain('J-2026-08-0002');
   });
 
+  it('defaults an empty journal date to the Cairo business day (never UTC)', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    const fetchMock = stubBase(async (url, init) => {
+      if (String(url).includes('/api/v1/journals/manual') && init?.method === 'POST') {
+        const body = JSON.parse(init.body as string) as Record<string, unknown>;
+        return jsonResponse(
+          {
+            id: 6,
+            journal_id: 51,
+            entry_no: 'J-2',
+            datee: '2026-08-20',
+            description: body.description,
+            total: '100.00',
+            lines: [],
+          },
+          201,
+        );
+      }
+      if (String(url).includes('/api/v1/journals/manual')) return jsonResponse({ entries: [] });
+      return null;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<MoneyPage />);
+    await click('القيود');
+    setInputValue(inputByAria('البيان'), 'قيد بلا تاريخ');
+    setInputValue(inputByAria('الحساب 1'), '1000');
+    setInputValue(inputByAria('مدين 1'), '100.00');
+    setInputValue(inputByAria('الحساب 2'), '4000');
+    setInputValue(inputByAria('دائن 2'), '100.00');
+    await submitForm();
+    const calls = fetchMock.mock.calls as unknown as [string, (RequestInit | undefined)?][];
+    const post = calls.find(([, init]) => init?.method === 'POST');
+    expect(post).toBeDefined();
+    expect((JSON.parse(post?.[1]?.body as string) as Record<string, unknown>).datee).toBe(
+      businessToday(new Date()),
+    );
+  });
+
   it('surfaces the server balanced-check 400 verbatim', async () => {
     window.localStorage.setItem('pharmatag:token', 'tok-1');
     vi.stubGlobal(
@@ -620,7 +659,7 @@ describe.sequential('MoneyPage — statements & settlements', () => {
         if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
         if (u.includes('/api/v1/receivables'))
           return jsonResponse({ total: '0.00', receivables: [] });
-        if (u.includes('/api/v1/parties?')) return jsonResponse(PARTIES_LIST);
+        if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
         return null;
       }),
     );
@@ -642,7 +681,7 @@ describe.sequential('MoneyPage — statements & settlements', () => {
         if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
         if (u.includes('/api/v1/receivables'))
           return jsonResponse({ total: '0.00', receivables: [] });
-        if (u.includes('/api/v1/parties?')) return jsonResponse(PARTIES_LIST);
+        if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
         return null;
       }),
     );
@@ -669,7 +708,7 @@ describe.sequential('MoneyPage — statements & settlements', () => {
         if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
         if (u.includes('/api/v1/receivables'))
           return jsonResponse({ total: '0.00', receivables: [] });
-        if (u.includes('/api/v1/parties?')) return jsonResponse(PARTIES_LIST);
+        if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
         return null;
       }),
     );
@@ -710,7 +749,7 @@ describe.sequential('MoneyPage — statements & settlements', () => {
         if (u.includes('/api/v1/receivables')) return jsonResponse(RECEIVABLES_ONE);
         if (u.includes('/api/v1/parties/payables'))
           return jsonResponse({ total: '0.00', payables: [] });
-        if (u.includes('/api/v1/parties?')) return jsonResponse(PARTIES_LIST);
+        if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
         return null;
       }),
     );
@@ -723,6 +762,53 @@ describe.sequential('MoneyPage — statements & settlements', () => {
     await submitForm();
     expect(textOf()).toContain('تم إنشاء السند');
     expect(textOf()).toContain('75.25');
+  });
+
+  it('defaults an empty voucher date to the Cairo business day (never UTC)', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    const fetchMock = stubMoney(async (url, init) => {
+      const u = String(url);
+      if (u.includes('/api/v1/receivables/vouchers') && init?.method === 'POST') {
+        const body = JSON.parse(init.body as string) as Record<string, unknown>;
+        return jsonResponse(
+          {
+            id: 4,
+            voucher_no: 'V-2',
+            voucher_type: body.voucher_type,
+            party: { id: 8, namee: 'Customer B', name_ar: 'عميل ب', kind: 'customer' },
+            datee: '2026-08-20',
+            method: 'cash',
+            amount: body.amount,
+            description: '',
+            journal_id: 61,
+            entry_no: 'J-y',
+            reverses_voucher_id: null,
+            created_by: 1,
+          },
+          201,
+        );
+      }
+      if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
+      if (u.includes('/api/v1/receivables'))
+        return jsonResponse({ total: '0.00', receivables: [] });
+      if (u.includes('/api/v1/parties/payables'))
+        return jsonResponse({ total: '0.00', payables: [] });
+      if (u.includes('/api/v1/parties') || u.includes('/api/v1/parties'))
+        return jsonResponse(PARTIES_LIST);
+      return null;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<MoneyPage />);
+    await click('كشوفات');
+    setSelectValue(selectByAria('نوع السند'), 'receipt');
+    setSelectValue(selectByAria('طرف السند'), '8');
+    setInputValue(inputByAria('مبلغ السند'), '75.25');
+    await submitForm();
+    const calls = fetchMock.mock.calls as unknown as [string, (RequestInit | undefined)?][];
+    const post = calls.find(([, init]) => init?.method === 'POST');
+    expect(post).toBeDefined();
+    const body = JSON.parse(post?.[1]?.body as string) as Record<string, unknown>;
+    expect(body.datee).toBe(businessToday(new Date()));
   });
 
   it('reverses a voucher and surfaces double-reverse 409', async () => {
@@ -743,7 +829,7 @@ describe.sequential('MoneyPage — statements & settlements', () => {
           return jsonResponse({ total: '0.00', receivables: [] });
         if (u.includes('/api/v1/parties/payables'))
           return jsonResponse({ total: '0.00', payables: [] });
-        if (u.includes('/api/v1/parties?')) return jsonResponse(PARTIES_LIST);
+        if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
         return null;
       }),
     );
@@ -769,7 +855,7 @@ describe.sequential('MoneyPage — statements & settlements', () => {
           return jsonResponse({ total: '0.00', receivables: [] });
         if (u.includes('/api/v1/parties/payables'))
           return jsonResponse({ total: '0.00', payables: [] });
-        if (u.includes('/api/v1/parties?')) return jsonResponse(PARTIES_LIST);
+        if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
         return null;
       }),
     );
@@ -995,6 +1081,60 @@ describe.sequential('MoneyPage — mizan', () => {
     expect(window.localStorage.getItem('pharmatag:token')).toBeNull();
     expect(textOf()).toContain('سجّل الدخول أولاً');
   });
+
+  it('shows a popup-blocked message instead of failing silently', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url) => {
+        const u = String(url);
+        if (u.includes('format=html')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            text: async () => '<html>ميزانية عمومية</html>',
+          } as unknown as Response;
+        }
+        if (u.includes('/api/v1/accounts/trial-balance')) return jsonResponse(TRIAL_BALANCE);
+        if (u.includes('/api/v1/accounts/balance-sheet')) return jsonResponse(BALANCE_SHEET);
+        return null;
+      }),
+    );
+    vi.stubGlobal(
+      'open',
+      vi.fn(() => null),
+    );
+    const revokeMock = vi.fn();
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn(() => 'blob:fake'),
+      revokeObjectURL: revokeMock,
+    } as unknown as typeof URL);
+    await render(<MoneyPage />);
+    await click('ميزان');
+    await click('نسخة للطباعة');
+    expect(textOf()).toContain('النافذة المنبثقة محجوبة');
+    expect(revokeMock).toHaveBeenCalledWith('blob:fake');
+  });
+
+  it('keeps the successful half when one mizan fetch is forbidden', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url) => {
+        const u = String(url);
+        if (u.includes('/api/v1/accounts/trial-balance')) return jsonResponse(TRIAL_BALANCE);
+        if (u.includes('/api/v1/accounts/balance-sheet'))
+          return jsonResponse({ detail: 'forbidden' }, 403);
+        return null;
+      }),
+    );
+    await render(<MoneyPage />);
+    await click('ميزان');
+    expect(textOf()).toContain('الصندوق');
+    expect(textOf()).toContain('500.10');
+    expect(textOf()).toContain('ليس لديك صلاحية');
+  });
 });
 
 const MONTHS_LIST = {
@@ -1203,6 +1343,21 @@ describe.sequential('MoneyPage — months', () => {
   });
 });
 
+async function clickNth(text: string, n: number) {
+  await act(async () => {
+    const btns = [...host.querySelectorAll('button')].filter((b) =>
+      (b.textContent ?? '').trim().includes(text),
+    );
+    const btn = btns[n];
+    if (!btn) throw new Error(`no button #${n} containing "${text}" found`);
+    (btn as HTMLButtonElement).click();
+  });
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+}
+
 function noContentResponse(): Response {
   return {
     ok: true,
@@ -1247,15 +1402,20 @@ describe.sequential('MoneyPage — edge cases', () => {
 
   it('surfaces a deleted-party 404 with the server detail verbatim', async () => {
     window.localStorage.setItem('pharmatag:token', 'tok-1');
-    vi.stubGlobal('fetch', stubMoney(async (url) => {
-      const u = String(url);
-      if (u.includes('/statement')) return jsonResponse({ detail: 'party not found' }, 404);
-      if (u.includes('/api/v1/parties/payables')) return jsonResponse({ total: '0.00', payables: [] });
-      if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
-      if (u.includes('/api/v1/receivables')) return jsonResponse({ total: '0.00', receivables: [] });
-      if (u.includes('/api/v1/parties?')) return jsonResponse(PARTIES_LIST);
-      return null;
-    }));
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url) => {
+        const u = String(url);
+        if (u.includes('/statement')) return jsonResponse({ detail: 'party not found' }, 404);
+        if (u.includes('/api/v1/parties/payables'))
+          return jsonResponse({ total: '0.00', payables: [] });
+        if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
+        if (u.includes('/api/v1/receivables'))
+          return jsonResponse({ total: '0.00', receivables: [] });
+        if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
+        return null;
+      }),
+    );
     await render(<MoneyPage />);
     await click('كشوفات');
     setSelectValue(selectByAria('الطرف'), '7');
@@ -1265,12 +1425,15 @@ describe.sequential('MoneyPage — edge cases', () => {
 
   it('shows a 429 rate-limit message without dropping the token', async () => {
     window.localStorage.setItem('pharmatag:token', 'tok-1');
-    vi.stubGlobal('fetch', stubMoney(async (url, init) => {
-      const u = String(url);
-      if (u.includes('/api/v1/drawer/day-close') && init?.method === 'POST')
-        return jsonResponse({ detail: 'slow down' }, 429, { 'retry-after': '5' });
-      return null;
-    }));
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url, init) => {
+        const u = String(url);
+        if (u.includes('/api/v1/drawer/day-close') && init?.method === 'POST')
+          return jsonResponse({ detail: 'slow down' }, 429, { 'retry-after': '5' });
+        return null;
+      }),
+    );
     await render(<MoneyPage />);
     await click('تقفيل اليوم');
     setInputValue(inputByAria('المبلغ المعدود'), '5.00');
@@ -1281,11 +1444,14 @@ describe.sequential('MoneyPage — edge cases', () => {
 
   it('never leaks server stack traces (/src/) to the screen', async () => {
     window.localStorage.setItem('pharmatag:token', 'tok-1');
-    vi.stubGlobal('fetch', stubMoney(async (url) => {
-      if (String(url).includes('/api/v1/drawer/movements'))
-        return jsonResponse({ detail: 'File "/src/app/money/entries.py", line 42, boom' }, 500);
-      return null;
-    }));
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url) => {
+        if (String(url).includes('/api/v1/drawer/movements'))
+          return jsonResponse({ detail: 'File "/src/app/money/entries.py", line 42, boom' }, 500);
+        return null;
+      }),
+    );
     await render(<MoneyPage />);
     expect(textOf()).toContain('خطأ بالخادم — حاول لاحقاً');
     expect(textOf()).not.toContain('/src/');
@@ -1293,16 +1459,21 @@ describe.sequential('MoneyPage — edge cases', () => {
 
   it('maps 422 semantic errors to an Arabic invalid-data message', async () => {
     window.localStorage.setItem('pharmatag:token', 'tok-1');
-    vi.stubGlobal('fetch', stubMoney(async (url, init) => {
-      const u = String(url);
-      if (u.includes('/api/v1/receivables/vouchers') && init?.method === 'POST')
-        return jsonResponse({ detail: 'amount must be positive' }, 422);
-      if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
-      if (u.includes('/api/v1/receivables')) return jsonResponse({ total: '0.00', receivables: [] });
-      if (u.includes('/api/v1/parties/payables')) return jsonResponse({ total: '0.00', payables: [] });
-      if (u.includes('/api/v1/parties?')) return jsonResponse(PARTIES_LIST);
-      return null;
-    }));
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url, init) => {
+        const u = String(url);
+        if (u.includes('/api/v1/receivables/vouchers') && init?.method === 'POST')
+          return jsonResponse({ detail: 'amount must be positive' }, 422);
+        if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
+        if (u.includes('/api/v1/receivables'))
+          return jsonResponse({ total: '0.00', receivables: [] });
+        if (u.includes('/api/v1/parties/payables'))
+          return jsonResponse({ total: '0.00', payables: [] });
+        if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
+        return null;
+      }),
+    );
     await render(<MoneyPage />);
     await click('كشوفات');
     setSelectValue(selectByAria('نوع السند'), 'receipt');
@@ -1310,6 +1481,47 @@ describe.sequential('MoneyPage — edge cases', () => {
     setInputValue(inputByAria('مبلغ السند'), '10.00');
     await submitForm();
     expect(textOf()).toContain('بيانات غير صالحة');
+  });
+
+  it('rejects a zero journal line client-side with no round-trip', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    const fetchMock = stubMoney(async () => null);
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<MoneyPage />);
+    await click('القيود');
+    setInputValue(inputByAria('البيان'), 'قيد صفري');
+    setInputValue(inputByAria('الحساب 1'), '1000');
+    setInputValue(inputByAria('مدين 1'), '0.00');
+    setInputValue(inputByAria('الحساب 2'), '4000');
+    setInputValue(inputByAria('دائن 2'), '0.00');
+    await submitForm();
+    expect(textOf()).toContain('أكبر من الصفر');
+    const calls = fetchMock.mock.calls as unknown as [string, (RequestInit | undefined)?][];
+    expect(calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
+  });
+
+  it('rejects a zero voucher amount client-side with no round-trip', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    const fetchMock = stubMoney(async (url) => {
+      const u = String(url);
+      if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
+      if (u.includes('/api/v1/receivables'))
+        return jsonResponse({ total: '0.00', receivables: [] });
+      if (u.includes('/api/v1/parties/payables'))
+        return jsonResponse({ total: '0.00', payables: [] });
+      if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
+      return null;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<MoneyPage />);
+    await click('كشوفات');
+    setSelectValue(selectByAria('نوع السند'), 'receipt');
+    setSelectValue(selectByAria('طرف السند'), '8');
+    setInputValue(inputByAria('مبلغ السند'), '0');
+    await submitForm();
+    expect(textOf()).toContain('أكبر من الصفر');
+    const calls = fetchMock.mock.calls as unknown as [string, (RequestInit | undefined)?][];
+    expect(calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
   });
 
   it('rejects journal client errors (blank description, double-sided line) with no round-trip', async () => {
@@ -1337,18 +1549,50 @@ describe.sequential('MoneyPage — edge cases', () => {
     expect(calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
   });
 
+  it('blocks a month/year + date-range combo client-side with no round-trip', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    const fetchMock = stubMoney(async (url) => {
+      const u = String(url);
+      if (u.includes('/api/v1/parties/payables'))
+        return jsonResponse({ total: '0.00', payables: [] });
+      if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
+      if (u.includes('/api/v1/receivables'))
+        return jsonResponse({ total: '0.00', receivables: [] });
+      if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
+      return null;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<MoneyPage />);
+    await click('كشوفات');
+    setSelectValue(selectByAria('الطرف'), '7');
+    setInputValue(inputByAria('الشهر'), '8');
+    const from = [...host.querySelectorAll('input')].find(
+      (i) => i.getAttribute('aria-label') === 'من تاريخ',
+    ) as HTMLInputElement;
+    setInputValue(from, '2026-08-01');
+    await click('عرض الكشف');
+    expect(textOf()).toContain('الشهر والسنة أو المدى');
+    const calls = fetchMock.mock.calls as unknown as [string, (RequestInit | undefined)?][];
+    expect(calls.filter(([u]) => String(u).includes('/statement'))).toHaveLength(0);
+  });
+
   it('surfaces the ambiguous-period 400 verbatim', async () => {
     window.localStorage.setItem('pharmatag:token', 'tok-1');
-    vi.stubGlobal('fetch', stubMoney(async (url) => {
-      const u = String(url);
-      if (u.includes('/statement'))
-        return jsonResponse({ detail: 'pass month/year OR a date range, not both' }, 400);
-      if (u.includes('/api/v1/parties/payables')) return jsonResponse({ total: '0.00', payables: [] });
-      if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
-      if (u.includes('/api/v1/receivables')) return jsonResponse({ total: '0.00', receivables: [] });
-      if (u.includes('/api/v1/parties?')) return jsonResponse(PARTIES_LIST);
-      return null;
-    }));
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url) => {
+        const u = String(url);
+        if (u.includes('/statement'))
+          return jsonResponse({ detail: 'pass month/year OR a date range, not both' }, 400);
+        if (u.includes('/api/v1/parties/payables'))
+          return jsonResponse({ total: '0.00', payables: [] });
+        if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
+        if (u.includes('/api/v1/receivables'))
+          return jsonResponse({ total: '0.00', receivables: [] });
+        if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
+        return null;
+      }),
+    );
     await render(<MoneyPage />);
     await click('كشوفات');
     setSelectValue(selectByAria('الطرف'), '7');
@@ -1377,7 +1621,8 @@ describe.sequential('MoneyPage — edge cases', () => {
       'fetch',
       vi.fn(async (url: string) => {
         if (String(url).includes('/api/v1/drawer/movements')) return jsonResponse(DRAWER_EMPTY);
-        if (String(url).includes('/api/v1/drawer/day-close')) return jsonResponse({ day_closes: [] });
+        if (String(url).includes('/api/v1/drawer/day-close'))
+          return jsonResponse({ day_closes: [] });
         return jsonResponse({});
       }),
     );
@@ -1394,14 +1639,242 @@ describe.sequential('MoneyPage — edge cases', () => {
     expect(tabsAfter[1]?.getAttribute('aria-selected')).toBe('true');
   });
 
+  it('ignores a stale journal detail that resolves after a newer one', async () => {
+    const entryA = { ...JOURNAL_LIST.entries[0], id: 5, entry_no: 'J-A', description: 'قيد أ' };
+    const entryB = {
+      ...JOURNAL_LIST.entries[0],
+      id: 6,
+      entry_no: 'J-B',
+      description: 'قيد ب',
+      lines: [
+        { account_code: '1000', account_name: 'الصندوق', debit: '7.77', credit: '0.00' },
+        { account_code: '4000', account_name: 'المبيعات', debit: '0.00', credit: '7.77' },
+      ],
+    };
+    const deferreds: { id: number; resolve: (r: Response) => void }[] = [];
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url) => {
+        const u = String(url);
+        const m = u.match(/\/api\/v1\/journals\/manual\/(\d+)/);
+        if (m) {
+          const id = Number(m[1]);
+          return new Promise<Response>((resolve) => {
+            deferreds.push({ id, resolve });
+          });
+        }
+        if (u.endsWith('/api/v1/journals/manual'))
+          return jsonResponse({ entries: [entryA, entryB] });
+        return null;
+      }),
+    );
+    await render(<MoneyPage />);
+    await click('القيود');
+    await clickNth('عرض', 0);
+    // Row A is now expanded (its button reads إخفاء) — row B's عرض is index 0.
+    await clickNth('عرض', 0);
+    expect(deferreds.map((d) => d.id)).toEqual([5, 6]);
+    // B resolves first, then stale A resolves last — B must stay visible.
+    deferreds.find((d) => d.id === 6)?.resolve(jsonResponse(entryB));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    deferreds.find((d) => d.id === 5)?.resolve(jsonResponse(entryA));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // The expanded detail must show B's lines even though A's fetch resolved last.
+    expect(textOf()).toContain('7.77');
+  });
+
+  it('ignores stale month balances that resolve after a newer request', async () => {
+    const months = {
+      months: [
+        { branch_id: 1, year: 2026, month: 7, status: 'closed', closed_by: 1, closed_at: 'x' },
+        { branch_id: 1, year: 2026, month: 8, status: 'closed', closed_by: 1, closed_at: 'x' },
+      ],
+    };
+    const deferreds: { key: string; resolve: (r: Response) => void }[] = [];
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url) => {
+        const u = String(url);
+        if (u.includes('/open-balances')) {
+          const m = u.match(/\/months\/(\d+)\/(\d+)\/open-balances/);
+          const key = m ? `${m[1]}/${m[2]}` : u;
+          return new Promise<Response>((resolve) => {
+            deferreds.push({ key, resolve });
+          });
+        }
+        if (/\/api\/v1\/months\/\d+\/\d+$/.test(u)) return jsonResponse({ detail: 'x' }, 404);
+        if (u.includes('/api/v1/months')) return jsonResponse(months);
+        if (u.includes('/api/v1/opening-balances')) return jsonResponse({ periods: [] });
+        return null;
+      }),
+    );
+    await render(<MoneyPage />);
+    await click('شهور');
+    await clickNth('عرض الأرصدة', 0);
+    await clickNth('عرض الأرصدة', 1);
+    // Second request (2026/8) resolves first, stale first (2026/7) last.
+    deferreds
+      .find((d) => d.key === '2026/8')
+      ?.resolve(jsonResponse({ rows: [], total_debit: '8.00', total_credit: '8.00' }));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    deferreds
+      .find((d) => d.key === '2026/7')
+      ?.resolve(jsonResponse({ rows: [], total_debit: '7.00', total_credit: '7.00' }));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(textOf()).toContain('أرصدة 2026/8');
+    expect(textOf()).not.toContain('أرصدة 2026/7');
+  });
+
+  it('disables reverse actions after a journal reverse 403', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url, init) => {
+        const u = String(url);
+        if (u.includes('/reverse') && init?.method === 'POST')
+          return jsonResponse({ detail: 'missing permission' }, 403);
+        if (/\/api\/v1\/journals\/manual\/\d+/.test(u))
+          return jsonResponse(JOURNAL_LIST.entries[0]);
+        if (u.includes('/api/v1/journals/manual')) return jsonResponse(JOURNAL_LIST);
+        return null;
+      }),
+    );
+    await render(<MoneyPage />);
+    await click('القيود');
+    await click('عرض');
+    await click('عكس القيد');
+    expect(textOf()).toContain('ليس لديك صلاحية');
+    const reverseBtns = [...host.querySelectorAll('button')].filter((b) =>
+      (b.textContent ?? '').includes('عكس القيد'),
+    );
+    expect(reverseBtns.length).toBeGreaterThan(0);
+    for (const b of reverseBtns) expect((b as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('disables reverse actions after a voucher reverse 403', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url, init) => {
+        const u = String(url);
+        if (u.includes('/reverse') && init?.method === 'POST')
+          return jsonResponse({ detail: 'missing permission' }, 403);
+        if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse(VOUCHERS_ONE);
+        if (u.includes('/api/v1/receivables'))
+          return jsonResponse({ total: '0.00', receivables: [] });
+        if (u.includes('/api/v1/parties/payables'))
+          return jsonResponse({ total: '0.00', payables: [] });
+        if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
+        return null;
+      }),
+    );
+    await render(<MoneyPage />);
+    await click('كشوفات');
+    await click('عكس السند');
+    expect(textOf()).toContain('ليس لديك صلاحية');
+    const reverseBtns = [...host.querySelectorAll('button')].filter((b) =>
+      (b.textContent ?? '').includes('عكس السند'),
+    );
+    expect(reverseBtns.length).toBeGreaterThan(0);
+    for (const b of reverseBtns) expect((b as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('disables reopen actions after a day-close reopen 403', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url, init) => {
+        const u = String(url);
+        if (u.includes('/reopen') && init?.method === 'POST')
+          return jsonResponse({ detail: 'missing permission' }, 403);
+        if (u.includes('/api/v1/drawer/movements')) return jsonResponse(DRAWER_EMPTY);
+        if (u.includes('/api/v1/drawer/day-close')) return jsonResponse(DAY_CLOSE_ONE);
+        return null;
+      }),
+    );
+    await render(<MoneyPage />);
+    await click('تقفيل اليوم');
+    await click('إعادة فتح');
+    expect(textOf()).toContain('ليس لديك صلاحية');
+    const reopenBtns = [...host.querySelectorAll('button')].filter((b) =>
+      (b.textContent ?? '').includes('إعادة فتح'),
+    );
+    expect(reopenBtns.length).toBeGreaterThan(0);
+    for (const b of reopenBtns) expect((b as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('disables reopen actions after a month reopen 403', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url, init) => {
+        const u = String(url);
+        if (u.includes('/reopen') && init?.method === 'POST')
+          return jsonResponse({ detail: 'missing permission' }, 403);
+        if (u.includes('/api/v1/months')) return jsonResponse(MONTHS_LIST);
+        if (u.includes('/api/v1/opening-balances')) return jsonResponse({ periods: [] });
+        return null;
+      }),
+    );
+    await render(<MoneyPage />);
+    await click('شهور');
+    await click('إعادة فتح الشهر');
+    expect(textOf()).toContain('ليس لديك صلاحية');
+    const reopenBtns = [...host.querySelectorAll('button')].filter((b) =>
+      (b.textContent ?? '').includes('إعادة فتح الشهر'),
+    );
+    expect(reopenBtns.length).toBeGreaterThan(0);
+    for (const b of reopenBtns) expect((b as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('fetches the party picker with a single unfiltered call', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    const fetchMock = stubMoney(async (url) => {
+      const u = String(url);
+      if (u.includes('/api/v1/parties/payables'))
+        return jsonResponse({ total: '0.00', payables: [] });
+      if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
+      if (u.includes('/api/v1/receivables'))
+        return jsonResponse({ total: '0.00', receivables: [] });
+      if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
+      return null;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<MoneyPage />);
+    await click('كشوفات');
+    const calls = fetchMock.mock.calls as unknown as [string][];
+    const pickerCalls = calls
+      .map(([u]) => String(u))
+      .filter((u) => u.includes('/api/v1/parties') && !u.includes('/payables'));
+    // one unfiltered list call (no kind= supplier/customer/both triple-fetch)
+    expect(pickerCalls).toHaveLength(1);
+    expect(pickerCalls[0]).not.toContain('kind=');
+    expect(textOf()).toContain('مورد أ');
+  });
+
   it('renders mizan totals foot verbatim from the server', async () => {
     window.localStorage.setItem('pharmatag:token', 'tok-1');
-    vi.stubGlobal('fetch', stubMoney(async (url) => {
-      const u = String(url);
-      if (u.includes('/api/v1/accounts/trial-balance')) return jsonResponse(TRIAL_BALANCE);
-      if (u.includes('/api/v1/accounts/balance-sheet')) return jsonResponse(BALANCE_SHEET);
-      return null;
-    }));
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url) => {
+        const u = String(url);
+        if (u.includes('/api/v1/accounts/trial-balance')) return jsonResponse(TRIAL_BALANCE);
+        if (u.includes('/api/v1/accounts/balance-sheet')) return jsonResponse(BALANCE_SHEET);
+        return null;
+      }),
+    );
     await render(<MoneyPage />);
     await click('ميزان');
     expect(textOf()).toContain('الإجمالي');
@@ -1446,6 +1919,21 @@ describe.sequential('MoneyPage — drawer form & day-close actions', () => {
     expect(postCall).toBeDefined();
     if (!postCall?.[1]?.body) throw new Error('expected POST body');
     expect(JSON.parse(postCall[1].body as string).amount).toBe('250.75');
+  });
+
+  it('rejects a zero amount client-side without a round-trip', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes('/api/v1/drawer/movements')) return jsonResponse(DRAWER_EMPTY);
+      return jsonResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<MoneyPage />);
+    setInputValue(inputByAria('المبلغ'), '0.00');
+    await submitForm();
+    expect(textOf()).toContain('أكبر من الصفر');
+    const calls = fetchMock.mock.calls as unknown as [string, (RequestInit | undefined)?][];
+    expect(calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
   });
 
   it('rejects an invalid amount client-side without a round-trip', async () => {

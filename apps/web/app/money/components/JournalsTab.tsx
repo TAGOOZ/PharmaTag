@@ -2,6 +2,7 @@
 
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '@/lib/api';
+import { businessToday } from '@/lib/businessDate';
 import {
   createManualJournal,
   fetchManualJournal,
@@ -9,7 +10,7 @@ import {
   type ManualJournalEntry,
   reverseManualJournal,
 } from '@/lib/money';
-import { isMoneyValid, normalizeDecimal } from '@/lib/posMoney';
+import { isMoneyValid, isPositive, normalizeDecimal } from '@/lib/posMoney';
 import { mapMoneyError, moneyErrorMessage } from './moneyErrors';
 
 function str(v: unknown): string {
@@ -71,8 +72,11 @@ export default function JournalsTab({
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [reversing, setReversing] = useState(false);
+  const [actionsForbidden, setActionsForbidden] = useState(false);
 
   const seqRef = useRef(0);
+  const detailSeqRef = useRef(0);
+  const detailAbortRef = useRef<AbortController | null>(null);
   const savingLock = useRef(false);
   const reverseLock = useRef(false);
 
@@ -111,17 +115,28 @@ export default function JournalsTab({
 
   async function showDetail(id: number) {
     if (expandedId === id) {
+      detailSeqRef.current++;
+      detailAbortRef.current?.abort();
+      detailAbortRef.current = null;
       setExpandedId(null);
       setDetail(null);
       return;
     }
+    const seq = ++detailSeqRef.current;
+    detailAbortRef.current?.abort();
+    const controller = new AbortController();
+    detailAbortRef.current = controller;
     setExpandedId(id);
     setDetail(null);
     setDetailError(null);
     setDetailLoading(true);
     try {
-      setDetail(await fetchManualJournal(token, id));
+      const res = await fetchManualJournal(token, id, controller.signal);
+      if (seq !== detailSeqRef.current) return;
+      setDetail(res);
     } catch (err) {
+      if ((err as Error)?.name === 'AbortError') return;
+      if (seq !== detailSeqRef.current) return;
       if (err instanceof ApiError && err.status === 401) {
         onAuthFail();
         return;
@@ -130,7 +145,10 @@ export default function JournalsTab({
         err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
       );
     } finally {
-      setDetailLoading(false);
+      if (seq === detailSeqRef.current) {
+        if (detailAbortRef.current === controller) detailAbortRef.current = null;
+        setDetailLoading(false);
+      }
     }
   }
 
@@ -150,6 +168,8 @@ export default function JournalsTab({
       if (c && !isMoneyValid(c)) return `سطر ${i + 1}: الدائن غير صالح`;
       if (!d && !c) return `سطر ${i + 1}: أدخل مبلغاً مديناً أو دائناً`;
       if (d && c) return `سطر ${i + 1}: السطر مدين أو دائن — وليس الاثنين`;
+      if ((d && !isPositive(d)) || (c && !isPositive(c)))
+        return `سطر ${i + 1}: المبلغ يجب أن يكون أكبر من الصفر`;
     }
     return null;
   }
@@ -168,7 +188,7 @@ export default function JournalsTab({
     setFormSuccess(null);
     try {
       const created = await createManualJournal(token, {
-        datee: datee || new Date().toISOString().slice(0, 10),
+        datee: datee || businessToday(),
         description: description.trim(),
         lines: lines.map((l) => {
           const out: { account_code: string; debit?: string; credit?: string } = {
@@ -219,6 +239,9 @@ export default function JournalsTab({
         onAuthFail();
         return;
       }
+      if (err instanceof ApiError && err.status === 403) {
+        setActionsForbidden(true);
+      }
       setFormError(
         err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
       );
@@ -261,10 +284,10 @@ export default function JournalsTab({
                 const id = entryId(en);
                 const rows: React.ReactNode[] = [
                   <tr key={id} className="border-b border-border">
-                    <td className="pt-mono px-3 py-2">{str(en.entry_no)}</td>
+                    <td className="pt-mono break-all px-3 py-2">{str(en.entry_no)}</td>
                     <td className="px-3 py-2">{str(en.datee)}</td>
                     <td className="px-3 py-2">{str(en.description)}</td>
-                    <td className="pt-mono px-3 py-2">{str(en.total)}</td>
+                    <td className="pt-mono break-all px-3 py-2">{str(en.total)}</td>
                     <td className="px-3 py-2">
                       <button
                         type="button"
@@ -302,17 +325,23 @@ export default function JournalsTab({
                               <tbody>
                                 {keyedLines(detail.lines).map(({ key, line }) => (
                                   <tr key={key} className="border-b border-border">
-                                    <td className="pt-mono px-2 py-1">{str(line.account_code)}</td>
+                                    <td className="pt-mono break-all px-2 py-1">
+                                      {str(line.account_code)}
+                                    </td>
                                     <td className="px-2 py-1">{str(line.account_name)}</td>
-                                    <td className="pt-mono px-2 py-1">{str(line.debit)}</td>
-                                    <td className="pt-mono px-2 py-1">{str(line.credit)}</td>
+                                    <td className="pt-mono break-all px-2 py-1">
+                                      {str(line.debit)}
+                                    </td>
+                                    <td className="pt-mono break-all px-2 py-1">
+                                      {str(line.credit)}
+                                    </td>
                                   </tr>
                                 ))}
                               </tbody>
                             </table>
                             <button
                               type="button"
-                              disabled={reversing}
+                              disabled={actionsForbidden || reversing}
                               onClick={() => reverse(id)}
                               className="w-fit rounded border border-border px-3 py-1 text-xs disabled:opacity-50"
                             >
@@ -336,7 +365,11 @@ export default function JournalsTab({
           {formError}
         </p>
       )}
-      {formSuccess && <p className="pt-caption text-green-600">{formSuccess}</p>}
+      {formSuccess && (
+        <p className="pt-caption text-green-600" role="status">
+          {formSuccess}
+        </p>
+      )}
 
       {forbidden ? (
         <p className="pt-caption text-red-600" role="alert">

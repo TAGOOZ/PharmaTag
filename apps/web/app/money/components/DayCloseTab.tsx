@@ -31,6 +31,7 @@ export default function DayCloseTab({
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [reopeningId, setReopeningId] = useState<number | null>(null);
+  const [actionsForbidden, setActionsForbidden] = useState(false);
 
   const seqRef = useRef(0);
   const savingLock = useRef(false);
@@ -120,6 +121,9 @@ export default function DayCloseTab({
         onAuthFail();
         return;
       }
+      if (err instanceof ApiError && err.status === 403) {
+        setActionsForbidden(true);
+      }
       setFormError(
         err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
       );
@@ -162,15 +166,15 @@ export default function DayCloseTab({
               {closes.map((c) => (
                 <tr key={String(c.id)} className="border-b border-border">
                   <td className="px-3 py-2">{str(c.datee)}</td>
-                  <td className="pt-mono px-3 py-2">{str(c.expected_cash)}</td>
-                  <td className="pt-mono px-3 py-2">{str(c.counted_cash)}</td>
-                  <td className="pt-mono px-3 py-2">{str(c.difference)}</td>
+                  <td className="pt-mono break-all px-3 py-2">{str(c.expected_cash)}</td>
+                  <td className="pt-mono break-all px-3 py-2">{str(c.counted_cash)}</td>
+                  <td className="pt-mono break-all px-3 py-2">{str(c.difference)}</td>
                   <td className="px-3 py-2">{str(c.status)}</td>
                   <td className="px-3 py-2">
                     {str(c.status) === 'closed' && (
                       <button
                         type="button"
-                        disabled={reopeningId === closeId(c)}
+                        disabled={actionsForbidden || reopeningId === closeId(c)}
                         onClick={() => reopen(closeId(c))}
                         className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50"
                       >
@@ -190,7 +194,11 @@ export default function DayCloseTab({
           {formError}
         </p>
       )}
-      {formSuccess && <p className="pt-caption text-green-600">{formSuccess}</p>}
+      {formSuccess && (
+        <p className="pt-caption text-green-600" role="status">
+          {formSuccess}
+        </p>
+      )}
 
       {forbidden ? (
         <p className="pt-caption text-red-600" role="alert">

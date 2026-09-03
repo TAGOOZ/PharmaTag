@@ -67,38 +67,66 @@ export default function MizanTab({ token, onAuthFail }: { token: string; onAuthF
   const [error, setError] = useState<string | null>(null);
 
   const seqRef = useRef(0);
+  const blobRef = useRef<string | null>(null);
+
+  const fail = useCallback(
+    (err: unknown): void => {
+      if (err instanceof ApiError && err.status === 401) {
+        onAuthFail();
+        return;
+      }
+      setError(
+        err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
+      );
+    },
+    [onAuthFail],
+  );
 
   const load = useCallback(
     async (params: MizanParams, signal?: AbortSignal) => {
       const seq = ++seqRef.current;
       setLoading(true);
       setError(null);
-      try {
-        const [tbRes, bsRes] = await Promise.all([
-          fetchTrialBalance(token, params, signal),
-          fetchBalanceSheet(token, params, signal),
-        ]);
-        if (seq !== seqRef.current) return;
-        setTb(tbRes as Record<string, unknown>);
-        setBs(bsRes as Record<string, unknown>);
-      } catch (err) {
-        if ((err as Error)?.name === 'AbortError') return;
-        if (seq !== seqRef.current) return;
-        if (err instanceof ApiError && err.status === 401) {
-          onAuthFail();
-          return;
-        }
+      const [tbSettled, bsSettled] = await Promise.allSettled([
+        fetchTrialBalance(token, params, signal),
+        fetchBalanceSheet(token, params, signal),
+      ]);
+      if (seq !== seqRef.current) return;
+      const tbReason = tbSettled.status === 'rejected' ? tbSettled.reason : null;
+      const bsReason = bsSettled.status === 'rejected' ? bsSettled.reason : null;
+      if ((tbReason as Error)?.name === 'AbortError') return;
+      if ((bsReason as Error)?.name === 'AbortError') return;
+      if (tbSettled.status === 'fulfilled') {
+        setTb(tbSettled.value as Record<string, unknown>);
+      } else {
         setTb(null);
-        setBs(null);
-        setError(
-          err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
-        );
-      } finally {
-        if (seq === seqRef.current) setLoading(false);
+        fail(tbReason);
       }
+      if (bsSettled.status === 'fulfilled') {
+        setBs(bsSettled.value as Record<string, unknown>);
+      } else {
+        setBs(null);
+        fail(bsReason);
+      }
+      setLoading(false);
     },
-    [token, onAuthFail],
+    [token, fail],
   );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void load({}, controller.signal);
+    return () => controller.abort();
+  }, [load]);
+
+  useEffect(() => {
+    return () => {
+      if (blobRef.current) {
+        URL.revokeObjectURL(blobRef.current);
+        blobRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -119,8 +147,18 @@ export default function MizanTab({ token, onAuthFail }: { token: string; onAuthF
     setError(null);
     try {
       const html = await fetchBalanceSheetHtml(token, params());
+      if (blobRef.current) {
+        URL.revokeObjectURL(blobRef.current);
+        blobRef.current = null;
+      }
       const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-      window.open(blobUrl, '_blank', 'noopener');
+      const win = window.open(blobUrl, '_blank', 'noopener');
+      if (!win) {
+        URL.revokeObjectURL(blobUrl);
+        setError('النافذة المنبثقة محجوبة — اسمح بالنوافذ المنبثقة للطباعة');
+        return;
+      }
+      blobRef.current = blobUrl;
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         onAuthFail();
@@ -226,14 +264,14 @@ export default function MizanTab({ token, onAuthFail }: { token: string; onAuthF
                     <tbody>
                       {keyedTb(tbAccounts).map(({ key, row }) => (
                         <tr key={key} className="border-b border-border">
-                          <td className="pt-mono px-3 py-2">{str(row.code)}</td>
+                          <td className="pt-mono break-all px-3 py-2">{str(row.code)}</td>
                           <td className="px-3 py-2">{str(row.name_ar)}</td>
-                          <td className="pt-mono px-3 py-2">{str(row.opening_debit)}</td>
-                          <td className="pt-mono px-3 py-2">{str(row.opening_credit)}</td>
-                          <td className="pt-mono px-3 py-2">{str(row.debit)}</td>
-                          <td className="pt-mono px-3 py-2">{str(row.credit)}</td>
-                          <td className="pt-mono px-3 py-2">{str(row.closing_debit)}</td>
-                          <td className="pt-mono px-3 py-2">{str(row.closing_credit)}</td>
+                          <td className="pt-mono break-all px-3 py-2">{str(row.opening_debit)}</td>
+                          <td className="pt-mono break-all px-3 py-2">{str(row.opening_credit)}</td>
+                          <td className="pt-mono break-all px-3 py-2">{str(row.debit)}</td>
+                          <td className="pt-mono break-all px-3 py-2">{str(row.credit)}</td>
+                          <td className="pt-mono break-all px-3 py-2">{str(row.closing_debit)}</td>
+                          <td className="pt-mono break-all px-3 py-2">{str(row.closing_credit)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -243,12 +281,20 @@ export default function MizanTab({ token, onAuthFail }: { token: string; onAuthF
                           <td colSpan={2} className="px-3 py-2">
                             الإجمالي
                           </td>
-                          <td className="pt-mono px-3 py-2">{str(tbTotals.opening_debit)}</td>
-                          <td className="pt-mono px-3 py-2">{str(tbTotals.opening_credit)}</td>
-                          <td className="pt-mono px-3 py-2">{str(tbTotals.debit)}</td>
-                          <td className="pt-mono px-3 py-2">{str(tbTotals.credit)}</td>
-                          <td className="pt-mono px-3 py-2">{str(tbTotals.closing_debit)}</td>
-                          <td className="pt-mono px-3 py-2">{str(tbTotals.closing_credit)}</td>
+                          <td className="pt-mono break-all px-3 py-2">
+                            {str(tbTotals.opening_debit)}
+                          </td>
+                          <td className="pt-mono break-all px-3 py-2">
+                            {str(tbTotals.opening_credit)}
+                          </td>
+                          <td className="pt-mono break-all px-3 py-2">{str(tbTotals.debit)}</td>
+                          <td className="pt-mono break-all px-3 py-2">{str(tbTotals.credit)}</td>
+                          <td className="pt-mono break-all px-3 py-2">
+                            {str(tbTotals.closing_debit)}
+                          </td>
+                          <td className="pt-mono break-all px-3 py-2">
+                            {str(tbTotals.closing_credit)}
+                          </td>
                         </tr>
                       </tfoot>
                     )}
@@ -280,9 +326,9 @@ export default function MizanTab({ token, onAuthFail }: { token: string; onAuthF
                         <tbody>
                           {keyedBs(section.accounts).map(({ key, acc }) => (
                             <tr key={key} className="border-b border-border">
-                              <td className="pt-mono px-3 py-2">{str(acc.code)}</td>
+                              <td className="pt-mono break-all px-3 py-2">{str(acc.code)}</td>
                               <td className="px-3 py-2">{str(acc.name_ar)}</td>
-                              <td className="pt-mono px-3 py-2">{str(acc.amount)}</td>
+                              <td className="pt-mono break-all px-3 py-2">{str(acc.amount)}</td>
                             </tr>
                           ))}
                         </tbody>

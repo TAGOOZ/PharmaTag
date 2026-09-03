@@ -64,6 +64,7 @@ export default function MonthsTab({
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
   const [reopeningKey, setReopeningKey] = useState<string | null>(null);
+  const [actionsForbidden, setActionsForbidden] = useState(false);
 
   const [balances, setBalances] = useState<Record<string, unknown> | null>(null);
   const [balancesTitle, setBalancesTitle] = useState('');
@@ -73,6 +74,7 @@ export default function MonthsTab({
 
   const seqRef = useRef(0);
   const actionLock = useRef(false);
+  const reopenLock = useRef(false);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -158,8 +160,8 @@ export default function MonthsTab({
   }
 
   async function reopen(y: number, m: number) {
-    if (actionLock.current) return;
-    actionLock.current = true;
+    if (reopenLock.current) return;
+    reopenLock.current = true;
     const key = `${y}-${m}`;
     setReopeningKey(key);
     setFormError(null);
@@ -172,16 +174,27 @@ export default function MonthsTab({
         onAuthFail();
         return;
       }
+      if (err instanceof ApiError && err.status === 403) {
+        setActionsForbidden(true);
+      }
       setFormError(
         err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
       );
     } finally {
-      actionLock.current = false;
+      reopenLock.current = false;
       setReopeningKey(null);
     }
   }
 
+  const balancesSeqRef = useRef(0);
+  const balancesAbortRef = useRef<AbortController | null>(null);
+  const openingSeqRef = useRef(0);
+
   async function showBalances(y: number, m: number) {
+    const seq = ++balancesSeqRef.current;
+    balancesAbortRef.current?.abort();
+    const controller = new AbortController();
+    balancesAbortRef.current = controller;
     setBalancesLoading(true);
     setBalances(null);
     setFormError(null);
@@ -190,19 +203,32 @@ export default function MonthsTab({
       // archival open-balances view when the month has no close row yet.
       let payload: Record<string, unknown>;
       try {
-        const detail = (await fetchMonth(token, y, m)) as Record<string, unknown>;
+        const detail = (await fetchMonth(token, y, m, controller.signal)) as Record<
+          string,
+          unknown
+        >;
         const next = detail.next_open_balances;
         if (next && typeof next === 'object') {
           payload = next as Record<string, unknown>;
         } else {
-          payload = (await fetchOpenBalances(token, y, m)) as Record<string, unknown>;
+          payload = (await fetchOpenBalances(token, y, m, controller.signal)) as Record<
+            string,
+            unknown
+          >;
         }
       } catch {
-        payload = (await fetchOpenBalances(token, y, m)) as Record<string, unknown>;
+        if (controller.signal.aborted) return;
+        payload = (await fetchOpenBalances(token, y, m, controller.signal)) as Record<
+          string,
+          unknown
+        >;
       }
+      if (seq !== balancesSeqRef.current) return;
       setBalances(payload);
       setBalancesTitle(`أرصدة ${y}/${m}`);
     } catch (err) {
+      if ((err as Error)?.name === 'AbortError') return;
+      if (seq !== balancesSeqRef.current) return;
       if (err instanceof ApiError && err.status === 401) {
         onAuthFail();
         return;
@@ -211,19 +237,27 @@ export default function MonthsTab({
         err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
       );
     } finally {
-      setBalancesLoading(false);
+      if (seq === balancesSeqRef.current) {
+        if (balancesAbortRef.current === controller) balancesAbortRef.current = null;
+        setBalancesLoading(false);
+      }
     }
   }
 
   async function showOpening() {
     const ym = parseYearMonth();
     if (!ym) return;
+    const seq = ++openingSeqRef.current;
     setOpeningLoading(true);
     setOpening(null);
     setFormError(null);
     try {
-      setOpening(await fetchOpeningBalances(token, ym.y, ym.m));
+      const res = await fetchOpeningBalances(token, ym.y, ym.m);
+      if (seq !== openingSeqRef.current) return;
+      setOpening(res);
     } catch (err) {
+      if ((err as Error)?.name === 'AbortError') return;
+      if (seq !== openingSeqRef.current) return;
       if (err instanceof ApiError && err.status === 401) {
         onAuthFail();
         return;
@@ -232,7 +266,7 @@ export default function MonthsTab({
         err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
       );
     } finally {
-      setOpeningLoading(false);
+      if (seq === openingSeqRef.current) setOpeningLoading(false);
     }
   }
 
@@ -270,8 +304,8 @@ export default function MonthsTab({
                 const key = monthKey(c);
                 return (
                   <tr key={key} className="border-b border-border">
-                    <td className="pt-mono px-3 py-2">{str(c.year)}</td>
-                    <td className="pt-mono px-3 py-2">{str(c.month)}</td>
+                    <td className="pt-mono break-all px-3 py-2">{str(c.year)}</td>
+                    <td className="pt-mono break-all px-3 py-2">{str(c.month)}</td>
                     <td className="px-3 py-2">{str(c.status)}</td>
                     <td className="flex gap-2 px-3 py-2">
                       <button
@@ -284,7 +318,7 @@ export default function MonthsTab({
                       {str(c.status) === 'closed' && (
                         <button
                           type="button"
-                          disabled={reopeningKey === key}
+                          disabled={actionsForbidden || reopeningKey === key}
                           onClick={() => reopen(y, m)}
                           className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50"
                         >
@@ -320,10 +354,10 @@ export default function MonthsTab({
               <tbody>
                 {keyedBalanceRows(balances.rows).map(({ key, cells }) => (
                   <tr key={key} className="border-b border-border">
-                    <td className="pt-mono px-3 py-2">{cells[0]}</td>
+                    <td className="pt-mono break-all px-3 py-2">{cells[0]}</td>
                     <td className="px-3 py-2">{cells[1]}</td>
-                    <td className="pt-mono px-3 py-2">{cells[2]}</td>
-                    <td className="pt-mono px-3 py-2">{cells[3]}</td>
+                    <td className="pt-mono break-all px-3 py-2">{cells[2]}</td>
+                    <td className="pt-mono break-all px-3 py-2">{cells[3]}</td>
                   </tr>
                 ))}
               </tbody>
@@ -359,10 +393,10 @@ export default function MonthsTab({
               <tbody>
                 {keyedBalanceRows(opening.rows).map(({ key, cells }) => (
                   <tr key={key} className="border-b border-border">
-                    <td className="pt-mono px-3 py-2">{cells[0]}</td>
+                    <td className="pt-mono break-all px-3 py-2">{cells[0]}</td>
                     <td className="px-3 py-2">{cells[1]}</td>
-                    <td className="pt-mono px-3 py-2">{cells[2]}</td>
-                    <td className="pt-mono px-3 py-2">{cells[3]}</td>
+                    <td className="pt-mono break-all px-3 py-2">{cells[2]}</td>
+                    <td className="pt-mono break-all px-3 py-2">{cells[3]}</td>
                   </tr>
                 ))}
               </tbody>
@@ -381,7 +415,11 @@ export default function MonthsTab({
           {formError}
         </p>
       )}
-      {formSuccess && <p className="pt-caption text-green-600">{formSuccess}</p>}
+      {formSuccess && (
+        <p className="pt-caption text-green-600" role="status">
+          {formSuccess}
+        </p>
+      )}
 
       {forbidden ? (
         <p className="pt-caption text-red-600" role="alert">

@@ -259,28 +259,6 @@ export async function fetchStatement(
   return readJson<PartyStatement>(res);
 }
 
-export async function fetchStatementHtml(
-  token: string,
-  partyId: number,
-  params: StatementParams = {},
-  signal?: AbortSignal,
-): Promise<string> {
-  const url = withParams(`${API_URL}/api/v1/parties/${partyId}/statement`, {
-    month: params.month,
-    year: params.year,
-    date_from: params.date_from,
-    date_to: params.date_to,
-    side: params.side,
-  });
-  const sep = url.includes('?') ? '&' : '?';
-  const res = await fetch(`${url}${sep}format=html`, {
-    headers: authHeaders(token),
-    signal,
-  });
-  await throwForStatus(res);
-  return await res.text();
-}
-
 export type PayablesPayload = Record<string, unknown>;
 
 export async function fetchPayables(token: string, signal?: AbortSignal): Promise<PayablesPayload> {
@@ -505,12 +483,6 @@ export async function reopenMonth(
   return readJson<MonthClose>(res);
 }
 
-export interface OpeningLineIn {
-  account_code: string;
-  debit?: string;
-  credit?: string;
-}
-
 export type OpeningPayload = Record<string, unknown>;
 
 export async function fetchOpeningBalances(
@@ -521,36 +493,6 @@ export async function fetchOpeningBalances(
 ): Promise<OpeningPayload> {
   const res = await fetch(`${API_URL}/api/v1/opening-balances/${year}/${month}`, {
     headers: authHeaders(token),
-    signal,
-  });
-  await throwForStatus(res);
-  return readJson<OpeningPayload>(res);
-}
-
-export async function listOpeningBalances(
-  token: string,
-  signal?: AbortSignal,
-): Promise<OpeningPayload> {
-  const res = await fetch(`${API_URL}/api/v1/opening-balances`, {
-    headers: authHeaders(token),
-    signal,
-  });
-  await throwForStatus(res);
-  if (res.status === 204) return { periods: [] };
-  return readJson<OpeningPayload>(res);
-}
-
-export async function postOpeningBalances(
-  token: string,
-  year: number,
-  month: number,
-  body: { description?: string; lines: OpeningLineIn[] },
-  signal?: AbortSignal,
-): Promise<OpeningPayload> {
-  const res = await fetch(`${API_URL}/api/v1/opening-balances/${year}/${month}`, {
-    method: 'POST',
-    headers: jsonHeaders(token),
-    body: JSON.stringify(body),
     signal,
   });
   await throwForStatus(res);

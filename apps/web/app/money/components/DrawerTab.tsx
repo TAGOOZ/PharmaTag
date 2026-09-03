@@ -8,7 +8,7 @@ import {
   fetchDrawerMovements,
   type MovementCreateBody,
 } from '@/lib/money';
-import { isMoneyValid, normalizeDecimal } from '@/lib/posMoney';
+import { isMoneyValid, isPositive, normalizeDecimal } from '@/lib/posMoney';
 import { mapMoneyError, moneyErrorMessage } from './moneyErrors';
 
 const REASON_LABELS: Record<MovementCreateBody['reason'], string> = {
@@ -109,6 +109,10 @@ export default function DrawerTab({
       setFormError('المبلغ غير صالح — أدخل مبلغاً موجباً برقمين عشريين على الأكثر');
       return;
     }
+    if (!isPositive(norm)) {
+      setFormError('المبلغ يجب أن يكون أكبر من الصفر');
+      return;
+    }
     savingLock.current = true;
     setSaving(true);
     setFormError(null);
@@ -181,7 +185,7 @@ export default function DrawerTab({
                     {(REASON_LABELS as Record<string, string>)[m.reason] ?? m.reason}
                   </td>
                   <td className="px-3 py-2">{methodLabel(m.method)}</td>
-                  <td className="pt-mono px-3 py-2">{m.amount}</td>
+                  <td className="pt-mono break-all px-3 py-2">{m.amount}</td>
                 </tr>
               ))}
             </tbody>
@@ -253,7 +257,11 @@ export default function DrawerTab({
               {formError}
             </p>
           )}
-          {formSuccess && <p className="pt-caption text-green-600">{formSuccess}</p>}
+          {formSuccess && (
+            <p className="pt-caption text-green-600" role="status">
+              {formSuccess}
+            </p>
+          )}
           <button
             type="submit"
             disabled={saving}

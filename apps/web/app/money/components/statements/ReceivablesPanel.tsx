@@ -105,8 +105,8 @@ export default function ReceivablesPanel({
                     <td className="px-3 py-2">
                       {r.name_ar !== '—' ? r.name_ar : r.namee} ({r.kind})
                     </td>
-                    <td className="pt-mono px-3 py-2">{r.credit_limit}</td>
-                    <td className="pt-mono px-3 py-2">{r.balance}</td>
+                    <td className="pt-mono break-all px-3 py-2">{r.credit_limit}</td>
+                    <td className="pt-mono break-all px-3 py-2">{r.balance}</td>
                   </tr>
                 ))}
               </tbody>

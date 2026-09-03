@@ -1,7 +1,8 @@
 'use client';
 
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError, listParties, type Party } from '@/lib/api';
+import { ApiError, type Party } from '@/lib/api';
+import { businessToday } from '@/lib/businessDate';
 import {
   createVoucher,
   fetchVouchers,
@@ -9,7 +10,7 @@ import {
   type SettlementVoucher,
   type VoucherCreateBody,
 } from '@/lib/money';
-import { isMoneyValid, normalizeDecimal } from '@/lib/posMoney';
+import { isMoneyValid, isPositive, normalizeDecimal } from '@/lib/posMoney';
 import { mapMoneyError, moneyErrorMessage } from '../moneyErrors';
 
 function str(v: unknown): string {
@@ -43,12 +44,14 @@ function methodLabel(m: unknown): string {
 export default function VouchersPanel({
   token,
   onAuthFail,
+  parties,
 }: {
   token: string;
   onAuthFail: () => void;
+  parties: Party[];
 }) {
   const [vouchers, setVouchers] = useState<SettlementVoucher[] | null>(null);
-  const [parties, setParties] = useState<Party[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
@@ -63,6 +66,7 @@ export default function VouchersPanel({
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [reversingId, setReversingId] = useState<number | null>(null);
+  const [actionsForbidden, setActionsForbidden] = useState(false);
 
   const seqRef = useRef(0);
   const savingLock = useRef(false);
@@ -74,17 +78,9 @@ export default function VouchersPanel({
       setLoading(true);
       setError(null);
       try {
-        const [vres, ...plists] = await Promise.all([
-          fetchVouchers(token, {}, signal),
-          listParties(token, 'supplier', signal),
-          listParties(token, 'customer', signal),
-          listParties(token, 'both', signal),
-        ]);
+        const vres = await fetchVouchers(token, {}, signal);
         if (seq !== seqRef.current) return;
         setVouchers(vres.vouchers);
-        const merged = new Map<number, Party>();
-        for (const l of plists) for (const p of l.parties) merged.set(p.id, p);
-        setParties([...merged.values()].sort((a, b) => a.namee.localeCompare(b.namee)));
       } catch (err) {
         if ((err as Error)?.name === 'AbortError') return;
         if (seq !== seqRef.current) return;
@@ -122,6 +118,10 @@ export default function VouchersPanel({
       setFormError('المبلغ غير صالح — أدخل مبلغاً موجباً برقمين عشريين على الأكثر');
       return;
     }
+    if (!isPositive(norm)) {
+      setFormError('المبلغ يجب أن يكون أكبر من الصفر');
+      return;
+    }
     savingLock.current = true;
     setSaving(true);
     setFormError(null);
@@ -130,7 +130,7 @@ export default function VouchersPanel({
       const created = await createVoucher(token, {
         voucher_type: vtype,
         party_id: pid,
-        datee: datee || new Date().toISOString().slice(0, 10),
+        datee: datee || businessToday(),
         method,
         amount: norm,
         description: description.trim() || undefined,
@@ -175,6 +175,9 @@ export default function VouchersPanel({
         onAuthFail();
         return;
       }
+      if (err instanceof ApiError && err.status === 403) {
+        setActionsForbidden(true);
+      }
       setFormError(
         err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
       );
@@ -217,16 +220,16 @@ export default function VouchersPanel({
             <tbody>
               {vouchers.map((v) => (
                 <tr key={voucherId(v)} className="border-b border-border">
-                  <td className="pt-mono px-3 py-2">{str(v.voucher_no)}</td>
+                  <td className="pt-mono break-all px-3 py-2">{str(v.voucher_no)}</td>
                   <td className="px-3 py-2">{typeLabel(v.voucher_type)}</td>
                   <td className="px-3 py-2">{partyName(v)}</td>
                   <td className="px-3 py-2">{str(v.datee)}</td>
                   <td className="px-3 py-2">{methodLabel(v.method)}</td>
-                  <td className="pt-mono px-3 py-2">{str(v.amount)}</td>
+                  <td className="pt-mono break-all px-3 py-2">{str(v.amount)}</td>
                   <td className="px-3 py-2">
                     <button
                       type="button"
-                      disabled={reversingId === voucherId(v)}
+                      disabled={actionsForbidden || reversingId === voucherId(v)}
                       onClick={() => reverse(voucherId(v))}
                       className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50"
                     >
@@ -245,7 +248,11 @@ export default function VouchersPanel({
           {formError}
         </p>
       )}
-      {formSuccess && <p className="pt-caption text-green-600">{formSuccess}</p>}
+      {formSuccess && (
+        <p className="pt-caption text-green-600" role="status">
+          {formSuccess}
+        </p>
+      )}
 
       {forbidden ? (
         <p className="pt-caption text-red-600" role="alert">

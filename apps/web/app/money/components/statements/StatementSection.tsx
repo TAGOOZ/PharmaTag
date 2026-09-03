@@ -50,6 +50,7 @@ export default function StatementSection({
   const [year, setYear] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [side, setSide] = useState('');
   const [statement, setStatement] = useState<PartyStatement | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +67,14 @@ export default function StatementSection({
       setError('اختر الشهر والسنة أو المدى الزمني — وليس الاثنين معاً');
       return;
     }
+    if ((month && !/^\d{1,2}$/.test(month)) || (year && !/^\d{4}$/.test(year))) {
+      setError('أدخل شهراً وسنة صحيحين (الشهر 1-12، السنة 4 أرقام)');
+      return;
+    }
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      setError('من تاريخ بعد إلى تاريخ — راجع المدى الزمني');
+      return;
+    }
     const seq = ++seqRef.current;
     setLoading(true);
     setError(null);
@@ -75,6 +84,7 @@ export default function StatementSection({
         year: year || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
+        side: side || undefined,
       });
       if (seq !== seqRef.current) return;
       setStatement(res);
@@ -159,6 +169,19 @@ export default function StatementSection({
               value={dateTo}
               onChange={(e) => setDateTo(e.target.value)}
             />
+          </label>
+          <label className="pt-caption flex flex-col gap-1">
+            الجهة
+            <select
+              aria-label="الجهة"
+              className="rounded border border-border px-2 py-1"
+              value={side}
+              onChange={(e) => setSide(e.target.value)}
+            >
+              <option value="">تلقائي</option>
+              <option value="ar">مدين (مستحق لنا)</option>
+              <option value="ap">دائن (مستحق علينا)</option>
+            </select>
           </label>
           <button
             type="button"

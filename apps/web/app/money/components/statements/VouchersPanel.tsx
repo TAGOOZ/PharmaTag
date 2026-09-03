@@ -28,7 +28,9 @@ function partyName(v: SettlementVoucher): string {
   if (p && typeof p === 'object') {
     const party = p as Record<string, unknown>;
     const ar = str(party.name_ar);
-    return ar !== '—' ? ar : str(party.namee);
+    if (ar && ar !== '—') return ar;
+    const en = str(party.namee);
+    return en && en !== '—' ? en : '—';
   }
   return '—';
 }
@@ -38,7 +40,10 @@ function typeLabel(t: unknown): string {
 }
 
 function methodLabel(m: unknown): string {
-  return m === 'cash' ? 'نقدي' : 'شبكة';
+  if (m === 'cash') return 'نقدي';
+  if (m === 'card') return 'بطاقة';
+  if (m === 'network') return 'شبكة';
+  return '—';
 }
 
 export default function VouchersPanel({
@@ -136,6 +141,7 @@ export default function VouchersPanel({
         description: description.trim() || undefined,
       });
       setVouchers((prev) => (prev ? [created, ...prev] : [created]));
+      setActionsForbidden(false);
       setFormSuccess('تم إنشاء السند');
       setAmount('');
       setDescription('');
@@ -169,6 +175,7 @@ export default function VouchersPanel({
     try {
       const created = await reverseVoucher(token, id);
       setVouchers((prev) => (prev ? [created, ...prev] : [created]));
+      setActionsForbidden(false);
       setFormSuccess('تم عكس السند');
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -177,6 +184,8 @@ export default function VouchersPanel({
       }
       if (err instanceof ApiError && err.status === 403) {
         setActionsForbidden(true);
+        // Same permission gates creation — hide the form too.
+        setForbidden(true);
       }
       setFormError(
         err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),

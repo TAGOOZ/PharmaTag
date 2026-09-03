@@ -86,8 +86,9 @@ export default function PayablesPanel({
       ) : rows ? (
         <div className="flex flex-col gap-2">
           <p className="pt-caption">
-            الإجمالي: <span className="pt-mono">{total}</span>
+            الإجمالي: <span className="pt-mono break-all">{total}</span>
           </p>
+          <p className="pt-caption text-muted">الرصيد الموجب مستحق للمورد.</p>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-start text-sm">
               <thead>
@@ -98,9 +99,12 @@ export default function PayablesPanel({
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.party_id} className="border-b border-border">
+                  <tr
+                    key={Number.isFinite(r.party_id) ? r.party_id : `row-${r.namee}-${r.balance}`}
+                    className="border-b border-border"
+                  >
                     <td className="px-3 py-2">
-                      {r.name_ar !== '—' ? r.name_ar : r.namee} ({r.kind})
+                      {r.name_ar || r.namee} ({r.kind})
                     </td>
                     <td className="pt-mono break-all px-3 py-2">{r.balance}</td>
                   </tr>

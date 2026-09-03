@@ -74,7 +74,7 @@ export default function MonthsTab({
 
   const seqRef = useRef(0);
   const actionLock = useRef(false);
-  const reopenLock = useRef(false);
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -134,11 +134,13 @@ export default function MonthsTab({
     const ym = parseYearMonth();
     if (!ym) return;
     actionLock.current = true;
+    setBusy(true);
     setClosing(true);
     setFormError(null);
     setFormSuccess(null);
     try {
       upsert(await closeMonth(token, ym.y, ym.m));
+      setActionsForbidden(false);
       setFormSuccess('تم تقفيل الشهر');
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -155,19 +157,22 @@ export default function MonthsTab({
       );
     } finally {
       actionLock.current = false;
+      setBusy(false);
       setClosing(false);
     }
   }
 
   async function reopen(y: number, m: number) {
-    if (reopenLock.current) return;
-    reopenLock.current = true;
+    if (actionLock.current) return;
+    actionLock.current = true;
+    setBusy(true);
     const key = `${y}-${m}`;
     setReopeningKey(key);
     setFormError(null);
     setFormSuccess(null);
     try {
       upsert(await reopenMonth(token, y, m));
+      setActionsForbidden(false);
       setFormSuccess('تمت إعادة فتح الشهر');
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -181,7 +186,8 @@ export default function MonthsTab({
         err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
       );
     } finally {
-      reopenLock.current = false;
+      actionLock.current = false;
+      setBusy(false);
       setReopeningKey(null);
     }
   }
@@ -189,6 +195,7 @@ export default function MonthsTab({
   const balancesSeqRef = useRef(0);
   const balancesAbortRef = useRef<AbortController | null>(null);
   const openingSeqRef = useRef(0);
+  const openingAbortRef = useRef<AbortController | null>(null);
 
   async function showBalances(y: number, m: number) {
     const seq = ++balancesSeqRef.current;
@@ -216,12 +223,19 @@ export default function MonthsTab({
             unknown
           >;
         }
-      } catch {
-        if (controller.signal.aborted) return;
-        payload = (await fetchOpenBalances(token, y, m, controller.signal)) as Record<
-          string,
-          unknown
-        >;
+      } catch (inner: unknown) {
+        // Fall back only when the month was never closed (404). Any other
+        // failure (403/400/500) is the real answer — surface it, and never
+        // show a different period's rows under this month's title.
+        if (inner instanceof ApiError && inner.status === 404) {
+          if (controller.signal.aborted) return;
+          payload = (await fetchOpenBalances(token, y, m, controller.signal)) as Record<
+            string,
+            unknown
+          >;
+        } else {
+          throw inner;
+        }
       }
       if (seq !== balancesSeqRef.current) return;
       setBalances(payload);
@@ -248,11 +262,14 @@ export default function MonthsTab({
     const ym = parseYearMonth();
     if (!ym) return;
     const seq = ++openingSeqRef.current;
+    openingAbortRef.current?.abort();
+    const controller = new AbortController();
+    openingAbortRef.current = controller;
     setOpeningLoading(true);
     setOpening(null);
     setFormError(null);
     try {
-      const res = await fetchOpeningBalances(token, ym.y, ym.m);
+      const res = await fetchOpeningBalances(token, ym.y, ym.m, controller.signal);
       if (seq !== openingSeqRef.current) return;
       setOpening(res);
     } catch (err) {
@@ -266,7 +283,10 @@ export default function MonthsTab({
         err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
       );
     } finally {
-      if (seq === openingSeqRef.current) setOpeningLoading(false);
+      if (seq === openingSeqRef.current) {
+        if (openingAbortRef.current === controller) openingAbortRef.current = null;
+        setOpeningLoading(false);
+      }
     }
   }
 
@@ -318,7 +338,7 @@ export default function MonthsTab({
                       {str(c.status) === 'closed' && (
                         <button
                           type="button"
-                          disabled={actionsForbidden || reopeningKey === key}
+                          disabled={actionsForbidden || busy || reopeningKey === key}
                           onClick={() => reopen(y, m)}
                           className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50"
                         >
@@ -452,7 +472,7 @@ export default function MonthsTab({
             <button
               type="button"
               onClick={close}
-              disabled={closing}
+              disabled={busy || closing}
               className="rounded border border-border px-3 py-1 text-sm disabled:opacity-50"
             >
               {closing ? 'جارٍ التقفيل…' : 'تقفيل الشهر'}

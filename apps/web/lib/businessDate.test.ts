@@ -16,4 +16,8 @@ describe('businessToday', () => {
   it('emits a YYYY-MM-DD date string', () => {
     expect(businessToday(new Date('2026-08-01T00:00:00Z'))).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
+
+  it('throws a RangeError for an invalid date', () => {
+    expect(() => businessToday(new Date(Number.NaN))).toThrow(RangeError);
+  });
 });

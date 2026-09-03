@@ -3,7 +3,13 @@ import { errorForStatus } from '@/lib/posMoney';
 
 /** Server detail is surfaced verbatim (when short) for actionable codes. */
 export function moneyErrorMessage(status: number, detail?: string): string {
-  if (detail && (detail.includes('/src/') || detail.toLowerCase().includes('stack'))) {
+  if (
+    detail &&
+    (detail.includes('/src/') ||
+      detail.toLowerCase().includes('stack') ||
+      detail.trimStart().startsWith('<'))
+  ) {
+    // Stack traces and HTML error pages never render verbatim.
     return errorForStatus(status);
   }
   const base = errorForStatus(status, detail);

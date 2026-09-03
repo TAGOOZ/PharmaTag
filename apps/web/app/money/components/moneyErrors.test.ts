@@ -29,6 +29,12 @@ describe('moneyErrors', () => {
     expect(mapMoneyError(new ApiError(403))).toContain('صلاحية');
   });
 
+  it('drops HTML error bodies instead of rendering markup', () => {
+    const msg = moneyErrorMessage(500, '<html><body>boom</body></html>');
+    expect(msg).not.toContain('<html>');
+    expect(msg).toBe('خطأ بالخادم — حاول لاحقاً');
+  });
+
   it('falls back to API-down for unknown error shapes', () => {
     expect(mapMoneyError(new Error('weird'))).toBe('تعذّر الاتصال بالـ API');
     expect(mapMoneyError(null)).toBe('تعذّر الاتصال بالـ API');

@@ -3,7 +3,6 @@ import { ThemeProvider } from '@pharmatag/ui';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { businessToday } from '@/lib/businessDate';
 import MoneyPage from './page';
 
 vi.mock('next/navigation', () => ({
@@ -76,6 +75,7 @@ afterEach(async () => {
   host.remove();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 async function render(node: ReactNode) {
@@ -415,6 +415,8 @@ describe.sequential('MoneyPage — journals', () => {
   });
 
   it('defaults an empty journal date to the Cairo business day (never UTC)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-15T22:30:00Z'));
     window.localStorage.setItem('pharmatag:token', 'tok-1');
     const fetchMock = stubBase(async (url, init) => {
       if (String(url).includes('/api/v1/journals/manual') && init?.method === 'POST') {
@@ -447,8 +449,9 @@ describe.sequential('MoneyPage — journals', () => {
     const calls = fetchMock.mock.calls as unknown as [string, (RequestInit | undefined)?][];
     const post = calls.find(([, init]) => init?.method === 'POST');
     expect(post).toBeDefined();
+    // 22:30Z January = 00:30+ next day in Cairo (UTC+2).
     expect((JSON.parse(post?.[1]?.body as string) as Record<string, unknown>).datee).toBe(
-      businessToday(new Date()),
+      '2026-01-16',
     );
   });
 
@@ -765,6 +768,8 @@ describe.sequential('MoneyPage — statements & settlements', () => {
   });
 
   it('defaults an empty voucher date to the Cairo business day (never UTC)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-20T22:30:00Z'));
     window.localStorage.setItem('pharmatag:token', 'tok-1');
     const fetchMock = stubMoney(async (url, init) => {
       const u = String(url);
@@ -808,7 +813,8 @@ describe.sequential('MoneyPage — statements & settlements', () => {
     const post = calls.find(([, init]) => init?.method === 'POST');
     expect(post).toBeDefined();
     const body = JSON.parse(post?.[1]?.body as string) as Record<string, unknown>;
-    expect(body.datee).toBe(businessToday(new Date()));
+    // 22:30Z = 01:30 next day in Cairo; a UTC default would post 2026-08-20.
+    expect(body.datee).toBe('2026-08-21');
   });
 
   it('reverses a voucher and surfaces double-reverse 409', async () => {
@@ -1041,8 +1047,7 @@ describe.sequential('MoneyPage — mizan', () => {
       return null;
     });
     vi.stubGlobal('fetch', fetchMock);
-    const openMock = vi.fn();
-    vi.stubGlobal('open', openMock);
+    const openMock = vi.spyOn(window, 'open').mockReturnValue({} as Window);
     const createUrlMock = vi.fn(() => 'blob:fake');
     vi.stubGlobal('URL', {
       createObjectURL: createUrlMock,
@@ -1082,6 +1087,27 @@ describe.sequential('MoneyPage — mizan', () => {
     expect(textOf()).toContain('سجّل الدخول أولاً');
   });
 
+  it('loads trial-balance and balance-sheet exactly once each on mount', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    const fetchMock = stubMoney(async (url) => {
+      const u = String(url);
+      if (u.includes('/api/v1/accounts/trial-balance')) return jsonResponse(TRIAL_BALANCE);
+      if (u.includes('/api/v1/accounts/balance-sheet')) return jsonResponse(BALANCE_SHEET);
+      return null;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<MoneyPage />);
+    await click('ميزان');
+    const calls = fetchMock.mock.calls as unknown as [string][];
+    const tb = calls.filter(([u]) => String(u).includes('/api/v1/accounts/trial-balance'));
+    const bs = calls.filter(
+      ([u]) =>
+        String(u).includes('/api/v1/accounts/balance-sheet') && !String(u).includes('format=html'),
+    );
+    expect(tb).toHaveLength(1);
+    expect(bs).toHaveLength(1);
+  });
+
   it('shows a popup-blocked message instead of failing silently', async () => {
     window.localStorage.setItem('pharmatag:token', 'tok-1');
     vi.stubGlobal(
@@ -1101,10 +1127,7 @@ describe.sequential('MoneyPage — mizan', () => {
         return null;
       }),
     );
-    vi.stubGlobal(
-      'open',
-      vi.fn(() => null),
-    );
+    vi.spyOn(window, 'open').mockReturnValue(null);
     const revokeMock = vi.fn();
     vi.stubGlobal('URL', {
       createObjectURL: vi.fn(() => 'blob:fake'),
@@ -1862,6 +1885,280 @@ describe.sequential('MoneyPage — edge cases', () => {
     expect(pickerCalls).toHaveLength(1);
     expect(pickerCalls[0]).not.toContain('kind=');
     expect(textOf()).toContain('مورد أ');
+  });
+
+  it('requests the party picker with the server-max limit', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    const fetchMock = stubMoney(async (url) => {
+      const u = String(url);
+      if (u.includes('/api/v1/parties/payables'))
+        return jsonResponse({ total: '0.00', payables: [] });
+      if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
+      if (u.includes('/api/v1/receivables'))
+        return jsonResponse({ total: '0.00', receivables: [] });
+      if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
+      return null;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<MoneyPage />);
+    await click('كشوفات');
+    const calls = fetchMock.mock.calls as unknown as [string][];
+    const picker = calls
+      .map(([u]) => String(u))
+      .find((u) => u.includes('/api/v1/parties') && !u.includes('/payables'));
+    expect(picker).toContain('limit=200');
+  });
+
+  it('falls back to the English name when name_ar is empty', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url) => {
+        const u = String(url);
+        if (u.includes('/api/v1/parties/payables'))
+          return jsonResponse({
+            total: '5.00',
+            payables: [
+              { party_id: 9, namee: 'NoArabic', name_ar: '', kind: 'supplier', balance: '5.00' },
+            ],
+          });
+        if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
+        if (u.includes('/api/v1/receivables'))
+          return jsonResponse({ total: '0.00', receivables: [] });
+        if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
+        return null;
+      }),
+    );
+    await render(<MoneyPage />);
+    await click('كشوفات');
+    expect(textOf()).toContain('NoArabic');
+  });
+
+  it('surfaces month-detail errors instead of falling back silently', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    const fetchMock = stubMoney(async (url) => {
+      const u = String(url);
+      if (u.includes('/open-balances')) return jsonResponse(OPEN_BALANCES);
+      if (/\/api\/v1\/months\/\d+\/\d+$/.test(u)) return jsonResponse({ detail: 'denied' }, 403);
+      if (u.includes('/api/v1/months')) return jsonResponse(MONTHS_LIST);
+      if (u.includes('/api/v1/opening-balances')) return jsonResponse({ periods: [] });
+      return null;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<MoneyPage />);
+    await click('شهور');
+    await click('عرض الأرصدة');
+    expect(textOf()).toContain('denied');
+    const calls = fetchMock.mock.calls as unknown as [string][];
+    expect(calls.filter(([u]) => String(u).includes('/open-balances'))).toHaveLength(0);
+  });
+
+  it('disables reopen while a close is pending (shared lock)', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    let resolveClose!: (r: Response) => void;
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url, init) => {
+        const u = String(url);
+        if (u.includes('/close') && init?.method === 'POST')
+          return new Promise<Response>((resolve) => {
+            resolveClose = resolve;
+          });
+        if (u.includes('/api/v1/months')) return jsonResponse(MONTHS_LIST);
+        if (u.includes('/api/v1/opening-balances')) return jsonResponse({ periods: [] });
+        return null;
+      }),
+    );
+    await render(<MoneyPage />);
+    await click('شهور');
+    setInputValue(inputByAria('السنة'), '2026');
+    setInputValue(inputByAria('الشهر'), '8');
+    await act(async () => {
+      const btn = buttonByText('تقفيل الشهر');
+      btn.click();
+    });
+    const reopenBtns = [...host.querySelectorAll('button')].filter((b) =>
+      (b.textContent ?? '').includes('إعادة فتح الشهر'),
+    );
+    expect(reopenBtns.length).toBeGreaterThan(0);
+    for (const b of reopenBtns) expect((b as HTMLButtonElement).disabled).toBe(true);
+    resolveClose(jsonResponse(MONTH_CLOSED));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(textOf()).toContain('تم تقفيل الشهر');
+  });
+
+  it('logs out when the trial-balance half 401s even if the sheet succeeds', async () => {
+    window.localStorage.setItem('pharmatag:token', 'stale-tok');
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url) => {
+        const u = String(url);
+        if (u.includes('/api/v1/accounts/trial-balance'))
+          return jsonResponse({ detail: 'expired' }, 401);
+        if (u.includes('/api/v1/accounts/balance-sheet')) return jsonResponse(BALANCE_SHEET);
+        return null;
+      }),
+    );
+    await render(<MoneyPage />);
+    await click('ميزان');
+    expect(window.localStorage.getItem('pharmatag:token')).toBeNull();
+    expect(textOf()).toContain('سجّل الدخول أولاً');
+  });
+
+  it('rejects a non-numeric mizan month client-side and shows the period', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    const fetchMock = stubMoney(async (url) => {
+      const u = String(url);
+      if (u.includes('/api/v1/accounts/trial-balance')) return jsonResponse(TRIAL_BALANCE);
+      if (u.includes('/api/v1/accounts/balance-sheet')) return jsonResponse(BALANCE_SHEET);
+      return null;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<MoneyPage />);
+    await click('ميزان');
+    expect(textOf()).toContain('الفترة');
+    setInputValue(inputByAria('الشهر'), 'أغسطس');
+    await click('عرض');
+    expect(textOf()).toContain('شهراً وسنة صحيحين');
+    const calls = fetchMock.mock.calls as unknown as [string][];
+    // mount (2) only — the عرض click must not refetch
+    expect(calls.filter(([u]) => String(u).includes('/api/v1/accounts/'))).toHaveLength(2);
+  });
+
+  it('rejects an inverted statement range client-side with no round-trip', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    const fetchMock = stubMoney(async (url) => {
+      const u = String(url);
+      if (u.includes('/api/v1/parties/payables'))
+        return jsonResponse({ total: '0.00', payables: [] });
+      if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
+      if (u.includes('/api/v1/receivables'))
+        return jsonResponse({ total: '0.00', receivables: [] });
+      if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
+      return null;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<MoneyPage />);
+    await click('كشوفات');
+    setSelectValue(selectByAria('الطرف'), '7');
+    const inputs = [...host.querySelectorAll('input')];
+    const from = inputs.find(
+      (i) => i.getAttribute('aria-label') === 'من تاريخ',
+    ) as HTMLInputElement;
+    const to = inputs.find((i) => i.getAttribute('aria-label') === 'إلى تاريخ') as HTMLInputElement;
+    setInputValue(from, '2026-08-10');
+    setInputValue(to, '2026-08-01');
+    await click('عرض الكشف');
+    expect(textOf()).toContain('من تاريخ بعد إلى تاريخ');
+    const calls = fetchMock.mock.calls as unknown as [string][];
+    expect(calls.filter(([u]) => String(u).includes('/statement'))).toHaveLength(0);
+  });
+
+  it('forwards the AR/AP side for dual parties', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    const fetchMock = stubMoney(async (url) => {
+      const u = String(url);
+      if (u.includes('/statement')) return jsonResponse(STATEMENT_ONE);
+      if (u.includes('/api/v1/parties/payables'))
+        return jsonResponse({ total: '0.00', payables: [] });
+      if (u.includes('/api/v1/receivables/vouchers')) return jsonResponse({ vouchers: [] });
+      if (u.includes('/api/v1/receivables'))
+        return jsonResponse({ total: '0.00', receivables: [] });
+      if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
+      return null;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await render(<MoneyPage />);
+    await click('كشوفات');
+    setSelectValue(selectByAria('الطرف'), '7');
+    setSelectValue(selectByAria('الجهة'), 'ap');
+    await click('عرض الكشف');
+    const calls = fetchMock.mock.calls as unknown as [string][];
+    expect(
+      calls.some(([u]) => String(u).includes('/statement') && String(u).includes('side=ap')),
+    ).toBe(true);
+  });
+
+  it('labels card vouchers distinctly and renders rows missing party_id', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    vi.stubGlobal(
+      'fetch',
+      stubMoney(async (url) => {
+        const u = String(url);
+        if (u.includes('/api/v1/receivables/vouchers'))
+          return jsonResponse({
+            vouchers: [
+              {
+                id: 3,
+                voucher_no: 'V-1',
+                voucher_type: 'receipt',
+                party: { id: 8, namee: 'C', name_ar: 'عميل', kind: 'customer' },
+                datee: '2026-08-10',
+                method: 'card',
+                amount: '1.00',
+                description: '',
+                journal_id: 1,
+                entry_no: 'J',
+                reverses_voucher_id: null,
+                created_by: 1,
+              },
+              {
+                id: 4,
+                voucher_no: 'V-2',
+                voucher_type: 'payment',
+                party: { id: 7, namee: 'S', name_ar: 'مورد', kind: 'supplier' },
+                datee: '2026-08-10',
+                method: 'cash',
+                amount: '2.00',
+                description: '',
+                journal_id: 2,
+                entry_no: 'J',
+                reverses_voucher_id: null,
+                created_by: 1,
+              },
+            ],
+          });
+        if (u.includes('/api/v1/receivables'))
+          return jsonResponse({ total: '0.00', receivables: [] });
+        if (u.includes('/api/v1/parties/payables'))
+          return jsonResponse({ total: '0.00', payables: [] });
+        if (u.includes('/api/v1/parties')) return jsonResponse(PARTIES_LIST);
+        return null;
+      }),
+    );
+    await render(<MoneyPage />);
+    await click('كشوفات');
+    const cells = [...host.querySelectorAll('td')].map((td) => (td.textContent ?? '').trim());
+    expect(cells).toContain('بطاقة');
+    expect(cells).toContain('سند صرف');
+  });
+
+  it('moves tab selection with arrow keys', async () => {
+    window.localStorage.setItem('pharmatag:token', 'tok-1');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (String(url).includes('/api/v1/drawer/movements')) return jsonResponse(DRAWER_EMPTY);
+        if (String(url).includes('/api/v1/drawer/day-close'))
+          return jsonResponse({ day_closes: [] });
+        return jsonResponse({});
+      }),
+    );
+    await render(<MoneyPage />);
+    const tabs = [...host.querySelectorAll('[role="tab"]')] as HTMLElement[];
+    expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
+    await act(async () => {
+      tabs[0]?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const after = [...host.querySelectorAll('[role="tab"]')];
+    // RTL: ArrowLeft moves forward to day-close
+    expect(after[1]?.getAttribute('aria-selected')).toBe('true');
   });
 
   it('renders mizan totals foot verbatim from the server', async () => {

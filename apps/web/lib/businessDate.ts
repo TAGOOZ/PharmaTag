@@ -6,6 +6,7 @@
  * `datee` (journals, vouchers — the server requires it) default through here.
  */
 export function businessToday(now: Date = new Date(), timeZone = 'Africa/Cairo'): string {
+  if (Number.isNaN(now.getTime())) throw new RangeError('invalid date');
   return new Intl.DateTimeFormat('en-CA', {
     timeZone,
     year: 'numeric',

@@ -113,6 +113,12 @@ export default function JournalsTab({
     return () => controller.abort();
   }, [load]);
 
+  useEffect(() => {
+    return () => {
+      detailAbortRef.current?.abort();
+    };
+  }, []);
+
   async function showDetail(id: number) {
     if (expandedId === id) {
       detailSeqRef.current++;
@@ -200,6 +206,7 @@ export default function JournalsTab({
         }),
       });
       setEntries((prev) => (prev ? [created, ...prev] : [created]));
+      setActionsForbidden(false);
       setFormSuccess('تم إنشاء القيد');
       setDescription('');
       setLines([blankLine(), blankLine()]);
@@ -233,6 +240,7 @@ export default function JournalsTab({
     try {
       const created = await reverseManualJournal(token, id);
       setEntries((prev) => (prev ? [created, ...prev] : [created]));
+      setActionsForbidden(false);
       setFormSuccess('تم عكس القيد');
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -241,6 +249,7 @@ export default function JournalsTab({
       }
       if (err instanceof ApiError && err.status === 403) {
         setActionsForbidden(true);
+        setForbidden(true);
       }
       setFormError(
         err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
@@ -393,6 +402,7 @@ export default function JournalsTab({
               البيان
               <input
                 aria-label="البيان"
+                maxLength={200}
                 className="rounded border border-border px-2 py-1"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
@@ -406,6 +416,7 @@ export default function JournalsTab({
                 الحساب
                 <input
                   aria-label={`الحساب ${i + 1}`}
+                  maxLength={30}
                   className="rounded border border-border px-2 py-1"
                   value={l.account}
                   onChange={(e) => setLine(i, { account: e.target.value })}

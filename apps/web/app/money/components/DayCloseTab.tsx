@@ -34,8 +34,8 @@ export default function DayCloseTab({
   const [actionsForbidden, setActionsForbidden] = useState(false);
 
   const seqRef = useRef(0);
-  const savingLock = useRef(false);
-  const reopenLock = useRef(false);
+  const actionLock = useRef(false);
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -72,19 +72,21 @@ export default function DayCloseTab({
 
   async function submitClose(e: FormEvent) {
     e.preventDefault();
-    if (savingLock.current) return;
+    if (actionLock.current) return;
     const norm = normalizeDecimal(counted);
     if (!isMoneyValid(norm)) {
       setFormError('المبلغ غير صالح — أدخل مبلغاً موجباً برقمين عشريين على الأكثر');
       return;
     }
-    savingLock.current = true;
+    actionLock.current = true;
+    setBusy(true);
     setSaving(true);
     setFormError(null);
     setFormSuccess(null);
     try {
       const created = await closeDay(token, { counted_cash: norm });
       setCloses((prev) => (prev ? [created, ...prev] : [created]));
+      setActionsForbidden(false);
       setFormSuccess('تم تقفيل اليوم');
       setCounted('');
     } catch (err) {
@@ -103,14 +105,16 @@ export default function DayCloseTab({
       }
       setFormError(mapMoneyError(err));
     } finally {
-      savingLock.current = false;
+      actionLock.current = false;
+      setBusy(false);
       setSaving(false);
     }
   }
 
   async function reopen(id: number) {
-    if (reopenLock.current) return;
-    reopenLock.current = true;
+    if (actionLock.current) return;
+    actionLock.current = true;
+    setBusy(true);
     setReopeningId(id);
     setFormError(null);
     try {
@@ -128,7 +132,8 @@ export default function DayCloseTab({
         err instanceof ApiError ? moneyErrorMessage(err.status, err.detail) : mapMoneyError(err),
       );
     } finally {
-      reopenLock.current = false;
+      actionLock.current = false;
+      setBusy(false);
       setReopeningId(null);
     }
   }
@@ -174,7 +179,7 @@ export default function DayCloseTab({
                     {str(c.status) === 'closed' && (
                       <button
                         type="button"
-                        disabled={actionsForbidden || reopeningId === closeId(c)}
+                        disabled={actionsForbidden || busy || reopeningId === closeId(c)}
                         onClick={() => reopen(closeId(c))}
                         className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50"
                       >
@@ -220,7 +225,7 @@ export default function DayCloseTab({
           </label>
           <button
             type="submit"
-            disabled={saving}
+            disabled={busy || saving}
             className="w-fit rounded border border-border px-3 py-1 text-sm disabled:opacity-50"
           >
             {saving ? 'جارٍ التقفيل…' : 'تقفيل اليوم'}

@@ -100,13 +100,29 @@ export default function MoneyPage() {
           </button>
         </div>
 
-        <div className="flex flex-wrap gap-2 border-b border-border pb-2" role="tablist">
+        <div
+          className="flex flex-wrap gap-2 border-b border-border pb-2"
+          role="tablist"
+          aria-label="أقسام المال"
+          onKeyDown={(e) => {
+            // RTL bar: ArrowLeft advances, ArrowRight goes back.
+            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+            e.preventDefault();
+            const idx = TABS.findIndex((t) => t.key === tab);
+            const delta = e.key === 'ArrowLeft' ? 1 : -1;
+            const next = TABS[(idx + delta + TABS.length) % TABS.length];
+            if (next) setTab(next.key);
+          }}
+        >
           {TABS.map((t) => (
             <button
               key={t.key}
               type="button"
               role="tab"
+              id={`money-tab-${t.key}`}
               aria-selected={tab === t.key}
+              aria-controls="money-panel"
+              tabIndex={tab === t.key ? 0 : -1}
               onClick={() => setTab(t.key)}
               className={
                 'rounded px-3 py-1.5 text-sm ' +
@@ -118,20 +134,23 @@ export default function MoneyPage() {
           ))}
         </div>
 
-        {token &&
-          (tab === 'drawer' ? (
-            <DrawerTab token={token} onAuthFail={handleAuthFail} />
-          ) : tab === 'dayclose' ? (
-            <DayCloseTab token={token} onAuthFail={handleAuthFail} />
-          ) : tab === 'journals' ? (
-            <JournalsTab token={token} onAuthFail={handleAuthFail} />
-          ) : tab === 'statements' ? (
-            <StatementsTab token={token} onAuthFail={handleAuthFail} />
-          ) : tab === 'mizan' ? (
-            <MizanTab token={token} onAuthFail={handleAuthFail} />
-          ) : (
-            <MonthsTab token={token} onAuthFail={handleAuthFail} />
-          ))}
+        {token && (
+          <div id="money-panel" role="tabpanel" aria-label="قسم المال الحالي">
+            {tab === 'drawer' ? (
+              <DrawerTab token={token} onAuthFail={handleAuthFail} />
+            ) : tab === 'dayclose' ? (
+              <DayCloseTab token={token} onAuthFail={handleAuthFail} />
+            ) : tab === 'journals' ? (
+              <JournalsTab token={token} onAuthFail={handleAuthFail} />
+            ) : tab === 'statements' ? (
+              <StatementsTab token={token} onAuthFail={handleAuthFail} />
+            ) : tab === 'mizan' ? (
+              <MizanTab token={token} onAuthFail={handleAuthFail} />
+            ) : (
+              <MonthsTab token={token} onAuthFail={handleAuthFail} />
+            )}
+          </div>
+        )}
       </section>
     </Shell>
   );

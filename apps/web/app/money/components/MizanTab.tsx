@@ -128,17 +128,30 @@ export default function MizanTab({ token, onAuthFail }: { token: string; onAuthF
     };
   }, []);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    void load({}, controller.signal);
-    return () => controller.abort();
-  }, [load]);
-
-  function params(): MizanParams {
+  function params(): MizanParams | null {
+    if (month.trim() && !/^\d{1,2}$/.test(month.trim())) {
+      setError('أدخل شهراً وسنة صحيحين (الشهر 1-12)');
+      return null;
+    }
+    if (year.trim() && !/^\d{4}$/.test(year.trim())) {
+      setError('أدخل شهراً وسنة صحيحين (السنة 4 أرقام)');
+      return null;
+    }
+    const m = month.trim() ? Number.parseInt(month.trim(), 10) : undefined;
+    if (m !== undefined && (m < 1 || m > 12)) {
+      setError('أدخل شهراً وسنة صحيحين (الشهر 1-12)');
+      return null;
+    }
     return {
-      month: month || undefined,
-      year: year || undefined,
+      month: month.trim() || undefined,
+      year: year.trim() || undefined,
     };
+  }
+
+  function show() {
+    const p = params();
+    if (!p) return;
+    void load(p);
   }
 
   async function print() {
@@ -146,7 +159,9 @@ export default function MizanTab({ token, onAuthFail }: { token: string; onAuthF
     setPrinting(true);
     setError(null);
     try {
-      const html = await fetchBalanceSheetHtml(token, params());
+      const p = params();
+      if (!p) return;
+      const html = await fetchBalanceSheetHtml(token, p);
       if (blobRef.current) {
         URL.revokeObjectURL(blobRef.current);
         blobRef.current = null;
@@ -210,7 +225,7 @@ export default function MizanTab({ token, onAuthFail }: { token: string; onAuthF
         </label>
         <button
           type="button"
-          onClick={() => load(params())}
+          onClick={show}
           disabled={loading}
           className="rounded border border-border px-3 py-1 text-sm disabled:opacity-50"
         >
@@ -240,12 +255,22 @@ export default function MizanTab({ token, onAuthFail }: { token: string; onAuthF
         <>
           <div className="flex flex-col gap-2">
             <h3 className="pt-title">ميزان المراجعة</h3>
+            {tb && typeof tb.period === 'object' && tb.period !== null && (
+              <p className="pt-caption text-muted">
+                الفترة: {(tb.period as Record<string, unknown>).month as string}/
+                {(tb.period as Record<string, unknown>).year as string}
+              </p>
+            )}
             {tbAccounts !== null && tbAccounts.length === 0 ? (
               <p className="pt-caption">لا توجد حسابات لهذه الفترة</p>
             ) : tbAccounts ? (
               <>
                 <p className="pt-caption" role="status">
-                  {tb?.balanced ? 'الميزان متوازن' : 'الميزان غير متوازن'}
+                  {tb?.balanced == null
+                    ? '—'
+                    : tb.balanced
+                      ? 'الميزان متوازن'
+                      : 'الميزان غير متوازن'}
                 </p>
                 <div className="overflow-x-auto">
                   <table className="w-full border-collapse text-start text-sm">
@@ -308,12 +333,16 @@ export default function MizanTab({ token, onAuthFail }: { token: string; onAuthF
             <div className="flex flex-col gap-3 border-t border-border pt-4">
               <h3 className="pt-title">الميزانية العمومية</h3>
               <p className="pt-caption" role="status">
-                {bs.balanced ? 'الميزانية متوازنة' : 'الميزانية غير متوازنة'}
+                {bs.balanced == null
+                  ? '—'
+                  : bs.balanced
+                    ? 'الميزانية متوازنة'
+                    : 'الميزانية غير متوازنة'}
               </p>
               <p className="pt-caption">
                 الأصول = الخصوم + حقوق الملكية:{' '}
-                <span className="pt-mono">{str(bs.total_assets)}</span> ={' '}
-                <span className="pt-mono">{str(bs.total_liabilities_equity)}</span>
+                <span className="pt-mono break-all">{str(bs.total_assets)}</span> ={' '}
+                <span className="pt-mono break-all">{str(bs.total_liabilities_equity)}</span>
               </p>
               {sections.map(({ title, section }) => (
                 <div key={title} className="flex flex-col gap-1">

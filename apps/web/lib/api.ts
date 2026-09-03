@@ -402,11 +402,15 @@ export async function listParties(
   token: string,
   kind?: 'supplier' | 'customer' | 'both',
   signal?: AbortSignal,
+  limit = 200,
 ): Promise<PartiesListResponse> {
   // No kind = every active party (supplier + customer + both) in one call.
   // Callers that pass an explicit kind keep the old filtered behavior.
-  const suffix = kind ? `?kind=${encodeURIComponent(kind)}` : '';
-  const res = await fetch(`${API_URL}/api/v1/parties${suffix}`, {
+  // limit defaults to the server max so pickers never silently truncate.
+  const qs = new URLSearchParams();
+  if (kind) qs.set('kind', kind);
+  qs.set('limit', String(Math.max(1, Math.min(limit, 200))));
+  const res = await fetch(`${API_URL}/api/v1/parties?${qs.toString()}`, {
     headers: { Authorization: `Bearer ${token}` },
     signal,
   });

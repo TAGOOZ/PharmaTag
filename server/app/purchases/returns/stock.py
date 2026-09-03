@@ -76,9 +76,9 @@ async def decrement_purchase_batch(
     if batch is None:
         raise BATCH_MISSING
     qty_d = Decimal(qty)
-    if qty_d > Decimal(batch.qty):
+    if qty_d > Decimal(batch.qty or 0):
         raise INSUFFICIENT_BATCH
-    old = Decimal(batch.qty)
+    old = Decimal(batch.qty or 0)
     new = old - qty_d
     batch.qty = new
     batch.lastedit = datetime.now(timezone.utc)
@@ -120,9 +120,9 @@ async def decrease_branch_stock(
             .with_for_update()
         )
     ).scalar_one_or_none()
-    if row is None or Decimal(qty_delta) > Decimal(row.qty):
+    if row is None or Decimal(qty_delta) > Decimal(row.qty or 0):
         raise INSUFFICIENT_STOCK
-    old = Decimal(row.qty)
+    old = Decimal(row.qty or 0)
     new = old - Decimal(qty_delta)
     row.qty = new
     row.lastedit = datetime.now(timezone.utc)

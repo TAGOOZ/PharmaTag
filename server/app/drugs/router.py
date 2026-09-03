@@ -105,7 +105,7 @@ async def list_drugs(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "limit and offset must be non-negative"
         )
-    limit = min(limit, 500)  # cap: the CC0 catalog can reach 24k+ rows
+    limit = max(1, min(limit, 500))  # cap: the CC0 catalog can reach 24k+ rows; floor 1 so limit=0 doesn't return 0 rows
     branch_id = _caller_branch_id(user)
     branch = await session.get(Branch, branch_id)
     if branch is None:

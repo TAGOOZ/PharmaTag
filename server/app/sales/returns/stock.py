@@ -331,7 +331,7 @@ async def raise_branch_stock(
         )
         session.add(row)
         await session.flush()
-    old = Decimal(row.qty)
+    old = Decimal(row.qty or 0)
     new = old + Decimal(qty_delta)
     row.qty = new
     row.lastedit = datetime.now(timezone.utc)

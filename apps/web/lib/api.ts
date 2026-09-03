@@ -17,7 +17,7 @@ export class ApiError extends Error {
   }
 }
 
-async function throwForStatus(res: Response): Promise<void> {
+export async function throwForStatus(res: Response): Promise<void> {
   if (!res.ok) {
     let detail: string | undefined;
     try {

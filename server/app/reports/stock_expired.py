@@ -75,7 +75,7 @@ async def stock_expired_report(
     for batch, drug in rows:
         days_to_expiry = batch.expire.toordinal() - as_of.toordinal()
         status = "expired" if batch.expire <= as_of else "warning"
-        value = money.dec(batch.qty) * money.dec(batch.cost)
+        value = money.dec(batch.qty or 0) * money.dec(batch.cost or 0)
         primary = next(
             (
                 b.barcode
@@ -93,8 +93,8 @@ async def stock_expired_report(
                 "randomid": batch.randomid,
                 "expire": batch.expire.isoformat(),
                 "days_to_expiry": str(days_to_expiry),
-                "qty": _fmt4(batch.qty),
-                "cost": _fmt4(batch.cost),
+                "qty": _fmt4(batch.qty or 0),
+                "cost": _fmt4(batch.cost or 0),
                 "value": format(money.round2(value), "f"),
                 "status": status,
             }

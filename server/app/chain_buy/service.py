@@ -141,11 +141,11 @@ def _validate_expire(raw: Optional[date]) -> Optional[date]:
 
 
 def _qty4(value) -> str:
-    return format(money.round4(value), "f")
+    return format(money.round4(value or 0), "f")
 
 
 def _price4(value) -> str:
-    return format(money.round4(value), "f")
+    return format(money.round4(value or 0), "f")
 
 
 def _disc_str(value) -> str:

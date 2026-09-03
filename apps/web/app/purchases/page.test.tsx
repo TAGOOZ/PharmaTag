@@ -633,7 +633,9 @@ describe('PurchasesPage', () => {
       vi.fn(async () => Promise.reject(new TypeError('fetch failed'))),
     );
     await render(<PurchasesPage />);
-    expect(textOf()).toContain('تعذّر جلب');
+    // PAT5: boot 403/429/5xx/fetch -> ready+empty+banner, not error view
+    expect(textOf()).toContain('تعذّر الاتصال');
+    expect(textOf()).toContain('لا توجد مشتريات بعد');
   });
 
   it('surfaces search connectivity error as status', async () => {

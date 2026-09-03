@@ -1,4 +1,4 @@
-import { API_URL } from './api';
+import { API_URL, ApiError, throwForStatus } from './api';
 
 export interface ReportCatalogEntry {
   code: string;
@@ -148,17 +148,4 @@ export async function printReport(
   const html = await res.text();
   const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
   window.open(blobUrl, '_blank', 'noopener');
-}
-
-async function throwForStatus(res: Response): Promise<void> {
-  if (!res.ok) throw new ApiError(res.status);
-}
-
-export class ApiError extends Error {
-  readonly status: number;
-  constructor(status: number) {
-    super(`API returned ${status}`);
-    this.name = 'ApiError';
-    this.status = status;
-  }
 }

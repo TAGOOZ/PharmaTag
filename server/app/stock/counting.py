@@ -489,11 +489,11 @@ async def approve_count_request(
 
             if delta > 0:
                 unit_cost, has_positive = await _weighted_avg_cost(
-                    session, branch_id, request.drug_id, fallback_cost=drug.price_cost
+                    session, branch_id, request.drug_id, fallback_cost=drug.price_cost or 0
                 )
                 # a brand-new overage with NO cost basis (no batches and no
                 # master cost) cannot be put on the books at any value
-                if not has_positive and not money.dec(drug.price_cost):
+                if not has_positive and not money.dec(drug.price_cost or 0):
                     raise NO_COST
                 price = unit_cost
                 value = money.round2(delta * unit_cost)

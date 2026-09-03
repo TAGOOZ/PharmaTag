@@ -10,6 +10,8 @@ list, so a shortage list can never be mistaken for complete.
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -28,7 +30,7 @@ async def _shortage_rows(
     S3.3 needs report."""
     below = [
         BranchStock.branch_id == branch_id,
-        BranchStock.qty < BranchStock.minimum,
+        func.coalesce(BranchStock.qty, 0) < func.coalesce(BranchStock.minimum, 0),
     ]
     total = (
         await session.execute(
@@ -43,7 +45,11 @@ async def _shortage_rows(
             .where(*below)
             .options(selectinload(Drug.barcodes))
             .order_by(
-                (BranchStock.minimum - BranchStock.qty).desc(), Drug.drugname
+                func.greatest(
+                    func.coalesce(BranchStock.minimum, 0) - func.coalesce(BranchStock.qty, 0),
+                    Decimal("0"),
+                ).desc(),
+                Drug.drugname,
             )
             .limit(_MAX_ITEMS)
         )
@@ -66,7 +72,7 @@ async def stock_minimum_report(
             ),
             "",
         )
-        shortage = money.round4(money.dec(stock.minimum) - money.dec(stock.qty))
+        shortage = money.round4(money.dec(stock.minimum or 0) - money.dec(stock.qty or 0))
         items.append(
             {
                 "drug_id": drug.id,
@@ -74,8 +80,8 @@ async def stock_minimum_report(
                 "drugnamear": drug.drugnamear or "",
                 "barcode": primary,
                 "classy": drug.classy or "",
-                "qty": format(money.round4(stock.qty), "f"),
-                "minimum": format(money.round4(stock.minimum), "f"),
+                "qty": format(money.round4(stock.qty or 0), "f"),
+                "minimum": format(money.round4(stock.minimum or 0), "f"),
                 "shortage": format(shortage, "f"),
                 "price": format(money.round4(drug.price), "f") if drug.price else "0.0000",
             }

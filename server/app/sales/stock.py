@@ -200,7 +200,7 @@ async def decrement_allocations(
         payload={
             "branch_id": branch_id,
             "drug_id": drug_id,
-            "qty": format(money.round4(new), "f"),
+            "qty": format(money.round4(new or 0), "f"),
             "minimum": format(money.round4(branch.minimum or 0), "f"),
             "silsilaid": branch.silsilaid or "",
             "classy": branch.classy or "",

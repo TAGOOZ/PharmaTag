@@ -136,7 +136,7 @@ async def upsert_branch_stock(
         )
         session.add(row)
         await session.flush()
-    old = Decimal(row.qty)
+    old = Decimal(row.qty or 0)
     new = old + Decimal(qty_delta)
     row.qty = new
     row.lastedit = datetime.now(timezone.utc)
@@ -164,7 +164,7 @@ async def upsert_branch_stock(
         payload={
             "branch_id": branch_id,
             "drug_id": drug_id,
-            "qty": format(money.round4(new), "f"),
+            "qty": format(money.round4(new or 0), "f"),
             "minimum": format(money.round4(row.minimum or 0), "f"),
             "silsilaid": row.silsilaid or "",
             "classy": row.classy or "",

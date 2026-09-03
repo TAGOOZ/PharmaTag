@@ -10,6 +10,8 @@ the chain auto-order engine (#33, F06.3).
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,12 +59,17 @@ async def stock_needs_report(session: AsyncSession, *, branch_id: int) -> dict:
             await session.execute(
                 select(
                     func.coalesce(
-                        func.sum(func.greatest(BranchStock.minimum - BranchStock.qty, 0)),
+                        func.sum(
+                            func.greatest(
+                                func.coalesce(BranchStock.minimum, 0) - func.coalesce(BranchStock.qty, 0),
+                                Decimal("0"),
+                            )
+                        ),
                         0,
                     )
                 ).where(
                     BranchStock.branch_id == branch_id,
-                    BranchStock.qty < BranchStock.minimum,
+                    func.coalesce(BranchStock.qty, 0) < func.coalesce(BranchStock.minimum, 0),
                 )
             )
         ).scalar_one()
@@ -76,7 +83,7 @@ async def stock_needs_report(session: AsyncSession, *, branch_id: int) -> dict:
             ),
             "",
         )
-        suggested = max(money.dec(stock.minimum) - money.dec(stock.qty), money.dec("0"))
+        suggested = max(money.dec(stock.minimum or 0) - money.dec(stock.qty or 0), money.dec("0"))
         # latest purchase cost, falling back to the drug-master cost
         cost = costs.get(stock.drug_id)
         if cost is None:
@@ -88,8 +95,8 @@ async def stock_needs_report(session: AsyncSession, *, branch_id: int) -> dict:
                 "drugnamear": drug.drugnamear or "",
                 "barcode": primary,
                 "classy": drug.classy or "",
-                "qty": format(money.round4(stock.qty), "f"),
-                "minimum": format(money.round4(stock.minimum), "f"),
+                "qty": format(money.round4(stock.qty or 0), "f"),
+                "minimum": format(money.round4(stock.minimum or 0), "f"),
                 "shortage": format(money.round4(suggested), "f"),
                 "suggested_order": format(money.round4(suggested), "f"),
                 "last_cost": (

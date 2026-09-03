@@ -212,7 +212,8 @@ async def list_accounts(
             serialize_account(a, has_children=a.id in child_ids, used=a.id in used)
         )
     rows.sort(key=lambda r: r["code"])
-    return rows[: min(limit, 500) if limit > 0 else 0]
+    limit = max(1, min(limit, 500))
+    return rows[:limit]
 
 
 async def account_tree(session: AsyncSession, *, branch_id: int) -> list[dict]:

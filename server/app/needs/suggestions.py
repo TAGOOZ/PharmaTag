@@ -56,14 +56,14 @@ async def suggest(
     suggestions: list[dict] = []
     if mode == "minimum":
         for drug_id, qty, minimum in stock:
-            if minimum > Decimal("0") and qty < minimum:
+            if (minimum or 0) > Decimal("0") and (qty or 0) < (minimum or 0):
                 suggestions.append(
                     {
                         "drug_id": drug_id,
-                        "on_hand": format(round4(qty), "f"),
-                        "minimum": format(round4(minimum), "f"),
+                        "on_hand": format(round4(qty or 0), "f"),
+                        "minimum": format(round4(minimum or 0), "f"),
                         "avg_daily": None,
-                        "suggested_qty": format(round4(minimum - qty), "f"),
+                        "suggested_qty": format(round4((minimum or 0) - (qty or 0)), "f"),
                     }
                 )
         return suggestions

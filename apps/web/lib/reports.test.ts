@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  ApiError,
-  enqueuePrintJob,
-  fetchReportGrid,
-  fetchReportsCatalog,
-  paramLabel,
-} from './reports';
+import { ApiError } from './api';
+import { enqueuePrintJob, fetchReportGrid, fetchReportsCatalog, paramLabel } from './reports';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {

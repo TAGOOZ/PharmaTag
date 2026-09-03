@@ -59,7 +59,7 @@ async def query_chain_stock(
             )
         )
     if only_shortage:
-        where.append(BranchStock.qty < BranchStock.minimum)
+        where.append(func.coalesce(BranchStock.qty, 0) < func.coalesce(BranchStock.minimum, 0))
 
     total = (
         await session.execute(
@@ -71,7 +71,7 @@ async def query_chain_stock(
         )
     ).scalar_one()
 
-    shortage_expr = func.greatest(BranchStock.minimum - BranchStock.qty, Decimal("0"))
+    shortage_expr = func.greatest(func.coalesce(BranchStock.minimum, 0) - func.coalesce(BranchStock.qty, 0), Decimal("0"))
     rows = (
         await session.execute(
             select(BranchStock, Branch, Drug)
@@ -98,7 +98,7 @@ async def query_chain_stock(
 
     items = []
     for stock, branch, drug in rows:
-        shortage_dec = money.dec(stock.minimum) - money.dec(stock.qty)
+        shortage_dec = money.dec(stock.minimum or 0) - money.dec(stock.qty or 0)
         if shortage_dec < Decimal("0"):
             shortage_dec = Decimal("0")
         items.append(
@@ -110,8 +110,8 @@ async def query_chain_stock(
                 "drugname": drug.drugname,
                 "drugnamear": drug.drugnamear or "",
                 "barcode": bar_map.get(drug.id, ""),
-                "qty": money.format4(stock.qty),
-                "minimum": money.format4(stock.minimum),
+                "qty": money.format4(stock.qty or 0),
+                "minimum": money.format4(stock.minimum or 0),
                 "shortage": money.format4(shortage_dec),
                 "silsilaid": stock.silsilaid or "",
                 "classy": stock.classy or drug.classy or "",

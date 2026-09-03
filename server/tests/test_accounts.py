@@ -822,13 +822,19 @@ async def test_codes_and_names_are_stripped(client):
 
 
 async def test_list_limit_zero_returns_empty(client):
-    """limit <= 0 is an explicit 'no rows' request, not a floor of 1."""
+    """limit <= 0 is clamped to 1 (like stock/drawer/parties) — not an explicit 'no rows' request."""
     token = await _login_token(client)
     g = await client.get(
         "/api/v1/accounts?limit=0", headers={"Authorization": f"Bearer {token}"}
     )
     assert g.status_code == 200, g.text
-    assert g.json()["accounts"] == []
+    # floor 1: limit=0 must not return 0 rows
+    assert len(g.json()["accounts"]) == 1
+    h = await client.get(
+        "/api/v1/accounts?limit=1", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert h.status_code == 200, h.text
+    assert g.json()["accounts"] == h.json()["accounts"]
 
 
 async def test_patch_same_code_preserves_master(client):

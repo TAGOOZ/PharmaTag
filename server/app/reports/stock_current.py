@@ -92,7 +92,7 @@ async def stock_current_report(session: AsyncSession, *, branch_id: int) -> dict
                 "drugnamear": drug.drugnamear or "",
                 "barcode": primary,
                 "classy": drug.classy or "",
-                "qty": format(money.round4(stock.qty), "f"),
+                "qty": format(money.round4(stock.qty or 0), "f"),
                 "value": values.get(drug.id, "0.00"),
                 "price": format(money.round4(drug.price), "f") if drug.price else "0.0000",
             }

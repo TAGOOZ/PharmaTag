@@ -26,7 +26,7 @@ _MAX_ROWS = 1000
 
 
 def _fmt4(value) -> str:
-    return f"{money.dec(value):.{LINE_DP}f}"
+    return money.format4(value)
 
 
 async def purchase_invoices_report(

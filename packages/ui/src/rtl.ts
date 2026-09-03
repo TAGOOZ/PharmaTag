@@ -28,14 +28,19 @@ export function formatNumber(value: number, options?: Intl.NumberFormatOptions):
   return new Intl.NumberFormat('ar-EG', { ...latinNumerals, ...options }).format(value);
 }
 
-export function formatMoney(value: number, currency = 'EGP'): string {
+export function formatMoney(value: number | string, currency = 'EGP'): string {
+  const num = typeof value === 'string' ? Number(String(value).replace(/,/g, '').trim()) : value;
+  // Note: Number() precision loss beyond MAX_SAFE_INTEGER (≈9e15); drug prices
+  // are orders of magnitude smaller, so this path is safe. For huge integers,
+  // a string-preserving formatter would be needed — not required for EGP.
+  if (!Number.isFinite(num)) return typeof value === 'string' ? String(value) : String(value);
   return new Intl.NumberFormat('ar-EG', {
     ...latinNumerals,
     style: 'currency',
     currency,
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(value);
+  }).format(num);
 }
 
 export function formatDate(

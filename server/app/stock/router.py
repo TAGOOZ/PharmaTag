@@ -43,7 +43,12 @@ STOCK_MANAGE = require_permission("stock.manage")
 
 
 def _qty(value) -> str:
-    return format(money.round4(value), "f")
+    if value is None or value == "":
+        value = 0
+    try:
+        return format(money.round4(value), "f")
+    except Exception:
+        return format(money.round4(0), "f")
 
 
 def _caller_branch_id(user: User) -> int:
@@ -89,8 +94,9 @@ def _serialize(
 
 @router.get("/current", response_model=CurrentStockListOut)
 async def current_stock(
-    q: str = "",
-    limit: int = 200,
+    q: str = Query(default="", max_length=100),
+    limit: int = Query(default=200),
+    only_shortage: bool = Query(default=False),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -104,28 +110,64 @@ async def current_stock(
         .options(selectinload(Drug.barcodes))
     )
     if q and q.strip():
-        like = f"%{q.strip()}%"
+        raw = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{raw}%"
+        barcode_ids = select(DrugBarcode.drug_id).where(DrugBarcode.barcode.ilike(like, escape="\\"))
         stmt = stmt.where(
-            Drug.drugname.ilike(like)
-            | Drug.drugnamear.ilike(like)
-            | Drug.generic.ilike(like)
+            Drug.drugname.ilike(like, escape="\\")
+            | Drug.drugnamear.ilike(like, escape="\\")
+            | Drug.generic.ilike(like, escape="\\")
+            | Drug.id.in_(barcode_ids)
         )
-    stmt = stmt.order_by(Drug.drugname).limit(limit)
+    if only_shortage:
+        # NULL-safe: coalesce so null minimum/qty not hidden (pre-017 rows)
+        stmt = stmt.where(func.coalesce(BranchStock.qty, 0) < func.coalesce(BranchStock.minimum, 0))
+    # shortage DESC secondary sort requires fetching shortage expression; we order by shortage then name
+    # NULL-safe: coalesce to 0, GREATEST(null,0) is null on PG
+    shortage_expr = func.greatest(func.coalesce(BranchStock.minimum, 0) - func.coalesce(BranchStock.qty, 0), Decimal("0"))
+    # count before limit for truncated detection (M7)
+    count_stmt = select(func.count()).select_from(BranchStock).join(Drug, Drug.id == BranchStock.drug_id).where(BranchStock.branch_id == branch_id)
+    if q and q.strip():
+        # reuse same where as stmt (branch_id already, plus q)
+        raw = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{raw}%"
+        barcode_ids = select(DrugBarcode.drug_id).where(DrugBarcode.barcode.ilike(like, escape="\\"))
+        count_stmt = count_stmt.where(
+            or_(
+                Drug.drugname.ilike(like, escape="\\"),
+                Drug.drugnamear.ilike(like, escape="\\"),
+                Drug.generic.ilike(like, escape="\\"),
+                Drug.id.in_(barcode_ids),
+            )
+        )
+    if only_shortage:
+        count_stmt = count_stmt.where(func.coalesce(BranchStock.qty, 0) < func.coalesce(BranchStock.minimum, 0))
+    total = (await session.execute(count_stmt)).scalar_one()
+    truncated = total > limit
+    stmt = stmt.order_by(shortage_expr.desc(), Drug.drugname.asc()).limit(limit)
     rows = (await session.execute(stmt)).all()
 
-    items = []
-    for stock, drug in rows:
-        batches = (
+    # batch Fetch N+1 fix: single query for all drug batches (like chain_stock.py:87)
+    batch_map: dict[int, list[StockBatch]] = {}
+    if rows:
+        drug_ids = [drug.id for _, drug in rows]
+        all_batches = (
             await session.execute(
                 select(StockBatch)
                 .where(
                     StockBatch.branch_id == branch_id,
-                    StockBatch.drug_id == drug.id,
+                    StockBatch.drug_id.in_(drug_ids),
                     StockBatch.qty > 0,
                 )
                 .order_by(StockBatch.expire.is_(None), StockBatch.expire, StockBatch.id)
             )
         ).scalars().all()
+        for b in all_batches:
+            batch_map.setdefault(b.drug_id, []).append(b)
+
+    items = []
+    for stock, drug in rows:
+        batches = batch_map.get(drug.id, [])
         primary = next((b.barcode for b in sorted(drug.barcodes, key=lambda b: not b.is_primary)), "")
         items.append(
             {
@@ -136,20 +178,20 @@ async def current_stock(
                 "barcode": primary,
                 "qty": _qty(stock.qty),
                 "minimum": _qty(stock.minimum),
-                "price": format(money.round4(drug.price), "f"),
+                "price": _qty(drug.price),
                 "batches": [
                     {
                         "batch_id": b.id,
                         "randomid": b.randomid,
                         "qty": _qty(b.qty),
-                        "cost": format(money.round4(b.cost), "f"),
+                        "cost": _qty(b.cost),
                         "expire": b.expire.isoformat() if b.expire else None,
                     }
                     for b in batches
                 ],
             }
         )
-    return CurrentStockListOut(items=items)
+    return CurrentStockListOut(items=items, count=int(total), truncated=bool(truncated))
 
 
 @router.get("/count-requests")
@@ -276,7 +318,7 @@ async def set_minimum_endpoint(
 @router.get("/cross-branch")
 async def cross_branch_stock(
     drug_id: Optional[int] = Query(default=None, gt=0),
-    q: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(default=None, max_length=100),
     only_shortage: bool = Query(default=False),
     include_inactive: bool = Query(default=False),
     user: User = Depends(get_current_user),

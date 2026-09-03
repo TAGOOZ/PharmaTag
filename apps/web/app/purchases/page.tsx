@@ -237,13 +237,40 @@ export default function PurchasesPage() {
           listParties(token, 'supplier', controller.signal),
         ]);
         if (cancelled) return;
+        setPurchasesError(null);
+        setPartiesError(null);
         setPurchases(pRes.purchases.slice(0, 100));
         setParties(partyRes.parties);
         setView('ready');
       } catch (err) {
         if (cancelled) return;
+        if ((err as Error)?.name === 'AbortError') return;
         if (err instanceof ApiError && err.status === 401) {
           handleAuthFail();
+        } else if (
+          err instanceof ApiError &&
+          (err.status === 403 || err.status === 429 || err.status >= 500)
+        ) {
+          const msg = errorForStatus(err.status, (err as ApiError).detail);
+          setPurchases([]);
+          setParties([]);
+          setPurchasesError(msg);
+          setPartiesError(msg);
+          setView('ready');
+        } else if (err instanceof SyntaxError) {
+          const msg = 'خطأ بالخادم — حاول لاحقاً';
+          setPurchases([]);
+          setParties([]);
+          setPurchasesError(msg);
+          setPartiesError(msg);
+          setView('ready');
+        } else if (err instanceof TypeError || (err as Error)?.message?.includes('fetch')) {
+          const msg = 'تعذّر الاتصال بالـ API';
+          setPurchases([]);
+          setParties([]);
+          setPurchasesError(msg);
+          setPartiesError(msg);
+          setView('ready');
         } else {
           setView('error');
         }

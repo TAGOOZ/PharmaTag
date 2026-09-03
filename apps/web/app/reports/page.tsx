@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { Shell } from '@/components/shell';
-import { clearToken, loadToken } from '@/lib/api';
+import { ApiError, clearToken, loadToken } from '@/lib/api';
+import { errorForStatus } from '@/lib/posMoney';
 import {
-  ApiError,
   downloadReportExport,
   enqueuePrintJob,
   fetchPrintQueue,
@@ -81,9 +81,34 @@ export default function ReportsPage() {
         if (!cancelled) setView('ready');
       } catch (err) {
         if (cancelled) return;
+        if ((err as Error)?.name === 'AbortError') return;
         if (err instanceof ApiError && err.status === 401) {
           clearToken();
           setView('login-required');
+          return;
+        }
+        if (
+          err instanceof ApiError &&
+          (err.status === 403 || err.status === 429 || err.status >= 500)
+        ) {
+          setCatalog([]);
+          setJobs([]);
+          setErrorText(errorForStatus(err.status));
+          setView('ready');
+          return;
+        }
+        if (err instanceof SyntaxError) {
+          setCatalog([]);
+          setJobs([]);
+          setErrorText('خطأ بالخادم — حاول لاحقاً');
+          setView('ready');
+          return;
+        }
+        if (err instanceof TypeError || (err as Error)?.message?.includes('fetch')) {
+          setCatalog([]);
+          setJobs([]);
+          setErrorText('تعذّر الاتصال بالـ API');
+          setView('ready');
           return;
         }
         setErrorText('تعذّر الاتصال بالـ API');

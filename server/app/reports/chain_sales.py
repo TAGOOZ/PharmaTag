@@ -20,6 +20,8 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import money
+
 from app.models import Branch, Invoice
 
 _MAX_ROWS = 1000
@@ -100,10 +102,10 @@ async def chain_sales_report(
                 "datee": day.isoformat(),
                 "branch": pharname or pharmacyid,
                 "invoice_count": int(invoice_count),
-                "total": f"{total:.2f}",
-                "payed": f"{payed:.2f}",
-                "agel": f"{agel:.2f}",
-                "vat": f"{vat:.2f}",
+                "total": money.format2(total),
+                "payed": money.format2(payed),
+                "agel": money.format2(agel),
+                "vat": money.format2(vat),
             }
             for (
                 day,
@@ -119,9 +121,9 @@ async def chain_sales_report(
         "truncated": truncated,
         "totals": {
             "invoice_count": int(count),
-            "total": f"{s_total:.2f}",
-            "payed": f"{s_payed:.2f}",
-            "agel": f"{s_agel:.2f}",
-            "vat": f"{s_vat:.2f}",
+            "total": money.format2(s_total),
+            "payed": money.format2(s_payed),
+            "agel": money.format2(s_agel),
+            "vat": money.format2(s_vat),
         },
     }

@@ -41,6 +41,7 @@ async def list_accounts(
 ):
     """Flat, branch-scoped account list (filters + code-ordered)."""
     branch_id = await service.caller_branch_id(user)
+    limit = max(1, min(limit, 500))
     return {
         "accounts": await service.list_accounts(
             session,

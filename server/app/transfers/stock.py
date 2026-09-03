@@ -88,7 +88,7 @@ async def suggest_fefo(
     ).scalar_one_or_none()
     if branch is None:
         raise NO_STOCK
-    if branch.qty < qty:
+    if (branch.qty or 0) < qty:
         raise INSUFFICIENT_STOCK
 
     rows = (
@@ -185,7 +185,7 @@ async def _adjust_branch_stock(
             .with_for_update()
         )
     ).scalar_one_or_none()
-    old = dec(row.qty) if row is not None else Decimal("0")
+    old = dec(row.qty or 0) if row is not None else Decimal("0")
     new = old + delta
     if row is None:
         row = BranchStock(branch_id=branch_id, drug_id=drug_id, qty=new, minimum=0)
@@ -215,7 +215,7 @@ async def _adjust_branch_stock(
         payload={
             "branch_id": branch_id,
             "drug_id": drug_id,
-            "qty": format(money.round4(new), "f"),
+            "qty": format(money.round4(new or 0), "f"),
             "minimum": format(money.round4(row.minimum or 0), "f"),
             "silsilaid": row.silsilaid or "",
             "classy": row.classy or "",
@@ -266,7 +266,7 @@ async def validate_explicit(
     ).scalar_one_or_none()
     if branch is None:
         raise NO_STOCK
-    if branch.qty < total:
+    if (branch.qty or 0) < total:
         raise INSUFFICIENT_STOCK
 
     allocations: list[Allocation] = []

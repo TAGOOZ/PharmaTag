@@ -196,12 +196,29 @@ export default function PosPage() {
       try {
         const res = await fetchSales(token, controller.signal);
         if (cancelled) return;
+        setSalesError(null);
         setSales(res.sales.slice(0, 100));
         setView('ready');
       } catch (err) {
         if (cancelled) return;
+        if ((err as Error)?.name === 'AbortError') return;
         if (err instanceof ApiError && err.status === 401) {
           handleAuthFail();
+        } else if (
+          err instanceof ApiError &&
+          (err.status === 403 || err.status === 429 || err.status >= 500)
+        ) {
+          setSales([]);
+          setSalesError(errorForStatus(err.status, (err as ApiError).detail));
+          setView('ready');
+        } else if (err instanceof SyntaxError) {
+          setSales([]);
+          setSalesError('خطأ بالخادم — حاول لاحقاً');
+          setView('ready');
+        } else if (err instanceof TypeError || (err as Error)?.message?.includes('fetch')) {
+          setSales([]);
+          setSalesError('تعذّر الاتصال بالـ API');
+          setView('ready');
         } else {
           setView('error');
         }

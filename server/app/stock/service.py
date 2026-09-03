@@ -80,8 +80,8 @@ async def adjust_stock(
             payload={
                 "branch_id": branch_id,
                 "drug_id": drug_id,
-                "qty": format(money.round4(row.qty), "f"),
-                "minimum": format(money.round4(row.minimum), "f"),
+                "qty": format(money.round4(row.qty or 0), "f"),
+                "minimum": format(money.round4(row.minimum or 0), "f"),
                 "silsilaid": row.silsilaid or "",
                 "classy": row.classy or "",
             },
@@ -157,13 +157,13 @@ async def set_minimum(
             qty_str = format(money.round4(row.qty), "f")
             min_str = format(min_val, "f")
         else:
-            old_min = money.dec(row.minimum)
+            old_min = money.dec(row.minimum or 0)
             old_min_str = format(money.round4(old_min), "f")
             row.minimum = min_val
             row.lastedit = datetime.now(timezone.utc)
             session.add(row)
             await session.flush()
-            qty_str = format(money.round4(row.qty), "f")
+            qty_str = format(money.round4(row.qty or 0), "f")
             min_str = format(min_val, "f")
 
         await audit(

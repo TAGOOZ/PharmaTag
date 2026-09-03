@@ -15,6 +15,7 @@ import {
   saveToken,
 } from '@/lib/api';
 import { RESET_ERROR_TEXT, type ResetError, validateNewPassword } from '@/lib/change-password';
+import { errorForStatus } from '@/lib/posMoney';
 
 type ViewState = 'boot' | 'login' | 'ready' | 'error';
 type LoginError = 'invalid' | 'network' | null;
@@ -22,6 +23,7 @@ type LoginError = 'invalid' | 'network' | null;
 export default function DrugsPage() {
   const [view, setView] = useState<ViewState>('boot');
   const [data, setData] = useState<DrugListResponse | null>(null);
+  const [bootError, setBootError] = useState<string | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState<LoginError>(null);
@@ -42,14 +44,34 @@ export default function DrugsPage() {
       try {
         const list = await fetchDrugs(token, controller.signal);
         if (cancelled) return;
+        setBootError(null);
         setData(list);
         setView('ready');
       } catch (err) {
         if (cancelled) return;
+        if ((err as Error)?.name === 'AbortError') return;
         if (err instanceof ApiError && err.status === 401) {
           // stale/revoked token — force a fresh login
           clearToken();
           setView('login');
+        } else if (
+          err instanceof ApiError &&
+          (err.status === 403 || err.status === 429 || err.status >= 500)
+        ) {
+          const msg = errorForStatus(err.status, (err as ApiError).detail);
+          setBootError(msg);
+          setData({ branch: { id: 0, pharmacyid: '', pharname: '' }, drugs: [] });
+          setView('ready');
+        } else if (err instanceof SyntaxError) {
+          const msg = 'خطأ بالخادم — حاول لاحقاً';
+          setBootError(msg);
+          setData({ branch: { id: 0, pharmacyid: '', pharname: '' }, drugs: [] });
+          setView('ready');
+        } else if (err instanceof TypeError || (err as Error)?.message?.includes('fetch')) {
+          const msg = 'تعذّر الاتصال بالـ API';
+          setBootError(msg);
+          setData({ branch: { id: 0, pharmacyid: '', pharname: '' }, drugs: [] });
+          setView('ready');
         } else {
           setView('error');
         }
@@ -266,9 +288,21 @@ export default function DrugsPage() {
             تعذّر جلب قائمة الأدوية من الخادم — تأكد من تشغيل الـ API على http://localhost:8000.
           </p>
         ) : data && data.drugs.length === 0 ? (
-          <p className="pt-caption">لا توجد أدوية مفعّلة في هذا الفرع.</p>
+          <>
+            {bootError && (
+              <p className="pt-caption text-red-600" role="alert">
+                {bootError}
+              </p>
+            )}
+            <p className="pt-caption">لا توجد أدوية مفعّلة في هذا الفرع.</p>
+          </>
         ) : data ? (
           <div className="pt-card">
+            {bootError && (
+              <p className="pt-caption mb-3 text-red-600" role="alert">
+                {bootError}
+              </p>
+            )}
             <p className="pt-caption mb-3">فرع: {data.branch.pharname} — قائمة الأدوية المفعلة</p>
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-start">
@@ -284,7 +318,7 @@ export default function DrugsPage() {
                     <tr key={drug.id} className="border-b border-border">
                       <td className="px-3 py-2">{drug.drugnamear}</td>
                       <td className="pt-mono px-3 py-2 text-muted">{drug.drugname}</td>
-                      <td className="pt-mono px-3 py-2">{formatMoney(Number(drug.price))}</td>
+                      <td className="pt-mono px-3 py-2">{formatMoney(drug.price)}</td>
                     </tr>
                   ))}
                 </tbody>

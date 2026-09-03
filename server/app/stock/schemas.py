@@ -56,6 +56,8 @@ class CurrentStockOut(BaseModel):
 
 class CurrentStockListOut(BaseModel):
     items: list[CurrentStockOut] = []
+    count: int | None = None
+    truncated: bool | None = None
 
 
 class MinimumSetRequest(BaseModel):

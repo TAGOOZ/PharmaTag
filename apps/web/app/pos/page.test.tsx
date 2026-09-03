@@ -574,8 +574,9 @@ describe('PosPage', () => {
       vi.fn(async () => Promise.reject(new TypeError('fetch failed'))),
     );
     await render(<PosPage />);
-    // boot fetch failure should go to error view with connectivity message
-    expect(textOf()).toContain('تعذّر جلب');
+    // boot fetch failure goes to ready+empty with banner (PAT5: stock pattern)
+    expect(textOf()).toContain('تعذّر الاتصال');
+    expect(textOf()).toContain('لا توجد مبيعات بعد');
   });
 
   it('surfaces search connectivity error as status', async () => {
